@@ -43,6 +43,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',  
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -50,8 +51,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
 ]
+
 
 ROOT_URLCONF = 'shanmuga_backend.urls'
 
@@ -110,21 +111,20 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
-
+CORS_ALLOW_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "Branch-Code"
+]
 
 # Internationalization
 # https://docs.djangoproject.com/en/3.2/topics/i18n/
 
 LANGUAGE_CODE = 'en-us'
-
-TIME_ZONE = 'UTC'
-
+TIME_ZONE = 'Asia/Kolkata'  # Set to IST
 USE_I18N = True
-
 USE_L10N = True
-
 USE_TZ = True
-
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/3.2/howto/static-files/
@@ -140,3 +140,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 CORS_ORIGIN_ALLOW_ALL = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000"]
+
+
+
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'resultssmrft@gmail.com'
+EMAIL_HOST_PASSWORD = 'nfkk krtt htoq asge'  # Consider using env vars for security
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
