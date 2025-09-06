@@ -10,7 +10,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/patients_by_date/?(\?.*)?$': 'SD-P-GPD',
     '/_b_a_c_k_e_n_d/Diagnostics/testdetails/':'SD-P-TM',
     '/_b_a_c_k_e_n_d/Diagnostics/clinical_name/': 'SD-P-CN',
-    # '/_b_a_c_k_e_n_d/Diagnostics/sample-collector/': 'SD-P-SC',
+    '/_b_a_c_k_e_n_d/Diagnostics/sample-collector/': 'SD-P-SC',
     # '/_b_a_c_k_e_n_d/Diagnostics/refby/': 'SD-P-RB',
 
     '/_b_a_c_k_e_n_d/Diagnostics/refby/':'SD-API-RB',
@@ -92,3 +92,4 @@ GEN_ACTION_MAPPING = {
     'GET': 'R',
     'PATCH': 'RW',
 }
+
