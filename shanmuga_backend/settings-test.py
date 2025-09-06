@@ -81,7 +81,7 @@ import certifi
 DATABASES = {
     'default': {
         'ENGINE': 'djongo',
-        'NAME': os.getenv("LAB_DB_NAME","Diagnostics"),
+        'NAME': "Diagnostics",
         'ENFORCE_SCHEMA': False,
         'CLIENT': {
 
@@ -134,6 +134,7 @@ STATIC_URL = '/static/'
 # https://docs.djangoproject.com/en/3.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
 
 
 
