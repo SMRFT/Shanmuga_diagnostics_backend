@@ -1,5 +1,9 @@
+from rest_framework.response import Response
+from django.http import JsonResponse , HttpResponse
+from django.views.decorators.http import require_http_methods
+from rest_framework import  status
+from urllib.parse import quote_plus
 from pymongo import MongoClient
-from rest_framework import status
 from django.views.decorators.csrf import csrf_exempt
 import logging
 from datetime import datetime, timedelta
@@ -7,9 +11,9 @@ from collections import defaultdict
 from django.utils import timezone  # Import Django's timezone module
 import re
 from django.core.mail import EmailMessage
-from django.conf import settings  
+from django.conf import settings  # To access the settings for DEFAULT_FROM_EMAIL
+  # Import your model
 from django.utils.timezone import make_aware
-from datetime import datetime, date  # Import `date` separately
 import pytz
 from rest_framework.views import APIView
 import traceback
@@ -17,73 +21,31 @@ from django.conf import settings  # To access the settings for DEFAULT_FROM_EMAI
 import json
 import certifi
 from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 from pyauth.auth import HasRoleAndDataPermission
-from .models import Patient
-from .models import SampleStatus
-from .models import TestValue
-from .models import BarcodeTestDetails
-from django.http import JsonResponse
-from pymongo import MongoClient
-from datetime import datetime, timedelta
-import os, json, traceback
-from django.utils.timezone import make_aware
-from .models import SampleStatus, TestValue
-from .serializers import SampleStatusSerializer
-from .serializers import TestValueSerializer
+
 import os
 from dotenv import load_dotenv
 load_dotenv()
 
-
-
-
-
-
-@api_view(['GET'])
-@csrf_exempt  # Allow GET, POST, and PATCH requests without CSRF protection
+@api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
 def get_test_details(request):
     try:
+        # Securely encode password
         # MongoDB connection with TLS certificate
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Diagnostics  # Database name
         collection = db.core_testdetails  # Collection name
-        
         if request.method == 'GET':
-            # Get query parameters
-            test_id = request.GET.get('test_id')
-            status = request.GET.get('status', 'Approved')  # Default to 'Approved'
-            
-            # Build query filter
-            query_filter = {"status": status}
-            
-            # Add test_id filter if provided
-            if test_id:
-                try:
-                    # Convert test_id to integer if it's a numeric string
-                    test_id_int = int(test_id)
-                    query_filter["test_id"] = test_id_int
-                except ValueError:
-                    # If conversion fails, treat as string
-                    query_filter["test_id"] = test_id
-            
-            # Retrieve documents based on the filter
-            test_details = list(collection.find(query_filter, {'_id': 0}))
-            
-            # Return the results
-            if test_details:
-                return JsonResponse({
-                    'success': True,
-                    'data': test_details,
-                    'count': len(test_details)
-                }, status=200)
-            else:
-                return JsonResponse({
-                    'success': False,
-                    'message': f'No test details found for the given criteria',
-                    'data': []
-                }, status=404)
-                
+            # Retrieve only documents with status "Approved" AND is_active true
+            approved_tests = list(collection.find(
+                {"status": "Approved", "is_active": True},   # ✅ both conditions
+                {'_id': 0}
+            ))
+            return JsonResponse(approved_tests, safe=False, status=200)
         elif request.method == 'POST':
             try:
                 data = json.loads(request.body.decode('utf-8'))
@@ -101,7 +63,6 @@ def get_test_details(request):
             except Exception as e:
                 print("Error:", e)
                 return JsonResponse({'error': 'An error occurred while saving data'}, status=500)
-                
         elif request.method == 'PATCH':
             try:
                 data = json.loads(request.body.decode('utf-8'))
@@ -120,7 +81,7 @@ def get_test_details(request):
                     return JsonResponse({'error': 'Test not found'}, status=404)
             except json.JSONDecodeError:
                 return JsonResponse({'error': 'Invalid JSON data'}, status=400)
-                
     except Exception as e:
         print("Error:", e)
         return JsonResponse({'error': 'An error occurred'}, status=500)
+    
