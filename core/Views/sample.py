@@ -1,4 +1,3 @@
-
 from django.http import JsonResponse
 
 from django.views.decorators.csrf import csrf_exempt
@@ -26,50 +25,38 @@ load_dotenv()
 @permission_classes([HasRoleAndDataPermission])
 def get_samplepatients_by_date(request):
     """
-    Get sample patients filtered by date range (from_date to to_date)
-    Supports both single date and date range queries
+    Get sample patients from BarcodeTestDetails who have tests that are either not in SampleStatus
+    or have Pending status in SampleStatus. Supports both single date and date range queries.
     """
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
-    
-    # For backward compatibility, also support single 'date' parameter
     single_date = request.GET.get('date')
     
     if not from_date and not single_date:
-        return JsonResponse({'error': 'from_date parameter is required.'}, status=400)
+        return JsonResponse({'error': 'from_date or date parameter is required.'}, status=400)
     
     try:
         if single_date:
-            # Handle single date (backward compatibility)
             parsed_date = datetime.fromisoformat(single_date)
             from_date_parsed = parsed_date
             to_date_parsed = parsed_date
         else:
-            # Handle date range
             from_date_parsed = datetime.fromisoformat(from_date)
-            
-            if to_date:
-                to_date_parsed = datetime.fromisoformat(to_date)
-            else:
-                # If no to_date provided, use from_date as both from and to
-                to_date_parsed = from_date_parsed
+            to_date_parsed = datetime.fromisoformat(to_date) if to_date else from_date_parsed
         
-        # Ensure to_date is end of day if it's the same as from_date or later
         if to_date_parsed.time() == datetime.min.time():
             to_date_parsed = to_date_parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
         
-        # Get all patient IDs in SampleStatus with the given date range and test details
+        # Get SampleStatus records for the date range
         sample_status_records = SampleStatus.objects.filter(
             date__gte=from_date_parsed, 
             date__lte=to_date_parsed + timedelta(days=1)
-        ).values_list('patient_id', 'testdetails')
+        ).values_list('patient_id', 'barcode', 'testdetails')
         
-        # Prepare sets for different sample statuses
-        completed_samples = set()  # Tests that are completed/processed
-        pending_samples = set()    # Tests that are pending
+        completed_samples = set()
+        pending_samples = set()
         
-        for patient_id, testdetails in sample_status_records:
-            # Parse testdetails if it's a JSON string
+        for patient_id, barcode, testdetails in sample_status_records:
             if isinstance(testdetails, str):
                 try:
                     testdetails = json.loads(testdetails)
@@ -77,23 +64,20 @@ def get_samplepatients_by_date(request):
                     continue
             
             for test in testdetails:
-                test_key = (patient_id, test.get('testname', test.get('test_name', '')))
+                test_key = (patient_id, barcode, test.get('testname', ''))
                 if test.get('samplestatus') == 'Pending':
                     pending_samples.add(test_key)
                 else:
-                    # Consider any other status as completed/processed
                     completed_samples.add(test_key)
         
-        # Get all patients from BarcodeTestDetails for the given date range
+        # Get patients from BarcodeTestDetails
         patients = BarcodeTestDetails.objects.filter(
             date__gte=from_date_parsed, 
             date__lte=to_date_parsed + timedelta(days=1)
-        ).order_by('-date', 'patient_id')  # Order by date desc, then patient_id
+        ).order_by('-date', 'patient_id')
         
-        # Filter patients based on the logic
         filtered_patients = []
         for patient in patients:
-            # Parse patient tests if it's a JSON string
             patient_tests = patient.testdetails
             if isinstance(patient_tests, str):
                 try:
@@ -101,30 +85,14 @@ def get_samplepatients_by_date(request):
                 except json.JSONDecodeError:
                     continue
             
-            # Handle both old and new testdetails structure
             if isinstance(patient_tests, list):
-                if len(patient_tests) > 0 and 'test_name' in patient_tests[0]:
-                    # New structure with test_name
-                    patient_test_names = {test['test_name'] for test in patient_tests}
-                else:
-                    # Old structure with testname
-                    patient_test_names = {test.get('testname', test.get('test_name', '')) for test in patient_tests}
+                patient_test_names = {test.get('testname', '') for test in patient_tests}
             else:
-                # If testdetails is not a list, skip this patient
                 continue
             
-            # Check if patient should be included
             should_include = False
-            
             for test_name in patient_test_names:
-                if not test_name:  # Skip empty test names
-                    continue
-                    
-                test_key = (patient.patient_id, test_name)
-                
-                # Include if:
-                # 1. Test doesn't exist in SampleStatus at all, OR
-                # 2. Test exists in SampleStatus but has Pending status
+                test_key = (patient.patient_id, patient.barcode, test_name)
                 if (test_key not in completed_samples and test_key not in pending_samples) or \
                    (test_key in pending_samples):
                     should_include = True
@@ -133,50 +101,41 @@ def get_samplepatients_by_date(request):
             if should_include:
                 filtered_patients.append(patient)
         
-        # Get bill_no to sample_collector mapping from Billing model
-        # Extract patient_ids from filtered patients to optimize query
         patient_ids = [patient.patient_id for patient in filtered_patients]
-        
-        # Get billing records for these patients within the date range
         billing_records = Billing.objects.filter(
             patient_id__in=patient_ids,
             date__gte=from_date_parsed,
             date__lte=to_date_parsed + timedelta(days=1)
         ).values('bill_no', 'sample_collector', 'patient_id')
         
-        # Create a mapping: bill_no -> sample_collector
         bill_to_collector = {record['bill_no']: record['sample_collector'] for record in billing_records}
-        
-        # Create a mapping: patient_id -> sample_collector (in case bill_no is not available in BarcodeTestDetails)
         patient_to_collector = {record['patient_id']: record['sample_collector'] for record in billing_records}
         
-        # Serialize the filtered patients
         patient_data = []
         for patient in filtered_patients:
             patient_dict = model_to_dict(patient)
             
-            # Format the date for frontend
             if patient_dict.get('date'):
                 patient_dict['date'] = patient_dict['date'].isoformat()
             
-            # Ensure testdetails is properly formatted
             if isinstance(patient_dict.get('testdetails'), str):
                 try:
                     patient_dict['testdetails'] = json.loads(patient_dict['testdetails'])
                 except json.JSONDecodeError:
                     patient_dict['testdetails'] = []
             
-            # Add sample_collector information
-            sample_collector = None
+            if isinstance(patient_dict['testdetails'], list):
+                patient_dict['testdetails'] = [
+                    {**test, 'barcode': patient.barcode}
+                    for test in patient_dict['testdetails']
+                ]
             
-            # First try to get sample_collector using bill_no if available
+            sample_collector = None
             if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_collector:
                 sample_collector = bill_to_collector[patient.bill_no]
-            # Fallback: try to get sample_collector using patient_id
             elif patient.patient_id in patient_to_collector:
                 sample_collector = patient_to_collector[patient.patient_id]
             
-            # Add sample_collector to the response
             patient_dict['sample_collector'] = sample_collector if sample_collector else ''
             
             patient_data.append(patient_dict)
@@ -304,11 +263,11 @@ def sample_status(request):
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def check_sample_status(request, patient_id):
+def check_sample_status(request, barcode):
     if request.method == 'GET':
         try:
             # Check if an entry exists for this patient_id
-            existing_entry = SampleStatus.objects.filter(patient_id=patient_id).first()
+            existing_entry = SampleStatus.objects.filter(barcode=barcode).first()
             
             if existing_entry:
                 return JsonResponse({
@@ -327,10 +286,60 @@ def check_sample_status(request, patient_id):
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
 
+# Add this view to your Django views file (likely in the same file as your other sample status views)
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def get_sample_status_data(request, barcode):
+    """
+    Get sample status data for a specific barcode
+    """
+    if request.method == 'GET':
+        try:
+            # Find the sample status entry for this barcode
+            sample_status = SampleStatus.objects.filter(barcode=barcode).first()
+            
+            if not sample_status:
+                return JsonResponse({
+                    'error': 'No sample status data found for this barcode'
+                }, status=404)
+            
+            # Convert model instance to dictionary
+            sample_data = model_to_dict(sample_status)
+            
+            # Format the date for frontend
+            if sample_data.get('date'):
+                sample_data['date'] = sample_data['date'].isoformat()
+            
+            # Format created_date and lastmodified_date if they exist
+            if sample_data.get('created_date'):
+                sample_data['created_date'] = sample_data['created_date'].isoformat()
+            if sample_data.get('lastmodified_date'):
+                sample_data['lastmodified_date'] = sample_data['lastmodified_date'].isoformat()
+            
+            # Ensure testdetails is properly formatted (parse if it's a JSON string)
+            if isinstance(sample_data.get('testdetails'), str):
+                try:
+                    sample_data['testdetails'] = json.loads(sample_data['testdetails'])
+                except json.JSONDecodeError:
+                    sample_data['testdetails'] = []
+            
+            return JsonResponse({
+                'data': sample_data,
+                'message': 'Sample status data retrieved successfully'
+            }, status=200)
+                
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Invalid request method'}, status=405)
+
+
 @api_view(['PATCH'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def patch_sample_status(request, patient_id):
+def patch_sample_status(request, barcode):
     # Import timezone at the top of the function
     from django.utils import timezone
     
@@ -361,7 +370,7 @@ def patch_sample_status(request, patient_id):
                 return JsonResponse({'error': 'testdetails must be an array'}, status=400)
             
             # Find the patient document
-            patient_doc = collection.find_one({"patient_id": patient_id})
+            patient_doc = collection.find_one({"barcode": barcode})
             if not patient_doc:
                 return JsonResponse({'error': 'No patient found with the given patient_id'}, status=404)
             
@@ -474,7 +483,7 @@ def patch_sample_status(request, patient_id):
             
             if result.modified_count > 0:
                 return JsonResponse({
-                    'message': f'Successfully updated {updated_count} tests for patient {patient_id}',
+                    'message': f'Successfully updated {updated_count} tests for patient {barcode}',
                     'updated_count': updated_count
                 }, status=200)
             else:

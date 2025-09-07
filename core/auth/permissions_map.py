@@ -9,8 +9,8 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/Diagnostics/update_bill/': 'SD-P-UPB',
     r'^/_b_a_c_k_e_n_d/Diagnostics/patients_by_date/?(\?.*)?$': 'SD-P-GPD',
     '/_b_a_c_k_e_n_d/Diagnostics/testdetails/':'SD-P-TM',
-    '/_b_a_c_k_e_n_d/Diagnostics/clinical_name/': 'SD-P-CN',
-    # '/_b_a_c_k_e_n_d/Diagnostics/sample-collector/': 'SD-P-SC',
+    # '/_b_a_c_k_e_n_d/Diagnostics/clinical_name/': 'SD-P-CN',
+    '/_b_a_c_k_e_n_d/Diagnostics/sample-collector/': 'SD-P-SC',
     # '/_b_a_c_k_e_n_d/Diagnostics/refby/': 'SD-P-RB',
 
     '/_b_a_c_k_e_n_d/Diagnostics/refby/':'SD-API-RB',
@@ -69,13 +69,13 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/update-credit/?(\?.*)?$':'SD-P-POV',
 
     # Invoice URLs
-    r'^/_b_a_c_k_e_n_d/Diagnostics/get_clinicalname_invoice/?(\?.*)?$': 'SD-P-IVM',
-    '/_b_a_c_k_e_n_d/Diagnostics/update-invoice/.*': 'SD-P-IVM',
-    '/_b_a_c_k_e_n_d/Diagnostics/delete-invoice/.*': 'SD-P-IVM',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/get-invoices/?(\?.*)?$': 'SD-P-IVM',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/generate-invoice/?(\?.*)?$': 'SD-P-IVM',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/all-patients/?(\?.*)?$': 'SD-P-IVM',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/patient_report/?(\?.*)?$': 'SD-P-IVM',
+    r'/_b_a_c_k_e_n_d/Diagnostics/get_clinicalname_invoice/': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/Diagnostics/update-invoice/.*': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/Diagnostics/delete-invoice/.*': 'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get-invoices/?(\?.*)?$': 'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/generate-invoice/?(\?.*)?$': 'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/all-patients/?(\?.*)?$': 'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/patient_report/?(\?.*)?$': 'SD-API-IVM',
 
 }
 

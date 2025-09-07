@@ -35,7 +35,7 @@ IST = pytz.timezone(TIME_ZONE)
 def get_mongodb_connection():
     # MongoDB connection with TLS certificate
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client["Lab"]
+    db = client["Diagnostics"]
     return db, GridFS(db)
 
 # View for handling referrer code generation
