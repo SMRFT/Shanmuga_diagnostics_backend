@@ -66,8 +66,8 @@ urlpatterns = [
     path('search_cancellation/', search_cancellation, name='search_cancellation'),
     path('verify_and_process_cancellation/',verify_and_process_cancellation, name='verify_and_process_cancellation'),
     path('refund_cancellation_logs/', logs_api, name='refund_cancellation_logs'),
-path('patient-get/', patients.patient_get, name='patient_get'),
+    path('patient-get/', patients.patient_get, name='patient_get'),
 
-
+    path('get_patientsbyb2b/', patients.get_patientsbyb2b, name='get_patients'),
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
 ]
