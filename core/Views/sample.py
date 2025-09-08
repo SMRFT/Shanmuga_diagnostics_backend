@@ -611,75 +611,82 @@ def get_sample_collected(request):
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def update_sample_collected(request, patient_id):
-    # MongoDB connection setup
-    #password = quote_plus('Smrft@2024')
-    # MongoDB connection with TLS certificate
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client.Diagnostics  # Database name
-    collection = db.core_samplestatus  # Collection name
-    if request.method == "PUT":
-        try:
-            if hasattr(request, 'data'):
-                body = request.data
-            else:
-                body = json.loads(request.body)
-            updates = body.get("updates", [])
-            if not updates:
-                return JsonResponse({"error": "Updates are required"}, status=400)
-            # Find the patient sample record
-            patient_sample = collection.find_one({"patient_id": patient_id})
-            if not patient_sample:
-                return JsonResponse({"error": "Sample not found"}, status=404)
-            # Parse testdetails as a Python list
-            testdetails = json.loads(patient_sample.get('testdetails', '[]'))
-            # Apply updates based on testIndex
-            
-            # Import the proper Django timezone module
-            from django.utils import timezone
-            import pytz
-            
-            # Configure IST timezone
-            ist_timezone = pytz.timezone('Asia/Kolkata')
-            
-            for update in updates:
-                testIndex = update.get("testIndex")
-                new_status = update.get("samplestatus")
-                received_by = update.get("received_by")
-                rejected_by = update.get("rejected_by")
-                outsourced_by = update.get("outsourced_by")  # Fixed typo in variable name
-                remarks = update.get("remarks")  # New field for rejection remarks
-                if testIndex is None or new_status is None:
-                    return JsonResponse({"error": "samplestatus and testIndex are required"}, status=400)
-                # Ensure testIndex is valid
-                if testIndex < 0 or testIndex >= len(testdetails):
-                    return JsonResponse({"error": "Invalid testIndex"}, status=400)
-                test_entry = testdetails[testIndex]
-                # Update the sample status and associated fields
-                test_entry['samplestatus'] = new_status
-                
-                # Get current time in IST timezone
-                current_time = timezone.now().astimezone(ist_timezone)
-                formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')  # Format the time
-                
-                if new_status == "Received":
-                    test_entry['received_time'] = formatted_time
-                    test_entry['received_by'] = received_by
-                elif new_status == "Rejected":
-                    test_entry['rejected_time'] = formatted_time
-                    test_entry['rejected_by'] = rejected_by
-                    test_entry['remarks'] = remarks  # Add rejection remarks
-                elif new_status == "Outsource":
-                    test_entry['outsourced_time'] = formatted_time  # Fixed typo in field name
-                    test_entry['outsourced_by'] = outsourced_by  # Fixed typo in field name
-            
-            # Save changes back to the database
-            collection.update_one(
-                {"patient_id": patient_id},
-                {"$set": {"testdetails": json.dumps(testdetails)}}  # Re-serialize testdetails as JSON
+    """
+    Update sample status in MongoDB:
+    - Find record by patient_id + barcode + samplecollected_time
+    - Find correct test within testdetails using test_id
+    - Update only that test entry
+    """
+    try:
+        # MongoDB connection
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        collection = db.core_samplestatus
+        # Parse body
+        body = request.data if hasattr(request, 'data') else json.loads(request.body)
+        updates = body.get("updates", [])
+        barcode = body.get("barcode")
+        samplecollected_time = body.get("samplecollected_time")  # string 'YYYY-MM-DD HH:MM:SS'
+        if not updates:
+            return JsonResponse({"error": "Updates are required"}, status=400)
+        if not barcode or not samplecollected_time:
+            return JsonResponse({"error": "barcode and samplecollected_time are required"}, status=400)
+        # ===== Find the correct patient record =====
+        candidate_records = list(collection.find({"patient_id": patient_id, "barcode": barcode}))
+        if not candidate_records:
+            return JsonResponse({"error": "Sample not found"}, status=404)
+        preferred_record = None
+        for rec in candidate_records:
+            testdetails = json.loads(rec.get("testdetails", "[]"))
+            if any(t.get("samplecollected_time") == samplecollected_time for t in testdetails):
+                preferred_record = rec
+                break
+        if not preferred_record:
+            return JsonResponse({"error": "Sample with matching collected time not found"}, status=404)
+        record_id = preferred_record["_id"]
+        testdetails = json.loads(preferred_record.get("testdetails", "[]"))
+        # ===== Apply updates =====
+        from django.utils import timezone
+        import pytz
+        ist_timezone = pytz.timezone('Asia/Kolkata')
+        current_time = timezone.now().astimezone(ist_timezone)
+        formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
+        for update in updates:
+            test_id = update.get("test_id")
+            new_status = update.get("samplestatus")
+            received_by = update.get("received_by")
+            rejected_by = update.get("rejected_by")
+            outsourced_by = update.get("outsourced_by")
+            remarks = update.get("remarks")
+            if test_id is None or new_status is None:
+                return JsonResponse({"error": "test_id and samplestatus are required"}, status=400)
+            # Find the test by test_id AND samplecollected_time
+            test_entry = next(
+                (t for t in testdetails if t.get("test_id") == test_id and t.get("samplecollected_time") == samplecollected_time),
+                None
             )
-            return JsonResponse({"message": "Sample status updated successfully"}, status=200)
-        except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
+            if not test_entry:
+                return JsonResponse({"error": f"Test with id {test_id} not found for given collected time"}, status=404)
+            # Update sample status and timestamps
+            test_entry['samplestatus'] = new_status
+            if new_status == "Received":
+                test_entry['received_time'] = formatted_time
+                test_entry['received_by'] = received_by
+            elif new_status == "Rejected":
+                test_entry['rejected_time'] = formatted_time
+                test_entry['rejected_by'] = rejected_by
+                test_entry['remarks'] = remarks
+            elif new_status == "Outsource":
+                test_entry['outsourced_time'] = formatted_time
+                test_entry['outsourced_by'] = outsourced_by
+        # ===== Save back to DB =====
+        collection.update_one(
+            {"_id": record_id},
+            {"$set": {"testdetails": json.dumps(testdetails)}}
+        )
+        return JsonResponse({"message": "Sample status updated successfully"}, status=200)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
 
 @api_view(['GET'])       
 @permission_classes([ HasRoleAndDataPermission])
