@@ -854,83 +854,102 @@ def update_dispatch_status(request, barcode):
     collection = db.core_testvalue
     
     try:
-        # Get created_date from query parameters or request body
-        created_date = request.query_params.get('created_date') or request.data.get('created_date')
-        
         # Get auth-user-id from request data
         auth_user_id = request.data.get('auth-user-id')
-        
-        if not created_date:
-            return Response({"error": "created_date parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
         
         if not auth_user_id:
             return Response({"error": "auth-user-id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Parse the created_date string to datetime object for comparison
-        try:
-            # Assuming created_date is passed as ISO string (e.g., "2025-09-04T04:57:30.581Z")
-            created_date_obj = datetime.fromisoformat(created_date.replace('Z', '+00:00'))
-        except ValueError:
-            try:
-                # Try parsing as date only (e.g., "2025-09-04")
-                created_date_obj = datetime.strptime(created_date, '%Y-%m-%d')
-            except ValueError:
-                return Response({"error": "Invalid date format. Use ISO format or YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Build the query filter with barcode and created_date
+        # Build the query filter with only barcode
         query_filter = {
-            "barcode": barcode,
-            "created_date": created_date_obj  # Direct match with the exact created_date
+            "barcode": barcode
         }
         
-        # Alternative: If you need date range filtering, use this instead:
-        # start_of_day = created_date_obj.replace(hour=0, minute=0, second=0, microsecond=0)
-        # end_of_day = created_date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
-        # query_filter["created_date"] = {
-        #     "$gte": start_of_day,
-        #     "$lte": end_of_day
-        # }
+        # Find ALL documents with the same barcode, sorted by created_date descending (latest first)
+        test_value_records = list(collection.find(query_filter).sort("created_date", -1))
         
-        # Find the document with both barcode and created_date filters
-        test_value_record = collection.find_one(query_filter)
-        
-        if not test_value_record:
+        if not test_value_records:
             return Response({
-                "error": f"TestValue record not found for barcode: {barcode} and created_date: {created_date}"
+                "error": f"No TestValue records found for barcode: {barcode}"
             }, status=status.HTTP_404_NOT_FOUND)
         
-        # Parse the testdetails field (convert JSON string to a Python list)
-        test_details = json.loads(test_value_record.get("testdetails", "[]"))
+        # Dictionary to track the latest document for each testname
+        latest_documents_by_testname = {}
         
-        # Update dispatch status to true for all tests
-        for test in test_details:
-            test["dispatch"] = True
-            # Only set dispatch_time if dispatch is True
-            if test.get("dispatch", False):
-                test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')  # Convert to IST format
+        # Process each document to find the latest one for each testname
+        for record in test_value_records:
+            # Parse the testdetails field
+            test_details = json.loads(record.get("testdetails", "[]"))
+            
+            for test in test_details:
+                testname = test.get("testname", "Unknown")
+                
+                # If this testname hasn't been seen yet, or this document is newer
+                if testname not in latest_documents_by_testname:
+                    latest_documents_by_testname[testname] = {
+                        "document": record,
+                        "test_details": test_details,
+                        "created_date": record.get("created_date")
+                    }
+                # Since records are sorted by created_date descending, 
+                # the first occurrence is the latest
         
-        # Convert the updated testdetails back to a JSON string
-        updated_test_details = json.dumps(test_details)
+        updated_count = 0
+        total_tests_updated = 0
+        updated_records = []
         
-        # Update the document in MongoDB using the same filter
-        result = collection.update_one(
-            query_filter,  # Use the same filter for update
-            {"$set": {
-                "testdetails": updated_test_details,
-                "lastmodified_by": auth_user_id,  # Use auth-user-id from request data
-                "lastmodified_date": datetime.now(IST)
-            }}
-        )
+        # Update dispatch status for the latest document of each testname
+        for testname, doc_info in latest_documents_by_testname.items():
+            document = doc_info["document"]
+            test_details = doc_info["test_details"]
+            
+            tests_updated_in_doc = 0
+            
+            # Update dispatch status for all tests in this document
+            for test in test_details:
+                # Only update if dispatch is currently false
+                if not test.get("dispatch", False):
+                    test["dispatch"] = True
+                    test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
+                    tests_updated_in_doc += 1
+            
+            # Convert the updated testdetails back to a JSON string
+            updated_test_details = json.dumps(test_details)
+            
+            # Update the document in MongoDB using the document's _id
+            result = collection.update_one(
+                {"_id": document["_id"]},
+                {"$set": {
+                    "testdetails": updated_test_details,
+                    "lastmodified_by": auth_user_id,
+                    "lastmodified_date": datetime.now(IST)
+                }}
+            )
+            
+            if result.matched_count > 0:
+                updated_count += 1
+                total_tests_updated += tests_updated_in_doc
+                updated_records.append({
+                    "document_id": str(document["_id"]),
+                    "created_date": document.get("created_date"),
+                    "testname": testname,
+                    "tests_updated": tests_updated_in_doc,
+                    "all_test_names": [t.get("testname", "Unknown") for t in test_details]
+                })
         
-        if result.matched_count == 0:
-            return Response({"error": "Failed to update dispatch status"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        if updated_count == 0:
+            return Response({
+                "message": f"No records were updated for barcode: {barcode}. All tests may already be dispatched."
+            }, status=status.HTTP_200_OK)
         
         return Response({
-            "message": "Dispatch status updated successfully.",
+            "message": "Dispatch status updated successfully for latest documents of each testname.",
             "barcode": barcode,
-            "created_date": created_date,
-            "updated_tests": len(test_details),
-            "modified_by": auth_user_id
+            "unique_testnames_processed": len(latest_documents_by_testname),
+            "documents_updated": updated_count,
+            "total_tests_updated": total_tests_updated,
+            "modified_by": auth_user_id,
+            "updated_records": updated_records
         }, status=status.HTTP_200_OK)
     
     except Exception as e:

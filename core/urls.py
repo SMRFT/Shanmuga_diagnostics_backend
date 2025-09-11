@@ -1,7 +1,7 @@
 #urls.py
 from django.urls import path
 from core import views
-from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,franchise,updatebillingandpatient,hmsreport
+from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,franchise,updatebillingandpatient,hmsreport,mis
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
 urlpatterns = [
@@ -80,7 +80,7 @@ urlpatterns = [
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
     path('franchise-receive/<str:batch_no>/', franchise.update_batch_received_status, name='update_batch_received_status'),
-    path("get_franchise_Transferred/", franchise.get_franchise_sample, name="get_franchise_sample"),
+    path("get_franchise_Transferred/<str:batch_number>/", franchise.get_franchise_sample, name="get_franchise_sample"),
     path("update_franchise_sample/<str:barcode>/", franchise.update_franchise_sample, name="update_franchise_sample"), 
     
     #Franchise Reports:     
@@ -94,4 +94,8 @@ urlpatterns = [
     path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
     path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
     
+    #MIS:
+    path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
+    path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='consolidated_data'),
+    path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='consolidated_data'),
 ]

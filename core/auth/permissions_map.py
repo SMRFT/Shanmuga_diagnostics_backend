@@ -71,11 +71,17 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/Diagnostics/franchise-batches/':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-batches/?(\?.*)?$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-receive(?:/[^/]+)+/$':'SD-P-SSU',
-    '/_b_a_c_k_e_n_d/Diagnostics/get_franchise_Transferred/':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get_franchise_Transferred(?:/[^/]+)+/$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/update_franchise_sample(?:/[^/]+)+/$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_overall_report/?(\?.*)?$':'SD-API-OAR',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV', 
+
+    #MIS
+    r'^/_b_a_c_k_e_n_d/Diagnostics/consolidated-data/?(\?.*)?$':'SD-P-MIS',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
+
 }
 
 PAGE_ACTION_MAPPING = {

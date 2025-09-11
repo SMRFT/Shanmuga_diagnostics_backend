@@ -1,50 +1,34 @@
 from django.http import JsonResponse
-
 from django.views.decorators.csrf import csrf_exempt
 import json
 from pymongo import MongoClient
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.permissions import AllowAny
 from pyauth.auth import HasRoleAndDataPermission
 from dotenv import load_dotenv
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
-from rest_framework.decorators import api_view, permission_classes
-from pymongo import MongoClient
-from datetime import datetime
-import json
 import logging
-from django.http import JsonResponse
-from pymongo import MongoClient
 from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
-from ..models import SampleStatus, TestValue
-
+from ..models import  TestValue
 load_dotenv()
-
-# Set up logging
 logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def get_franchise_sample(request):
+def get_franchise_sample(request, batch_number):
+    """
+    Get all sample details for a specific batch number with patient information
+    """
     if request.method == "GET":
-        # MongoDB connection details
-        mongo_url = os.getenv('GLOBAL_DB_HOST')  # Get the connection string directly
-        db_name = "franchise"
-        
         client = None
         try:
             # Connect to MongoDB
-            client = MongoClient(mongo_url)  # Use the connection string here
-            db = client[db_name]
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.franchise
             
-            # Franchise database collections
-            samples_collection = db["franchise_sample"]         
+            # Collections
+            samples_collection = db["franchise_sample"]
             patient_collection = db["franchise_patient"]
             billing_collection = db["franchise_billing"]
             
@@ -52,30 +36,40 @@ def get_franchise_sample(request):
             diagnostics_db = client["Diagnostics"]
             test_details_collection = diagnostics_db["core_testdetails"]
             
-            samples = list(samples_collection.find())            
+            # Find all samples for this batch number with samplestatus = "Transferred"
+            pipeline = [
+                {
+                    "$match": {
+                        "testdetails": {
+                            "$regex": f'"batch_number":\\s*"{batch_number}"'
+                        }
+                    }
+                }
+            ]
+            
+            samples = list(samples_collection.aggregate(pipeline))
+            
+            # Get all data for lookups
             patients = list(patient_collection.find())
             billing = list(billing_collection.find())
             test_details_data = list(test_details_collection.find())
             
             # Create lookup dictionaries
-            # Billing lookup: barcode -> patient_id
             billing_lookup = {bill.get('barcode'): bill.get('patient_id') for bill in billing if bill.get('barcode')}
-            
-            # Patient lookup: patient_id -> patient data
             patient_lookup = {pat.get('patient_id'): pat for pat in patients if pat.get('patient_id')}
-            
-            # Test details lookup: test_id -> test data
             test_lookup = {test.get('test_id'): test for test in test_details_data if test.get('test_id')}
             
-            patient_data = {}
+            batch_samples = []
             
             def safe_get(obj, key, default=""):
                 value = obj.get(key) if obj else None
                 return value if value is not None else default
             
             for sample in samples:
-                test_details = sample.get('testdetails', [])
+                barcode = sample.get('barcode')
+                test_details = sample.get('testdetails', '[]')
                 
+                # Parse test details
                 if isinstance(test_details, str):
                     try:
                         test_details = json.loads(test_details)
@@ -83,65 +77,73 @@ def get_franchise_sample(request):
                         logger.warning(f"Failed to parse testdetails for sample {sample.get('_id')}")
                         test_details = []
                 
-                if not isinstance(test_details, list):
-                    test_details = []
+                # Filter tests that belong to this batch and have status "Transferred"
+                batch_tests = []
+                for detail in test_details:
+                    if (detail.get("batch_number") == batch_number and 
+                        detail.get("samplestatus") == "Transferred"):
+                        batch_tests.append(detail)
                 
-                # Step 1: Get barcode from sample
-                barcode = sample.get('barcode')
+                # Skip if no transferred tests for this batch
+                if not batch_tests:
+                    continue
                 
-                # Step 2: Get patient_id from billing using barcode
-                patient_id = billing_lookup.get(barcode) if barcode else None
-                
-                # Step 3: Get patient data using patient_id
+                # Get patient information
+                patient_id = billing_lookup.get(barcode)
                 patient_data_obj = patient_lookup.get(patient_id, {}) if patient_id else {}
                 
-                # Extract patient information
-                patient_name = safe_get(patient_data_obj, 'patientname')
-                patient_age = safe_get(patient_data_obj, 'age')
+                # Prepare enhanced test details
+                enhanced_test_details = []
+                for detail in batch_tests:
+                    test_id = detail.get("test_id")
+                    test_data = test_lookup.get(test_id, {})
+                    
+                    enhanced_detail = {
+                        "test_id": test_id if test_id else "N/A",
+                        "testname": detail.get("testname", "N/A"),
+                        "container": safe_get(test_data, "collection_container", "N/A"),
+                        "department": safe_get(test_data, "department", "N/A"),
+                        "samplecollector": detail.get("collected_by", "N/A"),
+                        "samplestatus": detail.get("samplestatus", "N/A"),
+                        "samplecollected_time": detail.get("samplecollected_time", "N/A"),
+                        "batch_number": detail.get("batch_number", "N/A"),
+                        "remarks": detail.get("remarks"),
+                        "received_time": detail.get("received_time"),
+                        "received_by": detail.get("received_by"),
+                        "rejected_time": detail.get("rejected_time"),
+                        "rejected_by": detail.get("rejected_by"),
+                        "outsourced_time": detail.get("outsourced_time"),
+                        "outsourced_by": detail.get("outsourced_by")
+                    }
+                    enhanced_test_details.append(enhanced_detail)
                 
-                for detail in test_details:
-                    if detail.get("samplestatus") == "Transferred":
-                        # Get test_id and test_name from sample testdetails
-                        test_id = detail.get("test_id")
-                        test_name = detail.get("testname")
-                        
-                        # Get test details from Diagnostics database
-                        test_data = test_lookup.get(test_id, {})
-                        
-                        # Get container and department from test data
-                        container = safe_get(test_data, "collection_container", "N/A")
-                        department = safe_get(test_data, "department", "N/A")
-                        
-                        if patient_id and patient_id not in patient_data:
-                            patient_data[patient_id] = {
-                                "date": safe_get(sample, 'created_date'),
-                                "patient_id": patient_id,
-                                "patientname": patient_name,
-                                "barcode": barcode,
-                                "age": str(patient_age) if patient_age else "",                               
-                                "locationId": safe_get(sample, 'franchise_id'),                               
-                                "testdetails": []
-                            }
-                        
-                        # Only add test details if we have a valid patient_id
-                        if patient_id and patient_id in patient_data:
-                            patient_data[patient_id]["testdetails"].append({
-                                "test_id": test_id if test_id else "N/A",
-                                "testname": test_name if test_name else "N/A",
-                                "container": container,
-                                "department": department,
-                                "samplecollector": safe_get(detail, "collected_by", "N/A"),
-                                "samplestatus": safe_get(detail, "samplestatus", "N/A"),
-                                "samplecollected_time": safe_get(detail, "samplecollected_time", "N/A"),
-                            })
+                # Create patient sample record
+                sample_record = {
+                    "date": safe_get(sample, 'created_date'),
+                    "patient_id": patient_id or "N/A",
+                    "patientname": safe_get(patient_data_obj, 'patientname', "N/A"),
+                    "barcode": barcode,
+                    "age": str(safe_get(patient_data_obj, 'age', "")) if safe_get(patient_data_obj, 'age') else "N/A",
+                    "locationId": safe_get(sample, 'franchise_id'),
+                    "batch_number": batch_number,
+                    "testdetails": enhanced_test_details
+                }
+                
+                batch_samples.append(sample_record)
             
-            data = list(patient_data.values())
-            
-            return JsonResponse({"data": data}, safe=False)
+            return JsonResponse({
+                "status": "success",
+                "data": batch_samples,
+                "batch_number": batch_number,
+                "count": len(batch_samples)
+            }, safe=False)
             
         except Exception as e:
-            logger.error(f"Error fetching data from MongoDB: {str(e)}")
-            return JsonResponse({"error": f"Database connection error: {str(e)}"}, status=500)
+            logger.error(f"Error fetching batch samples for batch {batch_number}: {str(e)}")
+            return JsonResponse({
+                "status": "error",
+                "message": f"Database connection error: {str(e)}"
+            }, status=500)
         
         finally:
             if client:
@@ -149,11 +151,15 @@ def get_franchise_sample(request):
 
 @api_view(['PUT'])
 @csrf_exempt
-@permission_classes([ HasRoleAndDataPermission])
-def update_franchise_sample(request, barcode):    
+@permission_classes([HasRoleAndDataPermission])
+def update_franchise_sample(request, barcode):
+    """
+    Update sample status for a specific barcode in a batch context
+    """
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client.franchise  # Database name
-    collection = db.franchise_sample  # Collection name
+    db = client.franchise
+    collection = db.franchise_sample
+    
     if request.method == "PUT":
         try:
             # Handle different data formats
@@ -161,32 +167,35 @@ def update_franchise_sample(request, barcode):
                 body = request.data
             else:
                 body = json.loads(request.body)
+            
             updates = body.get("updates", [])
+            batch_number = body.get("batch_number")  # Optional batch context
+            
             if not updates:
                 return JsonResponse({"error": "Updates are required"}, status=400)
+            
             # Find the patient sample record
             patient_sample = collection.find_one({"barcode": barcode})
             if not patient_sample:
                 return JsonResponse({"error": "Sample not found"}, status=404)
+            
             # Parse testdetails as a Python list
             testdetails = json.loads(patient_sample.get('testdetails', '[]'))
-            # Apply updates based on testIndex
-            
-            # Import the proper Django timezone module
-            from django.utils import timezone
-            import pytz
             
             # Configure IST timezone
+            from django.utils import timezone
+            import pytz
             ist_timezone = pytz.timezone('Asia/Kolkata')
             
             for update in updates:
-                testname = update.get("testname")
                 test_id = update.get("test_id")
+                testname = update.get("testname")
                 new_status = update.get("samplestatus")
                 received_by = update.get("received_by")
                 rejected_by = update.get("rejected_by")
-                outsourced_by = update.get("outsourced_by")  # Fixed typo in variable name
-                remarks = update.get("remarks")  # New field for rejection remarks
+                outsourced_by = update.get("outsourced_by")
+                remarks = update.get("remarks")
+                update_batch_number = update.get("batch_number", batch_number)
                 
                 if new_status is None:
                     return JsonResponse({"error": "samplestatus is required"}, status=400)
@@ -194,67 +203,82 @@ def update_franchise_sample(request, barcode):
                 if testname is None and test_id is None:
                     return JsonResponse({"error": "Either testname or test_id is required"}, status=400)
                 
-                # Find the test entry by testname or test_id
+                # Find the specific test entry
                 test_entry = None
                 for entry in testdetails:
-                    if (testname and entry.get("testname") == testname) or (test_id and entry.get("test_id") == test_id):
+                    # Match by test criteria and optionally by batch number
+                    test_match = (
+                        (testname and entry.get("testname") == testname) or 
+                        (test_id and entry.get("test_id") == test_id)
+                    )
+                    
+                    batch_match = (
+                        update_batch_number is None or 
+                        entry.get("batch_number") == update_batch_number
+                    )
+                    
+                    if test_match and batch_match:
                         test_entry = entry
                         break
                 
                 if test_entry is None:
-                    return JsonResponse({"error": f"Test not found with testname: {testname} or test_id: {test_id}"}, status=404)
+                    error_msg = f"Test not found with testname: {testname} or test_id: {test_id}"
+                    if update_batch_number:
+                        error_msg += f" in batch: {update_batch_number}"
+                    return JsonResponse({"error": error_msg}, status=404)
+                
                 # Update the sample status and associated fields
                 test_entry['samplestatus'] = new_status
                 
                 # Get current time in IST timezone
                 current_time = timezone.now().astimezone(ist_timezone)
-                formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')  # Format the time
+                formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
                 
                 if new_status == "Received":
                     test_entry['received_time'] = formatted_time
                     test_entry['received_by'] = received_by
+                    # Clear rejection fields
+                    test_entry.pop('rejected_time', None)
+                    test_entry.pop('rejected_by', None)
+                    test_entry.pop('remarks', None)
+                    
                 elif new_status == "Rejected":
                     test_entry['rejected_time'] = formatted_time
                     test_entry['rejected_by'] = rejected_by
-                    test_entry['remarks'] = remarks  # Add rejection remarks
-                    # Set specified fields to null when rejected
-                    test_entry['samplecollected_time'] = None
-                    test_entry['batch_number'] = None
-                    test_entry['sampletransferred_time'] = None
-                    test_entry['collected_by'] = None
-                    test_entry['transferred_by'] = None
+                    test_entry['remarks'] = remarks
+                    # Clear other status fields
+                    test_entry.pop('received_time', None)
+                    test_entry.pop('received_by', None)
+                    test_entry.pop('outsourced_time', None)
+                    test_entry.pop('outsourced_by', None)
+                    
                 elif new_status == "Outsource":
-                    test_entry['outsourced_time'] = formatted_time  # Fixed typo in field name
-                    test_entry['outsourced_by'] = outsourced_by  # Fixed typo in field name
+                    test_entry['outsourced_time'] = formatted_time
+                    test_entry['outsourced_by'] = outsourced_by
+                    # Clear other status fields
+                    test_entry.pop('received_time', None)
+                    test_entry.pop('received_by', None)
+                    test_entry.pop('rejected_time', None)
+                    test_entry.pop('rejected_by', None)
+                    test_entry.pop('remarks', None)
             
             # Save changes back to the database
             collection.update_one(
                 {"barcode": barcode},
-                {"$set": {"testdetails": json.dumps(testdetails)}}  # Re-serialize testdetails as JSON
+                {"$set": {"testdetails": json.dumps(testdetails)}}
             )
-            return JsonResponse({"message": "Sample status updated successfully"}, status=200)
+            
+            return JsonResponse({
+                "status": "success",
+                "message": "Sample status updated successfully"
+            }, status=200)
+            
         except Exception as e:
+            logger.error(f"Error updating sample status for barcode {barcode}: {str(e)}")
             return JsonResponse({"error": str(e)}, status=500)
-
-
-from django.http import JsonResponse
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from pymongo import MongoClient
-from bson import ObjectId
-import json
-import logging
-from dotenv import load_dotenv
-from pyauth.auth import HasRoleAndDataPermission
-
-load_dotenv()
-
-# Set up logging
-logger = logging.getLogger(__name__)
-
-
+        
+        finally:
+            client.close()
 
 @api_view(['GET'])
 @csrf_exempt
