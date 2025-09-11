@@ -18,9 +18,9 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/Diagnostics/get-max-barcode/': 'SD-P-BTD',
     r'^/_b_a_c_k_e_n_d/Diagnostics/save-barcodes/?(\?.*)?$': 'SD-P-BTD',
     r'^/_b_a_c_k_e_n_d/Diagnostics/get-existing-barcode/.*$': 'SD-P-BTD',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/patients_get_barcode/?(\?.*)?$':'SD-P-BG',
-
-
+    #HMS barcode:
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_patients_get_barcode/?(\?.*)?$': 'SD-P-BG',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/save-hms-barcodes/?(\?.*)?$': 'SD-P-BTD',
     #Sample Status: 
     r'^/_b_a_c_k_e_n_d/Diagnostics/sample_patient/?(\?.*)?$':'SD-P-SS',
     '/_b_a_c_k_e_n_d/Diagnostics/sample_status/':'SD-P-SS',

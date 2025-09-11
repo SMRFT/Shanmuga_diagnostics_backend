@@ -1,7 +1,7 @@
 #urls.py
 from django.urls import path
 from core import views
-from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,franchise,updatebillingandpatient,hmsreport,mis
+from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,franchise,updatebillingandpatient,hmsreport,mis,hmsbarcode
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
 urlpatterns = [
@@ -35,6 +35,9 @@ urlpatterns = [
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
     path('save-barcodes/', barcode.save_barcodes, name='save_barcodes'),
     path('get-existing-barcode/',barcode.get_existing_barcode, name='get_latest_bill_no'),
+    #HMS Barcode:
+    path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
+    path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
     #Test Values:
     path('samplestatus-testvalue/', testvalue.get_samplestatus_testvalue, name='sample-status-list'), 
     path('compare_test_details/', testvalue.compare_test_details, name='compare_test_details'),
