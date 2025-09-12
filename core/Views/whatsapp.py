@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 # MongoDB Connection
 client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-db = client["Daignostics"]
+db = client["Diagnostics"]
 fs = gridfs.GridFS(db)
 
 @api_view(['POST'])
