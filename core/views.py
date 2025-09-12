@@ -124,3 +124,4 @@ def get_test_details(request):
     except Exception as e:
         print("Error:", e)
         return JsonResponse({'error': 'An error occurred'}, status=500)
+    

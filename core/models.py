@@ -150,3 +150,69 @@ class SampleCollector(AuditModel):
     email =models.CharField(max_length=255, blank=True, null=True)
     def __str__(self):
         return f"{self.name}"
+    
+class SalesVisitLog(models.Model):
+    date = models.DateField()
+    time = models.CharField(max_length=255)
+    clinicalname = models.CharField(max_length=255,blank=True)
+    salesMapping = models.CharField(max_length=100,blank=True)
+    personMet = models.CharField(max_length=100,blank=True)
+    designation = models.CharField(max_length=100,blank=True)
+    location = models.CharField(max_length=100,blank=True)
+    phoneNumber = models.CharField(max_length=15,blank=True)
+    noOfVisits=  models.CharField(max_length=15,blank=True)
+    comments = models.CharField(max_length=150,blank=True)
+    type = models.CharField(max_length=100,blank=True)
+    created_by = models.CharField(max_length=100, blank=True, null=True)
+    created_date = models.DateTimeField(auto_now_add=True)
+    lastmodified_by = models.CharField(max_length=100, blank=True, null=True)
+    lastmodified_date = models.DateTimeField(blank=True, null=True)
+
+from django.db import models
+class HospitalLab(models.Model):
+    TYPE_CHOICES = [
+        ('StandAlone', 'StandAlone'),
+        ('Lab', 'Lab'),
+    ]
+    clinicalname = models.CharField(max_length=255, blank=True)
+    type = models.CharField(max_length=50, choices=TYPE_CHOICES, default='StandAlone')
+    contactPerson = models.CharField(max_length=255, blank=True)
+    contactNumber = models.CharField(max_length=255, blank=True)
+    emailId = models.EmailField(max_length=255, blank=True)
+    salesMapping = models.CharField(max_length=255, blank=True)
+    # Audit fields
+    created_by = models.CharField(max_length=100, blank=True, null=True)
+    created_date = models.DateTimeField(auto_now_add=True)
+    def __str__(self):
+        return self.clinicalname
+
+
+#HMS PART
+class HmspatientBilling(AuditModel):
+    patient_id = models.CharField(max_length=20,  blank=True)
+    ipnumber= models.CharField(max_length=100,blank=True)
+    patientname = models.CharField(max_length=100)
+    age = models.IntegerField()
+    age_type = models.CharField(max_length=10, blank=True)
+    gender = models.CharField(max_length=10)
+    phone = models.CharField(max_length=15, blank=True)
+    location_id=models.CharField(max_length=15, blank=True,default="hms")
+    billnumber= models.CharField(max_length=15, blank=True,primary_key=True)
+    date=models.DateTimeField()
+    ref_doctor= models.CharField(max_length=500, blank=True)
+    testdetails = models.JSONField(blank=True, null=True)
+
+
+class Hmsbarcode(AuditModel):
+    billnumber= models.CharField(max_length=15, blank=True,primary_key=True)
+    barcode= models.CharField(max_length=50,  blank=True)
+    date=models.DateField()
+    testdetails = models.JSONField(blank=True, null=True)
+    location_id=models.CharField(max_length=15, blank=True,default="hms")
+
+
+class Hmssamplestatus(AuditModel):
+    barcode= models.CharField(max_length=50,  blank=True)
+    date=models.DateField()
+    testdetails = models.JSONField(blank=True, null=True)
+    location_id=models.CharField(max_length=15, blank=True,default="hms")

@@ -9,9 +9,7 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/Diagnostics/update_bill/': 'SD-P-UPB',
     r'^/_b_a_c_k_e_n_d/Diagnostics/patients_by_date/?(\?.*)?$': 'SD-P-GPD',
     '/_b_a_c_k_e_n_d/Diagnostics/testdetails/':'SD-P-TM',
-    # '/_b_a_c_k_e_n_d/Diagnostics/clinical_name/': 'SD-P-CN',
     '/_b_a_c_k_e_n_d/Diagnostics/sample-collector/': 'SD-P-SC',
-    # '/_b_a_c_k_e_n_d/Diagnostics/refby/': 'SD-P-RB',
 
     '/_b_a_c_k_e_n_d/Diagnostics/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/Diagnostics/clinical_name/':'SD-API-CN',
@@ -42,11 +40,12 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/Diagnostics/franchise-batches/':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-batches/?(\?.*)?$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-receive(?:/[^/]+)+/$':'SD-P-SSU',
-    '/_b_a_c_k_e_n_d/Diagnostics/get_franchise_Transferred/':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get_franchise_Transferred(?:/[^/]+)+/$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/update_franchise_sample(?:/[^/]+)+/$':'SD-P-SSU',
-    '/_b_a_c_k_e_n_d/Diagnostics/franchise_overall_report/':'SD-P-SSU',
-    '/_b_a_c_k_e_n_d/Diagnostics/franchise_patient_test_details/':'SD-P-SSU',
-    '/_b_a_c_k_e_n_d/Diagnostics/get-test-values/':'SD-P-SSU',   
+    r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_overall_report/?(\?.*)?$':'SD-API-OAR',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',  
+    '/_b_a_c_k_e_n_d/Diagnostics/get-test-values/':'SD-P-SSU',  
 
     #Test Values:
     r'^/_b_a_c_k_e_n_d/Diagnostics/samplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       
@@ -77,6 +76,31 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/all-patients/?(\?.*)?$': 'SD-API-IVM',
     r'^/_b_a_c_k_e_n_d/Diagnostics/patient_report/?(\?.*)?$': 'SD-API-IVM',
 
+    #Hms Billing
+    '/_b_a_c_k_e_n_d/Diagnostics/hms_patient_billing/':'SD-P-HMSPB',
+    '/_b_a_c_k_e_n_d/Diagnostics/hms_testdetails/':'SD-P-HMSTD',
+    '/_b_a_c_k_e_n_d/Diagnostics/hms-list_doctor/':'SD-P-HMSLD',
+
+    #HMS barcode:
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_patients_get_barcode/?(\?.*)?$': 'SD-P-HMSLD',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/save-hms-barcodes/?(\?.*)?$': 'SD-P-HMSPB',
+
+    # HMS Sample Status 
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_sample_patient/?(\?.*)?$':'SD-P-HMSSP',
+    '/_b_a_c_k_e_n_d/Diagnostics/hms_sample_status/': 'SD-P-HMSSS',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_check_sample_status(?:/[^/]+)+/$': 'SD-P-HMSCS',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_sample_status_data(?:/[^/]+)+/$': 'SD-P-HMSSD',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_patch_sample_status(?:/[^/]+)+/$': 'SD-P-HMSPS',
+
+
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_get_sample_collected/?(\?.*)?$':'SD-P-HMSGC',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms_update_sample_collected(?:/[^/]+)+/$':'SD-P-HMSUC',
+
+
+    #MIS
+    r'^/_b_a_c_k_e_n_d/Diagnostics/consolidated-data/?(\?.*)?$':'SD-P-MIS',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
 }
 
 PAGE_ACTION_MAPPING = {
