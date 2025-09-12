@@ -218,6 +218,7 @@ def update_bill(request):
     - Does NOT sync with Django model
     - All fields stored as JSON strings: testdetails, payment_method, MultiplePayment
     - Properly calculates and stores netAmount and credit_amount
+    - If multiple records exist for patient_id + date, prefer updating 'Registered' record
     """
     try:
         # Extract employee_id from request header/body
@@ -226,20 +227,15 @@ def update_bill(request):
             request.headers.get('auth-user-id') or
             "system"
         )
-
         # MongoDB connection
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Diagnostics
         collection = db.core_billing
-
         bill_id = request.data.get("bill_id")
         patient_id = request.data.get("patient_id")
         bill_date_str = request.data.get("date")
-
         print(f"Received update request - bill_id: {bill_id}, patient_id: {patient_id}")
-
         query = {}
-
         # Build query to find the EXISTING record
         if bill_id:
             try:
@@ -256,7 +252,6 @@ def update_bill(request):
         else:
             if not patient_id:
                 return Response({"error": "Provide bill_id or patient_id"}, status=400)
-
             query = {"patient_id": patient_id}
             if bill_date_str:
                 try:
@@ -266,7 +261,6 @@ def update_bill(request):
                         dt = datetime.fromisoformat(str(bill_date_str).replace('Z', ''))
                     else:
                         dt = datetime.strptime(str(bill_date_str), "%Y-%m-%d")
-
                     start_date = dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     end_date = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
                     query["date"] = {"$gte": start_date, "$lte": end_date}
@@ -274,19 +268,23 @@ def update_bill(request):
                 except Exception as e:
                     print(f"Date parsing error: {e}")
                     print(f"Using patient_id only query: {query}")
-
         print(f"Final MongoDB Query: {query}")
-
-        # Find the existing document
-        billing_record = collection.find_one(query)
+        # ====== Find the existing record(s) ======
+        billing_record = None
+        if bill_id:
+            billing_record = collection.find_one(query)
+        else:
+            matching_records = list(collection.find(query).sort("date", -1))
+            if not matching_records:
+                return Response({"error": "Billing record not found. Cannot update non-existing record."}, status=404)
+            # Prefer Registered record if exists
+            registered_record = next((rec for rec in matching_records if rec.get("status") == "Registered"), None)
+            billing_record = registered_record if registered_record else matching_records[0]
         if not billing_record:
-            print(f"ERROR: No billing record found with query: {query}")
-            return Response({"error": "Billing record not found. Cannot update non-existing record."}, status=404)
-
+            return Response({"error": "Billing record not found"}, status=404)
         record_id = billing_record["_id"]
         bill_no = billing_record.get('bill_no')
         bill_date = billing_record.get('bill_date')
-
         # Keep existing bill_no and bill_date if missing
         if not bill_no:
             today = datetime.now().strftime('%Y%m%d')
@@ -297,11 +295,9 @@ def update_bill(request):
             last_bill_list = list(last_bill_cursor)
             next_id = (int(last_bill_list[0]['bill_no'][-4:]) + 1) if last_bill_list else 1
             bill_no = f"{today}{next_id:04d}"
-
         if not bill_date:
             bill_date = datetime.now()
-
-        # Process testdetails - MUST be stored as JSON string
+        # ====== Process testdetails ======
         testdetails = request.data.get("testdetails", [])
         if isinstance(testdetails, list):
             testdetails_json = json.dumps(testdetails)
@@ -309,19 +305,16 @@ def update_bill(request):
             testdetails_json = testdetails
         else:
             testdetails_json = json.dumps([])
-
         # ====== Amount Calculations ======
         total_amount = float(request.data.get("totalAmount", "0"))
         discount = float(request.data.get("discount", "0"))
         net_amount = total_amount - discount
         if net_amount < 0:
             net_amount = 0
-
         # ====== Payment Method Handling ======
         payment_method_data = request.data.get("payment_method", {})
         multiple_payment_data = request.data.get("MultiplePayment")
         credit_amount = 0
-
         update_data = {
             "bill_no": bill_no,
             "bill_date": bill_date,
@@ -330,14 +323,12 @@ def update_bill(request):
             "netAmount": str(net_amount),
             "discount": str(discount),
             "credit_amount": str(credit_amount),
-            "status": "Billed",
-            "lastmodified_by": employee_id,  # Use auth-user-id
+            "status": "Billed",   # Always update to billed
+            "lastmodified_by": employee_id,
             "lastmodified_date": datetime.now(),
         }
-
         if isinstance(payment_method_data, dict):
             payment_method = payment_method_data.get("paymentmethod", "")
-
             if payment_method == "Multiple Payment":
                 if isinstance(multiple_payment_data, str):
                     try:
@@ -355,12 +346,9 @@ def update_bill(request):
                         processed_multiple_payments.append(processed_payment)
                 else:
                     processed_multiple_payments = []
-
                 update_data["MultiplePayment"] = json.dumps(processed_multiple_payments)
                 update_data["payment_method"] = json.dumps({"paymentmethod": "Multiple Payment"})
-
             else:
-                # Single Payment Method
                 if payment_method == "Credit":
                     credit_amount = net_amount
                 payment_method_obj = {
@@ -370,12 +358,10 @@ def update_bill(request):
                 update_data["payment_method"] = json.dumps(payment_method_obj)
                 update_data["MultiplePayment"] = json.dumps([])
                 update_data["credit_amount"] = str(credit_amount)
-
         # ====== Update MongoDB Document ======
         result = collection.update_one({"_id": record_id}, {"$set": update_data})
         if result.matched_count == 0:
             return Response({"error": "Failed to find billing record for update"}, status=500)
-
         # ====== Prepare Response ======
         try:
             response_multiple_payment = json.loads(update_data.get("MultiplePayment", "[]"))
@@ -389,7 +375,6 @@ def update_bill(request):
             response_testdetails = json.loads(update_data.get("testdetails", "[]"))
         except:
             response_testdetails = []
-
         return Response({
             "success": True,
             "message": "Bill updated successfully",
@@ -407,7 +392,6 @@ def update_bill(request):
                 "testdetails": response_testdetails
             }
         }, status=200)
-
     except Exception as e:
         print(f"Error in update_bill: {str(e)}")
         print(f"Traceback: {traceback.format_exc()}")

@@ -35,7 +35,7 @@ deactivate () {
 # unset irrelevant variables
 deactivate nondestructive
 
-VIRTUAL_ENV="/Users/parthibanmurugan/Desktop/ fully backend /Shanmuga_Diagnostics/Shanmuga_diagnostics_backend/venv"
+VIRTUAL_ENV="/Users/parthibanmurugan/Desktop/navmal/Shanmuga Diagnostics/Shanmuga_diagnostics_backend/venv"
 export VIRTUAL_ENV
 
 _OLD_VIRTUAL_PATH="$PATH"

@@ -68,3 +68,45 @@ class SampleCollectorSerializer(serializers.ModelSerializer):
     class Meta:
         model = SampleCollector
         fields = '__all__'
+
+
+
+
+
+#HMS PART
+from .models import HmspatientBilling
+class HmspatientBillingRegistrationSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = HmspatientBilling
+        fields = '__all__'
+
+
+from .models import Hmsbarcode
+class HmsbarcodeRegistrationSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = Hmsbarcode
+        fields = '__all__'
+
+
+from .models import Hmssamplestatus
+class HmssamplestatusSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = Hmssamplestatus
+        fields = '__all__'
+
+
+from .models import HospitalLab
+class HospitalLabSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = HospitalLab
+        fields = '__all__'
+
+from .models import SalesVisitLog
+class SalesVisitLogSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = SalesVisitLog
+        fields = "__all__"

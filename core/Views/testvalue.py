@@ -656,17 +656,17 @@ def compare_test_details(request):
                         "testname": test_name,
                         "test_code": test_code,
                         "parameter_name": None,
-                        "unit": test_detail.get('unit', ''),
-                        "reference_range": test_detail.get('reference_range', ''),
-                        "method": test_detail.get('method', ''),
-                        "department": test_detail.get('department', ''),
-                        "specimen_type": test_detail.get('specimen_type', ''),
-                        "NABL": test_detail.get('NABL', ''),
+                        "unit": test_detail.get('unit', 'N/A'),
+                        "reference_range": test_detail.get('reference_range', 'N/A'),
+                        "method": test_detail.get('method', 'N/A'),
+                        "department": test_detail.get('department', 'N/A'),
+                        "specimen_type": test_detail.get('specimen_type', 'N/A'),
+                        "NABL": test_detail.get('NABL', 'N/A'),
                         "test_value": test_value,
                         "processing_status": processing_status,
                         "sample_status": sample_status,
                         "data_source": data_source,
-                        "lab_unique_id": test_value_doc.get('lab_unique_id', '') if test_value_doc else '',
+                        "lab_unique_id": test_value_doc.get('lab_unique_id', 'N/A') if test_value_doc else 'N/A',
                         "created_date": test_value_doc.get('CreatedDate') if test_value_doc else None,
                         "received_date": test_value_doc.get('Receiveddate') if test_value_doc else None
                     }
@@ -807,8 +807,8 @@ def compare_test_details(request):
                             "unit": param.get('unit'),
                             "reference_range": param.get('reference_range'),
                             "method": param.get('method'),
-                            "department": test_detail.get('department', 'N/A'),
-                            "specimen_type": test_detail.get('specimen_type', param.get('specimen_type', 'N/A')),
+                            "department": test_detail.get('department'),
+                            "specimen_type": test_detail.get('specimen_type', param.get('specimen_type')),
                             "NABL": test_detail.get('NABL', 'N/A'),
                             "test_value": test_value,
                             "processing_status": processing_status,
@@ -830,22 +830,22 @@ def compare_test_details(request):
                     "patient_id": patient_id,
                     "patientname": patient_name,
                     "barcode": barcode,
-                    "device_id": "",
+                    "device_id": "N/A",
                     "test_id": test_id,
                     "testname": test_name,
-                    "test_code": "",
+                    "test_code": "N/A",
                     "parameter_name": None,
                     "unit": "",
                     "reference_range": "",
                     "method": "",
                     "department": "",
                     "specimen_type": "",
-                    "NABL": "",
+                    "NABL": "N/A",
                     "test_value": "",
                     "processing_status": "No Test Details",
                     "sample_status": sample_status,
                     "data_source": data_source,
-                    "lab_unique_id": "",
+                    "lab_unique_id": "N/A",
                     "created_date": None,
                     "received_date": None
                 }
@@ -968,6 +968,10 @@ def update_processing_status(barcode, test_code, device_id, latest_record_id_str
     finally:
         if client:
             client.close()
+
+
+
+            
 @api_view([ 'POST'])
 @permission_classes([HasRoleAndDataPermission])
 def save_test_value(request):

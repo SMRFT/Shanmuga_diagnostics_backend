@@ -1,4 +1,4 @@
-#!/Users/parthibanmurugan/Desktop/ fully backend /Shanmuga_Diagnostics/Shanmuga_diagnostics_backend/venv/bin/python3.11
+#!/Users/parthibanmurugan/Desktop/navmal/Shanmuga Diagnostics/Shanmuga_diagnostics_backend/venv/bin/python3.11
 # When the django-admin.py deprecation ends, remove this script.
 import warnings
 

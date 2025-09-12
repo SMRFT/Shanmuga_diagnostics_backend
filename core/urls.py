@@ -1,9 +1,13 @@
 #urls.py
 from django.urls import path
 from core import views
+from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestvalue
+from .Views import whatsapp,franchise,sales,mis
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
+
+
 urlpatterns = [
     path('create_patient/', patients.create_patient, name='create_patient'),
     path('create_patient/<str:patient_id>/', patients.create_patient, name='create_patient'),
@@ -67,7 +71,59 @@ urlpatterns = [
     path('verify_and_process_cancellation/',verify_and_process_cancellation, name='verify_and_process_cancellation'),
     path('refund_cancellation_logs/', logs_api, name='refund_cancellation_logs'),
     path('patient-get/', patients.patient_get, name='patient_get'),
-
+    path("upload-pdf/", whatsapp.upload_pdf_to_gridfs, name="upload_pdf"),
+    path("get-file/<str:file_id>/", whatsapp.get_pdf_from_gridfs, name="get_pdf"),
+    path("send-whatsapp/", whatsapp.send_whatsapp, name="send_whatsapp"),
     path('get_patientsbyb2b/', patients.get_patientsbyb2b, name='get_patients'),
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
+    path('send-email/', whatsapp.send_email, name='send_email'),
+
+
+    path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
+    path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
+    path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
+
+
+    #Franchise Batch and Sample Status Update:
+    path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
+    path('franchise-receive/<str:batch_no>/', franchise.update_batch_received_status, name='update_batch_received_status'),
+    path("get_franchise_Transferred/<str:batch_number>/", franchise.get_franchise_sample, name="get_franchise_sample"),
+    path("update_franchise_sample/<str:barcode>/", franchise.update_franchise_sample, name="update_franchise_sample"), 
+    
+    #Franchise Reports:     
+    path('franchise_overall_report/', franchise.franchise_overall_report, name='franchise_overall_report'),
+    path('franchise_patient_test_details/', franchise.franchise_patient_test_details, name='franchise_patient_test_details'),
+    path('get-test-values/', franchise.get_test_value_for_franchise, name='get_test_values_franchise'),
+
+    #HMS Report:
+    path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
+    path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_patient_test_details'),
+    path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
+    path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
+    
+    #HMS Billing:
+    path("hms_list_doctor/",hmsbilling.hms_get_doctor_list,name="doctor_list"),
+    path("hms_testdetails/", hmsbilling.hms_get_test_details, name="hms_get_test_details"),
+    path("hms_patient_billing/", hmsbilling.hms_patient_billing, name="hms_patient_billing"),
+
+    #HMS Barcode:
+    path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
+    path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
+
+    path('get_hmssamplestatus_testvalue/',hmstestvalue.get_hmssamplestatus_testvalue, name='get_hmssamplestatus_testvalue'),
+    path('hmscompare_test_details/',hmstestvalue.hmscompare_test_details, name='hmscompare_test_details'),
+
+    #HMS Sample:
+    path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),
+    path('hms_sample_status/', hmssamplestatus.hms_sample_status, name='hms_sample_status'),
+    path('hms_check_sample_status/<str:barcode>/', hmssamplestatus.hms_check_sample_status, name='hms_check_sample_status'),
+    path('hms_sample_status_data/<str:barcode>/', hmssamplestatus.hms_get_sample_status_data, name='hms_get_sample_status_data'),
+    path('hms_patch_sample_status/<str:barcode>/', hmssamplestatus.hms_patch_sample_status, name='hms_patch_sample_status'),
+    path('hms_get_sample_collected/', hmssamplestatus.hms_get_sample_collected, name='hms_get_sample_collected'),
+    path('hms_update_sample_collected/<str:barcode>/', hmssamplestatus.hms_update_sample_collected, name='hms_update_sample_collected'),
+
+    #MIS:
+    path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
+    path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
+    path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
 ]

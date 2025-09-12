@@ -12,7 +12,7 @@ from django.conf import settings  # To access the settings for DEFAULT_FROM_EMAI
 import json
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
-from ..models import TestValue,Patient,BarcodeTestDetails
+from ..models import TestValue,Patient,BarcodeTestDetails,Hmssamplestatus,Hmsbarcode,HmspatientBilling
 from django.http import JsonResponse
 from pymongo import MongoClient
 from datetime import datetime
@@ -32,11 +32,14 @@ def get_test_values(request):
     db = client.franchise
     billing_col = db.franchise_billing
     patient_col = db.franchise_patient
+
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
     patient_id_filter = request.GET.get('patient_id')
     testname_filter = request.GET.get('testname')
+
     patients = TestValue.objects.all()
+
     # Date filters
     if from_date and to_date:
         try:
@@ -45,21 +48,25 @@ def get_test_values(request):
             patients = patients.filter(date__gte=parsed_from_date, date__lte=parsed_to_date)
         except ValueError:
             return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+
     patients = patients.order_by('-date')
+
     # Process testname filter
     if testname_filter and testname_filter != 'undefined':
-        # Decode URL encoding
         testname_filter = unquote_plus(testname_filter)
-        print(f"Decoded testname filter: '{testname_filter}'")  # Debug log
+
     patient_data = []
+
     for patient in patients:
         try:
             test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails
         except (json.JSONDecodeError, TypeError):
             test_details = []
+
         # defaults
         patient_name, patient_age, current_patient_id = "N/A", "N/A", None
-        # :one: Try BarcodeTestDetails (local Django model)
+
+        # 1️⃣ BarcodeTestDetails (local model)
         barcode_details = BarcodeTestDetails.objects.filter(barcode=str(patient.barcode).zfill(5)).first()
         if barcode_details:
             current_patient_id = barcode_details.patient_id
@@ -67,9 +74,9 @@ def get_test_values(request):
             if patient_record:
                 patient_name = patient_record.patientname
                 patient_age = patient_record.age
-        # :two: Try MongoDB franchise_billing → franchise_patient
+
+        # 2️⃣ MongoDB franchise_billing → franchise_patient
         if not current_patient_id:
-            # Normalize barcode (preserve leading zeros)
             barcode_val = str(patient.barcode).zfill(5)
             billing_doc = billing_col.find_one({"barcode": barcode_val})
             if billing_doc:
@@ -78,57 +85,71 @@ def get_test_values(request):
                 if patient_doc:
                     patient_name = patient_doc.get("patientname", "N/A")
                     patient_age = patient_doc.get("age", "N/A")
-        # :three: Final fallback
+
+        # 3️⃣ HMS Billing (Django models)
+        if not current_patient_id:
+            barcode_val = str(patient.barcode).zfill(5)
+            # Try barcode mapping
+            hms_barcode = Hmsbarcode.objects.filter(barcode=barcode_val).first()
+            if hms_barcode:
+                hms_billing = HmspatientBilling.objects.filter(billnumber=hms_barcode.billnumber).first()
+                if hms_billing:
+                    current_patient_id = hms_billing.patient_id
+                    patient_name = hms_billing.patientname
+                    patient_age = hms_billing.age
+
+            # If not found, try samplestatus
+            if not current_patient_id:
+                hms_sample = Hmssamplestatus.objects.filter(barcode=barcode_val).first()
+                if hms_sample:
+                    hms_billing = HmspatientBilling.objects.filter(billnumber=hms_sample.barcode).first()
+                    if hms_billing:
+                        current_patient_id = hms_billing.patient_id
+                        patient_name = hms_billing.patientname
+                        patient_age = hms_billing.age
+
+        # 4️⃣ Final fallback
         if not current_patient_id:
             current_patient_id = getattr(patient, 'patient_id', None)
-        # NEW: Apply patient_id filter if provided
+
+        # Patient ID filter
         if patient_id_filter and current_patient_id != patient_id_filter:
             continue
-        # NEW: Improved testname filtering
+
+        # Testname filtering
         if testname_filter and testname_filter != 'undefined':
             def normalize_testname(name):
-                """Normalize test name for comparison"""
                 if not name:
                     return ""
-                # Convert to lowercase, remove extra spaces, normalize special chars
                 normalized = re.sub(r'\s+', ' ', name.strip().lower())
-                # Handle common variations
                 normalized = normalized.replace('&', 'and')
                 normalized = normalized.replace('/', ' ')
                 return normalized
+
             filter_normalized = normalize_testname(testname_filter)
-            print(f"Normalized filter: '{filter_normalized}'")  # Debug log
             filtered_test_details = []
             for test in test_details:
                 test_name = test.get('testname', '')
                 test_normalized = normalize_testname(test_name)
-                print(f"Comparing: '{test_normalized}' with '{filter_normalized}'")  # Debug log
-                # Try multiple matching strategies
                 match_found = (
-                    # Exact match (normalized)
                     test_normalized == filter_normalized or
-                    # Partial match (filter contains in test name)
                     filter_normalized in test_normalized or
-                    # Partial match (test name contains filter)
                     test_normalized in filter_normalized or
-                    # Word-based matching (all words in filter present in test name)
                     all(word in test_normalized for word in filter_normalized.split() if len(word) > 2)
                 )
                 if match_found:
                     filtered_test_details.append(test)
-                    print(f"Match found for: '{test_name}'")  # Debug log
             test_details = filtered_test_details
-        else:
-            # No testname filter applied
-            pass
-        # Filter only pending tests (approval logic)
+
+        # Only pending tests
         filtered_tests = [
             test for test in test_details
             if not test.get('approve', False) and not test.get('rerun', False)
         ]
-        # If no matching tests after filtering, skip this patient
+
         if not filtered_tests:
             continue
+
         patient_data.append({
             "patient_id": current_patient_id,
             "patientname": patient_name,
@@ -138,7 +159,9 @@ def get_test_values(request):
             "created_date": patient.created_date,
             "testdetails": filtered_tests
         })
+
     return JsonResponse(patient_data, safe=False)
+
 
 
 @api_view(["PATCH"])
