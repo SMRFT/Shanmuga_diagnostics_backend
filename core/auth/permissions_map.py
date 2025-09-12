@@ -50,6 +50,8 @@ PAGE_MAPPING = {
     #Test Values:
     r'^/_b_a_c_k_e_n_d/Diagnostics/samplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       
     r'^/_b_a_c_k_e_n_d/Diagnostics/compare_test_details/?(\?.*)?$':'SD-P-TD',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hmssamplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       
+    r'^/_b_a_c_k_e_n_d/Diagnostics/hmscompare_test_details/?(\?.*)?$':'SD-P-TD',
     '/_b_a_c_k_e_n_d/Diagnostics/test-value/save/':'SD-P-TD',
 
     #Test Approval:
@@ -116,3 +118,4 @@ GEN_ACTION_MAPPING = {
     'GET': 'R',
     'PATCH': 'RW',
 }
+
