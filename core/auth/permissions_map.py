@@ -82,6 +82,16 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
 
+     #Corporate:
+    '/_b_a_c_k_e_n_d/Diagnostics/corporate-batches/':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate-batches/?(\?.*)?$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate-receive(?:/[^/]+)+/$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get_corporate_Transferred(?:/[^/]+)+/$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/update_corporate_sample(?:/[^/]+)+/$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_overall_report/?(\?.*)?$':'SD-API-OAR',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get-corporate-test-values(?:/[^/]+)+/$':'SD-P-POV', 
+
 }
 
 PAGE_ACTION_MAPPING = {

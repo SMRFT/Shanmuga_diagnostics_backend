@@ -1,7 +1,7 @@
 #urls.py
 from django.urls import path
 from core import views
-from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,franchise,updatebillingandpatient,hmsreport,mis,hmsbarcode
+from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,franchise,updatebillingandpatient,hmsreport,mis,hmsbarcode,corporate
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
 urlpatterns = [
@@ -101,4 +101,15 @@ urlpatterns = [
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='consolidated_data'),
+
+    #Corporate Batch and Sample Status Update:
+    path('corporate-batches/', corporate.get_corporate_batch_generation_data, name='get_corporate_batch_generation_data'),
+    path('corporate-receive/<str:batch_no>/', corporate.update_corporate_batch_received_status, name='update_corporate_batch_received_status'),
+    path("get_corporate_Transferred/<str:batch_number>/", corporate.get_corporate_sample, name="get_corporate_sample"),
+    path("update_corporate_sample/<str:barcode>/", corporate.update_corporate_sample, name="update_corporate_sample"), 
+    
+    #Corporate Reports:     
+    path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
+    path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),
+    path('get-corporate-test-values/', corporate.get_corporate_test_value, name='get_corporate_test_value'),
 ]

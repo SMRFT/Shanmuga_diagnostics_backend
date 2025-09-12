@@ -6,15 +6,9 @@ from rest_framework import  status
 from django.views.decorators.csrf import csrf_exempt
 from pymongo import MongoClient
 import os
-
-#models and serializers
 from ..models import RefBy
 from ..serializers import RefBySerializer
-
-#auth
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.permissions import AllowAny
 from pyauth.auth import HasRoleAndDataPermission
 
 
