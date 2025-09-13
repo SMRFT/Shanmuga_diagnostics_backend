@@ -332,7 +332,7 @@ def hmscompare_test_details(request):
                 if not parameters:
                     # Simple test
                     test_code = test_detail.get('test_code', f"{test_name.replace(' ', '').upper()}01")
-                    query = {"Barcode": barcode, "TestCode": test_code, "processingstatus": "Pending"}
+                    query = {"Barcode": barcode, "TestCode": test_code, "processingstatus": "pending"}
                     if device_id:
                         query["DeviceID"] = device_id
                     
@@ -373,7 +373,7 @@ def hmscompare_test_details(request):
                                 continue
                             
                             record = interface_testvalue_collection.find_one(
-                                {"Barcode": barcode, "TestCode": test_code, "processingstatus": "Pending"},
+                                {"Barcode": barcode, "TestCode": test_code, "processingstatus": "pending"},
                                 sort=[("Receiveddate", -1)]
                             )
                             
