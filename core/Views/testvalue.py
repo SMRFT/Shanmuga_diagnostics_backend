@@ -619,7 +619,7 @@ def compare_test_details(request):
                     test_value_query = {
                         "Barcode": barcode,
                         "TestCode": test_code,
-                        "processingstatus": "Pending"
+                        "processingstatus": "pending"
                     }
                     
                     if device_id:
@@ -682,7 +682,7 @@ def compare_test_details(request):
                 # Only check records with Pending status
                 all_barcode_records = list(interface_testvalue_collection.find({
                     "Barcode": barcode,
-                    "processingstatus": "Pending"
+                    "processingstatus": "pending"
                 }))
                 
                 print(f"DEBUG: Found {len(all_barcode_records)} pending records for barcode {barcode}")
@@ -771,7 +771,7 @@ def compare_test_details(request):
                             matching_record = None
                             for record in all_barcode_records:
                                 if (record.get('TestCode') == test_code and 
-                                    record.get('processingstatus') == 'Pending'):
+                                    record.get('processingstatus') == 'pending'):
                                     matching_record = record
                                     break
                             
@@ -786,7 +786,7 @@ def compare_test_details(request):
                                 
                                 # Set values from interface_testvalue
                                 test_value = matching_record.get('Value', '')
-                                processing_status = matching_record.get('processingstatus', 'Pending')
+                                processing_status = matching_record.get('processingstatus', 'pending')
                                 lab_unique_id = matching_record.get('lab_unique_id', 'N/A')
                                 created_date = matching_record.get('CreatedDate')
                                 received_date = matching_record.get('Receiveddate')
