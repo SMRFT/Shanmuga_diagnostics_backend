@@ -218,9 +218,8 @@ def hms_sample_status(request):
                 processed_test = {
                     'test_id': test.get('test_id'),
                     'testname': test.get('testname'),
-                    'container': test.get('container', 'N/A'),
+                    'collection_container': test.get('collection_container', 'N/A'),
                     'department': test.get('department', 'N/A'),
-                    'samplecollector': test.get('samplecollector', 'N/A'),
                     'samplestatus': samplestatus,
                     'samplecollected_time': (
                         test.get('samplecollected_time') 
@@ -609,7 +608,7 @@ def hms_get_sample_collected(request):
                         patient_data[patient_key]["testdetails"].append({
                             "test_id": detail.get("test_id", "N/A"),
                             "testname": detail.get("testname", "N/A"),
-                            "container": detail.get("container", "N/A"),
+                            "collection_container": detail.get("collection_container", "N/A"),
                             "department": detail.get("department", "N/A"),
                             "samplecollector": detail.get("samplecollector", "N/A"),
                             "samplestatus": detail.get("samplestatus", "N/A"),

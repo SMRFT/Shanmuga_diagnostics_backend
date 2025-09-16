@@ -104,7 +104,7 @@ def get_all_patients(request):
 
     # ENHANCED DEBUGGING: Print actual patient IDs
     patient_ids = [p.patient_id for p in patients]
-    print(f"Billing patient IDs found: {patient_ids}")
+    # print(f"Billing patient IDs found: {patient_ids}")
     
     # Print each ID with quotes to see whitespace
     for i, pid in enumerate(patient_ids):
@@ -118,7 +118,7 @@ def get_all_patients(request):
             cleaned_id = str(pid).strip().upper()  # Strip whitespace and uppercase
             cleaned_patient_ids.append(cleaned_id)
     
-    print(f"Cleaned billing patient IDs: {cleaned_patient_ids}")
+    # print(f"Cleaned billing patient IDs: {cleaned_patient_ids}")
 
     # Fetch patients with case-insensitive and whitespace-tolerant matching
     # Method 1: Using Django database functions (recommended)
@@ -147,8 +147,8 @@ def get_all_patients(request):
                 if normalized_patient_id in cleaned_patient_ids:
                     patients_dict[normalized_patient_id] = patient.patientname
 
-    print(f"Patient names found: {len(patients_dict)}")
-    print(f"Matched patient data: {patients_dict}")
+    # print(f"Patient names found: {len(patients_dict)}")
+    # print(f"Matched patient data: {patients_dict}")
 
     # Debug: Show which IDs didn't match
     matched_ids = set(patients_dict.keys())
@@ -223,7 +223,7 @@ def generate_invoice(request):
         filtered_patients = []
         
         # === FETCH PATIENT NAMES - Using same approach as get_all_patients ===
-        print(f"Invoice patient IDs found: {patient_ids}")
+        # print(f"Invoice patient IDs found: {patient_ids}")
         
         # Clean patient IDs by stripping whitespace and converting to uppercase
         cleaned_patient_ids = []
@@ -232,7 +232,7 @@ def generate_invoice(request):
                 cleaned_id = str(pid).strip().upper()  # Strip whitespace and uppercase
                 cleaned_patient_ids.append(cleaned_id)
         
-        print(f"Cleaned invoice patient IDs: {cleaned_patient_ids}")
+        # print(f"Cleaned invoice patient IDs: {cleaned_patient_ids}")
 
         # Fetch patients with case-insensitive and whitespace-tolerant matching
         try:
@@ -260,8 +260,8 @@ def generate_invoice(request):
                     if normalized_patient_id in cleaned_patient_ids:
                         patients_dict[normalized_patient_id] = patient.patientname
 
-        print(f"Patient names found for invoice: {len(patients_dict)}")
-        print(f"Matched patient data: {patients_dict}")
+        # print(f"Patient names found for invoice: {len(patients_dict)}")
+        # print(f"Matched patient data: {patients_dict}")
 
         # === Build filtered_patients with patient names ===
         for patient in raw_data.get("patients", []):

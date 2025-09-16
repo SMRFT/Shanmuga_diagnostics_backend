@@ -83,7 +83,7 @@ urlpatterns = [
     path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
     path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
 
-
+    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
     path('franchise-receive/<str:batch_no>/', franchise.update_batch_received_status, name='update_batch_received_status'),
