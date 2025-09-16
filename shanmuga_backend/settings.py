@@ -83,7 +83,7 @@ import certifi
 DATABASES = {
     'default': {
         'ENGINE': 'djongo',
-        'NAME': os.getenv("LAB_DB_NAME","Diagnostics"),
+        'NAME': "Diagnostics",
         'ENFORCE_SCHEMA': False,
         'CLIENT': {
 

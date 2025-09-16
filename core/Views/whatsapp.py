@@ -70,10 +70,6 @@ def get_pdf_from_gridfs(request, file_id):
         return JsonResponse({"error": "File not found"}, status=404)
 
 
-
-
-
-
 # views.py
 import requests
 from rest_framework.decorators import api_view

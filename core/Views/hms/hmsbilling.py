@@ -39,7 +39,8 @@ def hms_get_test_details(request):
                     "testname": t.get("test_name", ""),
                     "container": t.get("collection_container", ""),
                     "SH_Rate": t.get("SH_Rate", 0),
-                    "department": t.get("department", "")
+                    "department": t.get("department", ""),
+                    'shortcut': t.get('shortcut', ''),
                 }
                 for t in approved_tests
             ]

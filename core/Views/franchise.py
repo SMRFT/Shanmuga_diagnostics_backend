@@ -960,7 +960,7 @@ def get_test_value_for_franchise(request):
     date = request.GET.get('date')
     franchise_id = request.GET.get('franchise_id')
 
-    print(f"Received date: {date}, franchise_id: {franchise_id}")
+    # print(f"Received date: {date}, franchise_id: {franchise_id}")
 
     if not franchise_id or not date:
         return JsonResponse({'error': 'franchise_id and date are required'}, status=400)

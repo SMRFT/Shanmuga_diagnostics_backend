@@ -44,7 +44,7 @@ urlpatterns = [
     path('test-value/save/', testvalue.save_test_value, name='save_test_value'),    
     #Test Approval:
     path('test-values/', testapproval.get_test_values, name='get_test_values'),
-    path('test-approval/<str:patient_id>/<int:test_index>/approve/', testapproval.approve_test_detail, name='approve_test_detail'),
+    path("test-approval/<path:patient_id>/<int:test_index>/approve/",testapproval.approve_test_detail,name="approve_test_detail"),
     path('test-rerun/<str:patient_id>/<int:test_index>/rerun/', testapproval.rerun_test_detail, name='rerun_test_detail'),
     path('patient_test_sorting/', report.patient_test_sorting, name='patient_test_sorting'),
     path('get_patient_test_details/', report.get_patient_test_details, name='get_patient_test_details'),
@@ -83,7 +83,7 @@ urlpatterns = [
     path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
     path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
 
-
+    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
     path('franchise-receive/<str:batch_no>/', franchise.update_batch_received_status, name='update_batch_received_status'),
