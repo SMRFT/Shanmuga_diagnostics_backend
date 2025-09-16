@@ -126,4 +126,5 @@ urlpatterns = [
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
+
 ]

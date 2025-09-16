@@ -22,3 +22,4 @@ urlpatterns = [
     path('_b_a_c_k_e_n_d/LIS/', include('core.urls')),
     
 ]
+

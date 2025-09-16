@@ -603,4 +603,5 @@ def get_patientsbyb2b(request):
             result.append(patient_data)
         return Response(result, status=status.HTTP_200_OK)
     except ValueError:
+
         return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)

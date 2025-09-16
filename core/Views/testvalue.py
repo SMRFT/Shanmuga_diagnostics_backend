@@ -600,12 +600,14 @@ def compare_test_details(request):
         # Step 1: Get HMS patient + test details
         try:
             barcode_obj = Hmsbarcode.objects.get(barcode=barcode)
+
             
             # Get patient details safely
             hms_patient_id = getattr(barcode_obj, "patient_id", None) \
                             or getattr(barcode_obj, "patientid", None) \
                             or getattr(barcode_obj, "billnumber", f"HMS_UNKNOWN_{barcode}")
             
+
             hms_patient_name = getattr(barcode_obj, "patientname", f"HMS Unknown Patient {barcode}")
 
             # Try to fetch test details from Hmssamplestatus
@@ -691,10 +693,16 @@ def compare_test_details(request):
         regular_patient_id = None
         regular_patient_name = None
         regular_test_list = []
+
+        
+
+        
+
         
         # First, try to get patient details from franchise_sample collection
         franchise_sample = franchise_collection.find_one({"barcode": barcode})
         
+
         if franchise_sample:
             # Get patient details from franchise_sample
             regular_patient_id = franchise_sample.get('patient_id')
@@ -1063,11 +1071,13 @@ def process_test_data(test_list, sample_status_map, patient_id, patient_name, ba
                     if device_id and str(device_id) in parameters:
                         selected_device = str(device_id)
                     else:
+
                         # Use first available device
                         selected_device = sorted(parameters.keys())[0]  # take the first key
                         print(f"DEBUG [{data_source_type}]: Using default device {selected_device} (no matches found)")
 
-                
+
+
                 # Process parameters for the selected device
                 if selected_device and selected_device in parameters:
                     param_list = parameters[selected_device]
