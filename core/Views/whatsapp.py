@@ -96,10 +96,15 @@ def send_whatsapp(request):
             "APIKey": "gENpYneQRuS7Vzq3dHoaB40lk",
             "Contact": phone,
             "Template": "diagnostics_report",
-            "Param": f"{patient_name},{collection_time},{collected_date},{file_url}",
+            "Param1": patient_name,
+            "Param2": collection_time,
+            "Param3": collected_date,
+            "Param4": file_url,
             "Fileurl": file_url,
             "PDFName": pdf_name,
         }
+
+        print("Sending params:", params)
 
         botify_url = "https://admin.botify.in/api/sendtemplate.php"
         r = requests.get(botify_url, params=params, timeout=20)
@@ -110,7 +115,6 @@ def send_whatsapp(request):
 
     except Exception as e:
         return Response({"success": False, "error": str(e)}, status=500)
-
 
 
 @csrf_exempt

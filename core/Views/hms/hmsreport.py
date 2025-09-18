@@ -448,6 +448,7 @@ def get_hms_patient_test_details(request):
                     "patient_id": patient.patient_id,  # Fixed: use patient object
                     "patientname": patient.patientname,  # Fixed: use patient object
                     "age": patient.age,  # Fixed: use patient object
+                    "age_type": patient.age_type,  # Fixed: use patient object
                     "gender": patient.gender,  # Fixed: use patient object
                     "date": test_value_record.date,
                     "barcode": test_value_record.barcode,

@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestvalue
-from .Views import whatsapp,franchise,sales,mis
+from .Views import whatsapp,franchise,sales,mis,dashboard
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
@@ -100,6 +100,7 @@ urlpatterns = [
     path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_patient_test_details'),
     path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
     path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
+    path("test-summary/", dashboard.test_summary, name="test-summary"),
     
     #HMS Billing:
     path("hms_list_doctor/",hmsbilling.hms_get_doctor_list,name="doctor_list"),
