@@ -741,11 +741,17 @@ def compare_test_details(request):
         hms_test_list = []
         try:
             barcode_obj = Hmsbarcode.objects.get(barcode=barcode)
+
             hms_patient_id = (
                 getattr(barcode_obj, "patient_id", None)
                 or getattr(barcode_obj, "patientid", None)
                 or getattr(barcode_obj, "billnumber", f"HMS_UNKNOWN_{barcode}")
             )
+
+
+            
+            
+
             hms_patient_name = getattr(barcode_obj, "patientname", f"HMS Unknown Patient {barcode}")
             try:
                 sample_status_obj = Hmssamplestatus.objects.get(barcode=barcode)
@@ -854,7 +860,18 @@ def compare_test_details(request):
         regular_patient_name = None
         regular_test_list = []
 
+
+
+        
+
+        
+
+        
+        # First, try to get patient details from franchise_sample collection
         franchise_sample = franchise_collection.find_one({"barcode": barcode})
+        
+
+
         if franchise_sample:
             regular_patient_id = franchise_sample.get('patient_id')
             regular_patient_name = franchise_sample.get('patientname')
