@@ -307,7 +307,152 @@ def get_samplestatus_testvalue(request):
                             'created_date': sample_status.created_date,
                             'data': sample_status_dict
                         }
-        
+                
+        # ✅ Process CHC Sample Status (if source is 'chc' or 'all')
+       
+        if source in ['chc', 'all']:
+            try:
+                print("🔍 Checking CHC samples...")
+                print("👉 start_of_range:", start_of_range)
+                print("👉 end_of_range:", end_of_range)
+
+                # Connect to CHC MongoDB
+                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+                corp = client.Corporatehealthcheckup
+                sample_collection = corp.core_sample
+                billing_collection = corp.core_billing
+                patient_collection = corp.core_employeeregistration
+
+                # Query MongoDB for CHC samples within date range
+                chc_query = {
+                    "created_date": {
+                        "$gte": start_of_range,
+                        "$lt": end_of_range
+                    }
+                }
+                chc_samples = list(sample_collection.find(chc_query).sort("created_date", -1))
+                print(f"👉 Total CHC samples found: {len(chc_samples)}")
+
+                chc_processed_barcodes = {}
+
+                for record in chc_samples:
+                    if '_id' in record:
+                        record['_id'] = str(record['_id'])
+
+                    barcode = record.get('barcode', '')
+
+                    # Skip if already processed (keep latest only)
+                    if barcode in processed_barcodes or (
+                        barcode in chc_processed_barcodes and record.get('created_date') <= chc_processed_barcodes[barcode]['created_date']
+                    ):
+                        continue
+
+                    try:
+                        testdetails = record['testdetails'] if isinstance(record['testdetails'], list) else json.loads(record['testdetails'])
+                    except Exception:
+                        continue
+
+                    # Filter only "Received" or "Outsource" tests
+                    filtered_tests = [
+                        test for test in testdetails
+                        if test.get('samplestatus') in ['Received', 'Outsource']
+                    ]
+
+                    if not filtered_tests:
+                        continue
+
+                    # Get related billing details
+                    billing = billing_collection.find_one({"barcode": barcode}) or {}
+                    print(f"👉 Processing barcode: {barcode}, Billing found: {'Yes' if billing else 'No'}")
+                    patient_id = billing.get("employee_id", None)
+                    employee_id = patient_id
+                    print(f"👉 Employee ID: {employee_id}")
+
+                    # Get patient details
+                    patient = patient_collection.find_one({"employee_id": patient_id}) if patient_id else {}
+                    patient_name = patient.get("employee_name", "Unknown Patient")
+                    age = patient.get("age", "Unknown")
+                    gender = patient.get("gender", "Unknown")
+
+                    # Fetch TestValue data from Django DB
+                    all_test_values = TestValue.objects.filter(
+                        barcode=barcode
+                    ).order_by('-created_date', '-lastmodified_date')
+
+                    updated_tests = []
+                    for test in filtered_tests:
+                        test_name = test.get('testname', '').strip().lower()
+                        test_code = test.get('testcode', test_name).strip().lower()
+
+                        test.update({
+                            'rerun': False,
+                            'approve': False,
+                            'test_value_exists': False,
+                            'approve_time': None,
+                            'rerun_time': None,
+                            'approve_by': None
+                        })
+
+                        matching_value = None
+                        for tv in all_test_values:
+                            try:
+                                tv_details = json.loads(tv.testdetails) if isinstance(tv.testdetails, str) else tv.testdetails
+                            except Exception:
+                                tv_details = []
+
+                            for tv_test in tv_details:
+                                tv_test_name = tv_test.get('testname', '').strip().lower()
+                                tv_test_code = tv_test.get('testcode', tv_test_name).strip().lower()
+                                if tv_test_name == test_name or tv_test_code == test_code:
+                                    matching_value = tv_test
+                                    break
+                            if matching_value:
+                                break
+
+                        if matching_value:
+                            test.update({
+                                'test_value_exists': True,
+                                'approve': bool(matching_value.get('approve', False)),
+                                'rerun': bool(matching_value.get('rerun', False)),
+                                'approve_time': matching_value.get('approve_time'),
+                                'rerun_time': matching_value.get('rerun_time'),
+                                'approve_by': matching_value.get('approve_by')
+                            })
+
+                        updated_tests.append(test)
+
+                    # Build final CHC dict
+                    sample_dict = {
+                        'id': record.get('_id'),
+                        'created_by': record.get('created_by', ''),
+                        'created_date': safe_datetime_to_string(record.get('created_date')),
+                        'lastmodified_by': record.get('lastmodified_by', ''),
+                        'lastmodified_date': safe_datetime_to_string(record.get('lastmodified_date')),
+                        'barcode': barcode,
+                        'company_id': record.get('company_id', ''),
+                        'patient_id': employee_id or 'Unknown ID',
+                        'patientname': patient_name,
+                        'date': safe_datetime_to_string(record.get('date')),
+                        'age': age,
+                        'gender': gender,
+                        'testdetails': updated_tests,
+                        'data_source': 'chc_mongodb'
+                    }
+
+                    chc_processed_barcodes[barcode] = {
+                        'created_date': record.get('created_date'),
+                        'data': sample_dict
+                    }
+
+                # Add CHC MongoDB results to combined_results
+                for barcode_data in chc_processed_barcodes.values():
+                    combined_results.append(barcode_data['data'])
+
+                client.close()
+
+            except Exception as chc_error:
+                print(f"CHC MongoDB error: {str(chc_error)}")
+
         # Add Django model results to combined_results
         for barcode_data in processed_barcodes.values():
             combined_results.append(barcode_data['data'])
@@ -318,7 +463,7 @@ def get_samplestatus_testvalue(request):
         if source in ['regular', 'all']:
             try:
                 # Connect to MongoDB
-                client = MongoClient("mongodb://admin:YSEgnm42789@103.205.141.245:27017/")
+                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
                 db = client.franchise
                 sample_collection = db.franchise_sample
                 billing_collection = db.franchise_billing
@@ -563,86 +708,72 @@ def get_samplestatus_testvalue(request):
     
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
-def compare_test_details(request):   
+def compare_test_details(request):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics  # Database name
-    
-    # Collections
+
     core_testdetails_collection = db.core_testdetails
     interface_testvalue_collection = db.interface_testvalue
-    
-    # MongoDB connection setup for franchise database    
+
     franchise_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     franchise_db = franchise_client.franchise
+    corporate_db = franchise_client.Corporatehealthcheckup
     franchise_collection = franchise_db.franchise_sample
-    
-    # Get parameters from request
+    corporate_billing_collection = corporate_db.core_billing
+    corporate_sample_collection = corporate_db.core_sample
+
     barcode = request.GET.get('barcode')
-    device_id = request.GET.get('device_id')  # Optional device_id filter
-    source = request.GET.get('source', 'all')  # 'hms', 'regular', or 'all'
-    
+    device_id = request.GET.get('device_id')
+    source = request.GET.get('source', 'all')
+
     if not barcode:
         return JsonResponse({'error': 'Barcode parameter is required'}, status=400)
-    
-    # Initialize default values
+
     patient_id = None
     patient_name = None
-    test_list = []
     final_test_data = []
     processed_records = []
-    
-    # Process HMS data (if source is 'hms' or 'all')
+
+    # HMS processing
     if source in ['hms', 'all']:
         hms_patient_id = None
         hms_patient_name = None
         hms_test_list = []
-        
-        # Step 1: Get HMS patient + test details
         try:
             barcode_obj = Hmsbarcode.objects.get(barcode=barcode)
 
+            hms_patient_id = (
+                getattr(barcode_obj, "patient_id", None)
+                or getattr(barcode_obj, "patientid", None)
+                or getattr(barcode_obj, "billnumber", f"HMS_UNKNOWN_{barcode}")
+            )
+
+
             
-            # Get patient details safely
-            hms_patient_id = getattr(barcode_obj, "patient_id", None) \
-                            or getattr(barcode_obj, "patientid", None) \
-                            or getattr(barcode_obj, "billnumber", f"HMS_UNKNOWN_{barcode}")
             
 
             hms_patient_name = getattr(barcode_obj, "patientname", f"HMS Unknown Patient {barcode}")
-
-            # Try to fetch test details from Hmssamplestatus
             try:
                 sample_status_obj = Hmssamplestatus.objects.get(barcode=barcode)
                 if isinstance(sample_status_obj.testdetails, str):
                     hms_test_list = json.loads(sample_status_obj.testdetails)
                 elif isinstance(sample_status_obj.testdetails, list):
                     hms_test_list = sample_status_obj.testdetails
-                else:
-                    hms_test_list = []
             except Hmssamplestatus.DoesNotExist:
                 hms_test_list = []
-
         except Hmsbarcode.DoesNotExist:
-            # As a fallback, check interface_testvalue
             interface_record = interface_testvalue_collection.find_one(
-                {"Barcode": barcode},
-                sort=[("Receiveddate", -1)]
+                {"Barcode": barcode}, sort=[("Receiveddate", -1)]
             )
-            
             if interface_record:
                 hms_patient_id = interface_record.get('patient_id', f'HMS_UNKNOWN_{barcode}')
                 hms_patient_name = interface_record.get('patientname', f'HMS Unknown Patient {barcode}')
-                
                 unique_tests = interface_testvalue_collection.distinct("TestCode", {"Barcode": barcode})
                 for test_code in unique_tests:
                     test_detail = core_testdetails_collection.find_one({"test_code": test_code})
                     test_name = test_detail.get('test_name', test_code) if test_detail else test_code
-                    hms_test_list.append({
-                        'testname': test_name,
-                        'test_id': test_code
-                    })
-        
-        # Step 2: Get HMS sample status details
+                    hms_test_list.append({'testname': test_name, 'test_id': test_code})
+
         hms_sample_status_map = {}
         try:
             sample_status_obj = Hmssamplestatus.objects.get(barcode=barcode)
@@ -652,47 +783,84 @@ def compare_test_details(request):
                 sample_test_list = sample_status_obj.testdetails
             else:
                 sample_test_list = []
-            
             for sample_test in sample_test_list:
                 test_name = sample_test.get('testname')
                 sample_status = sample_test.get('samplestatus')
                 if test_name:
-                    hms_sample_status_map[test_name] = {
-                        'status': sample_status,
-                        'source': 'hms_django_model'
-                    }
-        except Hmssamplestatus.DoesNotExist:
+                    hms_sample_status_map[test_name] = {'status': sample_status, 'source': 'hms_django_model'}
+        except (Hmssamplestatus.DoesNotExist, json.JSONDecodeError):
             pass
-        except json.JSONDecodeError:
-            pass
-        
-        # Step 3: Process HMS tests
+
         if hms_test_list:
-            # Set primary patient info to HMS if available
             if not patient_id:
                 patient_id = hms_patient_id
                 patient_name = hms_patient_name
-            
             hms_test_data = process_test_data(
-                hms_test_list, 
-                hms_sample_status_map, 
-                hms_patient_id, 
-                hms_patient_name, 
-                barcode, 
-                device_id,
-                core_testdetails_collection,
-                interface_testvalue_collection,
-                'hms'
+                hms_test_list, hms_sample_status_map, hms_patient_id, hms_patient_name,
+                barcode, device_id, core_testdetails_collection,
+                interface_testvalue_collection, 'hms'
             )
-            
             final_test_data.extend(hms_test_data['test_data'])
             processed_records.extend(hms_test_data['processed_records'])
-    
-    # Process Regular data (if source is 'regular' or 'all')
+
+    # Corporate Health Checkup processing (combine billing and samplestatus)
+    if source in ['corporate', 'all']:
+        corporate_patient_id = None
+        corporate_patient_name = None
+        corporate_test_list = []
+        corporate_sample_status_map = {}
+
+        # Billing record for test details and patient info
+        billing_record = corporate_billing_collection.find_one({"barcode": barcode})
+        if billing_record:
+            corporate_patient_id = billing_record.get('patient_id')
+            corporate_patient_name = billing_record.get('patientname')
+            testdetails = billing_record.get('testdetails', [])
+            if isinstance(testdetails, str):
+                try:
+                    corporate_test_list = json.loads(testdetails)
+                except json.JSONDecodeError:
+                    corporate_test_list = []
+            elif isinstance(testdetails, list):
+                corporate_test_list = testdetails
+
+        # Sample status record for sample status per test
+        try:
+            sample_status_detail = corporate_sample_collection.find_one({"barcode": barcode})
+            if sample_status_detail:
+                sample_testdetails = sample_status_detail.get('testdetails', [])
+                if isinstance(sample_testdetails, str):
+                    sample_testdetails = json.loads(sample_testdetails)
+                for test in sample_testdetails:
+                    test_name = test.get('testname')
+                    sample_status = test.get('samplestatus')
+                    if test_name:
+                        corporate_sample_status_map[test_name] = {
+                            'status': sample_status,
+                            'source': 'corporate_mongodb'
+                        }
+        except Exception:
+            pass
+
+        if corporate_test_list:
+            if not patient_id:
+                patient_id = corporate_patient_id
+                patient_name = corporate_patient_name
+            corporate_test_data = process_test_data(
+                corporate_test_list, corporate_sample_status_map, corporate_patient_id,
+                corporate_patient_name, barcode, device_id, core_testdetails_collection,
+                interface_testvalue_collection, 'corporate'
+            )
+            final_test_data.extend(corporate_test_data['test_data'])
+            processed_records.extend(corporate_test_data['processed_records'])
+
+    # Regular (Franchise) processing
     if source in ['regular', 'all']:
         regular_patient_id = None
         regular_patient_name = None
         regular_test_list = []
+
+
 
         
 
@@ -703,12 +871,10 @@ def compare_test_details(request):
         franchise_sample = franchise_collection.find_one({"barcode": barcode})
         
 
+
         if franchise_sample:
-            # Get patient details from franchise_sample
             regular_patient_id = franchise_sample.get('patient_id')
             regular_patient_name = franchise_sample.get('patientname')
-            
-            # Get test details from franchise testdetails field
             try:
                 testdetails = franchise_sample.get('testdetails', [])
                 if isinstance(testdetails, str):
@@ -720,53 +886,31 @@ def compare_test_details(request):
             except json.JSONDecodeError:
                 regular_test_list = []
         else:
-            # If not found in franchise_sample, try BarcodeTestDetails as fallback
             try:
                 barcode_test_detail = BarcodeTestDetails.objects.get(barcode=barcode)
                 regular_patient_id = barcode_test_detail.patient_id
                 regular_patient_name = barcode_test_detail.patientname
-                
-                # Get test details from testdetails field
                 try:
                     if isinstance(barcode_test_detail.testdetails, str):
                         regular_test_list = json.loads(barcode_test_detail.testdetails)
                     elif isinstance(barcode_test_detail.testdetails, list):
                         regular_test_list = barcode_test_detail.testdetails
-                    else:
-                        regular_test_list = []
                 except json.JSONDecodeError:
                     regular_test_list = []
-                    
             except BarcodeTestDetails.DoesNotExist:
-                # If neither source has the barcode, check if we have interface_testvalue data
-                if source == 'regular':  # Only for regular-only requests
+                if source == 'regular':
                     interface_record = interface_testvalue_collection.find_one(
-                        {"Barcode": barcode},
-                        sort=[("Receiveddate", -1)]
+                        {"Barcode": barcode}, sort=[("Receiveddate", -1)]
                     )
-                    
                     if interface_record:
-                        # Create basic patient info from interface data
                         regular_patient_id = interface_record.get('patient_id', f'REG_UNKNOWN_{barcode}')
                         regular_patient_name = interface_record.get('patientname', f'Regular Unknown Patient {barcode}')
-                        
-                        # Create test list from available test codes in interface_testvalue
                         unique_tests = interface_testvalue_collection.distinct("TestCode", {"Barcode": barcode})
-                        
                         for test_code in unique_tests:
-                            # Try to find the test name from core_testdetails
                             test_detail = core_testdetails_collection.find_one({"test_code": test_code})
-                            if test_detail:
-                                test_name = test_detail.get('test_name', test_code)
-                            else:
-                                test_name = test_code
-                            
-                            regular_test_list.append({
-                                'test_name': test_name,
-                                'test_id': test_code
-                            })
-        
-        # Get regular sample status details
+                            test_name = test_detail.get('test_name', test_code) if test_detail else test_code
+                            regular_test_list.append({'test_name': test_name, 'test_id': test_code})
+
         regular_sample_status_map = {}
         try:
             sample_status_detail = SampleStatus.objects.get(barcode=barcode)
@@ -776,26 +920,19 @@ def compare_test_details(request):
                 sample_test_list = sample_status_detail.testdetails
             else:
                 sample_test_list = []
-                
-            # Create a mapping of test names to sample status from Django
             for sample_test in sample_test_list:
                 test_name = sample_test.get('testname')
                 sample_status = sample_test.get('samplestatus')
                 if test_name:
                     regular_sample_status_map[test_name] = {'status': sample_status, 'source': 'regular_django_model'}
-                    
-        except SampleStatus.DoesNotExist:
+        except (SampleStatus.DoesNotExist, json.JSONDecodeError):
             sample_test_list = []
-        except json.JSONDecodeError:
-            sample_test_list = []
-        
-        # Also check franchise MongoDB collection for sample status
+
         try:
             franchise_samples = franchise_collection.find({
                 "barcode": barcode,
                 "testdetails": {"$exists": True, "$ne": None}
             })
-            
             for sample in franchise_samples:
                 try:
                     testdetails = sample.get('testdetails', [])
@@ -807,51 +944,34 @@ def compare_test_details(request):
                         continue
                 except json.JSONDecodeError:
                     continue
-                
-                # Add franchise sample status to mapping (if not already present from Django)
                 for sample_test in franchise_test_list:
                     test_name = sample_test.get('testname')
                     sample_status = sample_test.get('samplestatus')
                     if test_name and test_name not in regular_sample_status_map:
                         regular_sample_status_map[test_name] = {'status': sample_status, 'source': 'mongodb_franchise'}
-                        
         except Exception as franchise_error:
             print(f"Franchise MongoDB connection error: {str(franchise_error)}")
-        
-        # Process Regular tests
+
         if regular_test_list:
-            # Set primary patient info to regular if HMS not available
             if not patient_id:
                 patient_id = regular_patient_id
                 patient_name = regular_patient_name
-            
             regular_test_data = process_test_data(
-                regular_test_list, 
-                regular_sample_status_map, 
-                regular_patient_id, 
-                regular_patient_name, 
-                barcode, 
-                device_id,
-                core_testdetails_collection,
-                interface_testvalue_collection,
-                'regular'
+                regular_test_list, regular_sample_status_map, regular_patient_id, regular_patient_name,
+                barcode, device_id, core_testdetails_collection, interface_testvalue_collection, 'regular'
             )
-            
             final_test_data.extend(regular_test_data['test_data'])
             processed_records.extend(regular_test_data['processed_records'])
-    
-    # Close MongoDB connections
+
     try:
         client.close()
         franchise_client.close()
     except:
         pass
-    
-    # Check if no data found
+
     if not final_test_data:
         return JsonResponse({'error': f'No data found for barcode: {barcode} in any collection'}, status=404)
-    
-    # Return the consolidated test data along with processing records info
+
     response_data = {
         'success': True,
         'patient_info': {
@@ -864,7 +984,6 @@ def compare_test_details(request):
         'processed_records': processed_records,
         'data_sources': list(set([item.get('data_source') for item in final_test_data if item.get('data_source')]))
     }
-    
     return Response(response_data, status=200)
 
 
@@ -1073,7 +1192,7 @@ def process_test_data(test_list, sample_status_map, patient_id, patient_name, ba
                     else:
 
                         # Use first available device
-                        selected_device = sorted(parameters.keys())[0]  # take the first key
+                        selected_device = sorted(parameters.keys())[0]
                         print(f"DEBUG [{data_source_type}]: Using default device {selected_device} (no matches found)")
 
 

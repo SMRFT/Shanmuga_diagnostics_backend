@@ -215,6 +215,7 @@ def get_hmssamplestatus_testvalue(request):
 def hmscompare_test_details(request):   
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics  # Database name
+    corpdb = client.Corporatehealthcheckup
     
     # Collections
     core_testdetails_collection = db.core_testdetails

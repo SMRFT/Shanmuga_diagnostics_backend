@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestvalue
-from .Views import whatsapp,franchise,sales,mis,dashboard
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
@@ -114,6 +114,16 @@ urlpatterns = [
     path('get_hmssamplestatus_testvalue/',hmstestvalue.get_hmssamplestatus_testvalue, name='get_hmssamplestatus_testvalue'),
     path('hmscompare_test_details/',hmstestvalue.hmscompare_test_details, name='hmscompare_test_details'),
 
+
+#Corporate Batch and Sample Status Update:
+    path('corporate-batches/', corporate.get_corporate_batch_generation_data, name='get_corporate_batch_generation_data'),
+    path('corporate-receive/<str:batch_no>/', corporate.update_corporate_batch_received_status, name='update_corporate_batch_received_status'),
+    path("get_corporate_Transferred/<str:batch_number>/", corporate.get_corporate_sample, name="get_corporate_sample"),
+    path("update_corporate_sample/<str:barcode>/", corporate.update_corporate_sample, name="update_corporate_sample"),
+    #Corporate Reports:
+    path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
+    path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),
+    path('get-corporate-test-values/', corporate.get_corporate_test_value, name='get_corporate_test_value'),
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),
     path('hms_sample_status/', hmssamplestatus.hms_sample_status, name='hms_sample_status'),
