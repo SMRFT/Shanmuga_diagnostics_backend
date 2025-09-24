@@ -725,6 +725,8 @@ def compare_test_details(request):
     barcode = request.GET.get('barcode')
     device_id = request.GET.get('device_id')
     source = request.GET.get('source', 'all')
+    # NEW: Get specific test name filter
+    test_name_filter = request.GET.get('test_name')
 
     if not barcode:
         return JsonResponse({'error': 'Barcode parameter is required'}, status=400)
@@ -768,6 +770,12 @@ def compare_test_details(request):
                     test_name = test_detail.get('test_name', test_code) if test_detail else test_code
                     hms_test_list.append({'testname': test_name, 'test_id': test_code})
 
+        # FILTER BY TEST NAME IF PROVIDED
+        if test_name_filter and hms_test_list:
+            hms_test_list = [test for test in hms_test_list 
+                           if (test.get('testname') == test_name_filter or 
+                               test.get('test_name') == test_name_filter)]
+
         hms_sample_status_map = {}
         try:
             sample_status_obj = Hmssamplestatus.objects.get(barcode=barcode)
@@ -792,12 +800,12 @@ def compare_test_details(request):
             hms_test_data = process_test_data(
                 hms_test_list, hms_sample_status_map, hms_patient_id, hms_patient_name,
                 barcode, device_id, core_testdetails_collection,
-                interface_testvalue_collection, 'hms'
+                interface_testvalue_collection, 'hms', test_name_filter
             )
             final_test_data.extend(hms_test_data['test_data'])
             processed_records.extend(hms_test_data['processed_records'])
 
-    # Corporate Health Checkup processing (combine billing and samplestatus)
+    # Corporate Health Checkup processing
     if source in ['corporate', 'all']:
         corporate_patient_id = None
         corporate_patient_name = None
@@ -817,6 +825,12 @@ def compare_test_details(request):
                     corporate_test_list = []
             elif isinstance(testdetails, list):
                 corporate_test_list = testdetails
+
+        # FILTER BY TEST NAME IF PROVIDED
+        if test_name_filter and corporate_test_list:
+            corporate_test_list = [test for test in corporate_test_list 
+                                 if (test.get('testname') == test_name_filter or 
+                                     test.get('test_name') == test_name_filter)]
 
         # Sample status record for sample status per test
         try:
@@ -843,7 +857,7 @@ def compare_test_details(request):
             corporate_test_data = process_test_data(
                 corporate_test_list, corporate_sample_status_map, corporate_patient_id,
                 corporate_patient_name, barcode, device_id, core_testdetails_collection,
-                interface_testvalue_collection, 'corporate'
+                interface_testvalue_collection, 'corporate', test_name_filter
             )
             final_test_data.extend(corporate_test_data['test_data'])
             processed_records.extend(corporate_test_data['processed_records'])
@@ -894,6 +908,12 @@ def compare_test_details(request):
                             test_name = test_detail.get('test_name', test_code) if test_detail else test_code
                             regular_test_list.append({'test_name': test_name, 'test_id': test_code})
 
+        # FILTER BY TEST NAME IF PROVIDED
+        if test_name_filter and regular_test_list:
+            regular_test_list = [test for test in regular_test_list 
+                               if (test.get('testname') == test_name_filter or 
+                                   test.get('test_name') == test_name_filter)]
+
         regular_sample_status_map = {}
         try:
             sample_status_detail = SampleStatus.objects.get(barcode=barcode)
@@ -941,7 +961,7 @@ def compare_test_details(request):
                 patient_name = regular_patient_name
             regular_test_data = process_test_data(
                 regular_test_list, regular_sample_status_map, regular_patient_id, regular_patient_name,
-                barcode, device_id, core_testdetails_collection, interface_testvalue_collection, 'regular'
+                barcode, device_id, core_testdetails_collection, interface_testvalue_collection, 'regular', test_name_filter
             )
             final_test_data.extend(regular_test_data['test_data'])
             processed_records.extend(regular_test_data['processed_records'])
@@ -953,7 +973,11 @@ def compare_test_details(request):
         pass
 
     if not final_test_data:
-        return JsonResponse({'error': f'No data found for barcode: {barcode} in any collection'}, status=404)
+        error_msg = f'No data found for barcode: {barcode}'
+        if test_name_filter:
+            error_msg += f' and test: {test_name_filter}'
+        error_msg += ' in any collection'
+        return JsonResponse({'error': error_msg}, status=404)
 
     response_data = {
         'success': True,
@@ -965,7 +989,8 @@ def compare_test_details(request):
         'test_count': len(final_test_data),
         'data': final_test_data,
         'processed_records': processed_records,
-        'data_sources': list(set([item.get('data_source') for item in final_test_data if item.get('data_source')]))
+        'data_sources': list(set([item.get('data_source') for item in final_test_data if item.get('data_source')])),
+        'filtered_by_test': test_name_filter if test_name_filter else None
     }
     return Response(response_data, status=200)
 
@@ -980,11 +1005,12 @@ def process_test_data(
     core_testdetails_collection,
     interface_testvalue_collection,
     data_source_type,
+    test_name_filter=None,  # NEW: Add test name filter parameter
 ):
     """
-    Helper function to process test data for both HMS and Regular sources
-    - Fixes 'list' object has no attribute 'keys' by ensuring selected_device is always a string key.
-    - Normalizes `parameters` if it is not a dict.
+    Helper function to process test data for HMS, Corporate, and Regular sources
+    - Now supports filtering by specific test name
+    - Only queries interface_testvalue for relevant test codes
     """
     final_test_data = []
     processed_records = []
@@ -1004,15 +1030,10 @@ def process_test_data(
     def normalize_parameters(parameters):
         """
         Normalize parameters to a dict keyed by device-id string -> list of parameter dicts.
-        Acceptable inputs:
-          - dict: already in desired shape
-          - list: treat as single-device bucket under key "default"
-          - None/missing: return empty dict
         """
         if parameters is None:
             return {}
         if isinstance(parameters, dict):
-            # Ensure dict values are lists
             normalized = {}
             for k, v in parameters.items():
                 if v is None:
@@ -1020,21 +1041,21 @@ def process_test_data(
                 elif isinstance(v, list):
                     normalized[str(k)] = v
                 elif isinstance(v, dict):
-                    # Some schemas store a single param dict
                     normalized[str(k)] = [v]
                 else:
-                    # Unexpected shape; coerce to list with single element string repr
                     normalized[str(k)] = [v] if v is not None else []
             return normalized
         if isinstance(parameters, list):
-            # Single device bucket
             return {"default": parameters}
-        # Fallback: unknown type, coerce into empty dict
         return {}
 
     for test_item in test_list:
         test_name = test_item.get("test_name") or test_item.get("testname")
         test_id = test_item.get("test_id")
+
+        # SKIP if test_name_filter is provided and doesn't match
+        if test_name_filter and test_name != test_name_filter:
+            continue
 
         sample_status_info = sample_status_map.get(test_name, {"status": "Unknown", "source": "none"})
         sample_status = sample_status_info["status"]
@@ -1072,10 +1093,11 @@ def process_test_data(
                 print(f"DEBUG [{data_source_type}]: Processing test_id {test_id}, test_name: {test_name}")
                 print(f"DEBUG [{data_source_type}]: parameters type={type(raw_parameters).__name__}, normalized keys={list(parameters.keys())}")
 
-                # Handle tests without parameters (parameters dict empty)
+                # Handle tests without parameters
                 if not parameters:
                     test_code = test_detail.get("test_code", f"{(test_name or '').replace(' ', '').upper()}01")
 
+                    # FOCUSED QUERY: Only query for this specific test code and barcode
                     test_value_query = {
                         "Barcode": barcode,
                         "TestCode": test_code,
@@ -1141,12 +1163,27 @@ def process_test_data(
                 has_interface_data = False
                 selected_device = None
 
-                all_barcode_records = list(
-                    interface_testvalue_collection.find(
-                        {"Barcode": barcode, "processingstatus": "pending"}
-                    )
-                )
-                print(f"DEBUG [{data_source_type}]: Found {len(all_barcode_records)} pending records for barcode {barcode}")
+                # FOCUSED QUERY: Get all test codes for this specific test from parameters
+                all_test_codes_for_this_test = []
+                for device_key in parameters:
+                    param_test_codes = [
+                        p.get("test_code") for p in parameters[device_key] 
+                        if isinstance(p, dict) and p.get("test_code")
+                    ]
+                    all_test_codes_for_this_test.extend(param_test_codes)
+
+                # Remove duplicates
+                all_test_codes_for_this_test = list(set(all_test_codes_for_this_test))
+                
+                # FOCUSED QUERY: Only get records for this barcode and these specific test codes
+                focused_query = {
+                    "Barcode": barcode,
+                    "TestCode": {"$in": all_test_codes_for_this_test},
+                    "processingstatus": "pending"
+                }
+                
+                all_barcode_records = list(interface_testvalue_collection.find(focused_query))
+                print(f"DEBUG [{data_source_type}]: Found {len(all_barcode_records)} focused records for test {test_name}")
 
                 interface_test_codes = []
                 interface_device_ids = []
@@ -1158,7 +1195,7 @@ def process_test_data(
                         set([str(r.get("DeviceID")) for r in all_barcode_records if r.get("DeviceID")])
                     )
 
-                    print(f"DEBUG [{data_source_type}]: Interface test codes: {interface_test_codes[:10]}")
+                    print(f"DEBUG [{data_source_type}]: Interface test codes: {interface_test_codes}")
                     print(f"DEBUG [{data_source_type}]: Interface device IDs: {interface_device_ids}")
                     print(f"DEBUG [{data_source_type}]: Available parameter devices: {list(parameters.keys())}")
 
@@ -1198,7 +1235,7 @@ def process_test_data(
                             selected_device = str(device_id)
                             print(f"DEBUG [{data_source_type}]: Using requested device {selected_device} (no test code matches)")
                         else:
-                            # Use first available device key (ensure single string, not list)
+                            # Use first available device key
                             selected_device = sorted(parameters.keys())[0] if parameters else None
                             print(f"DEBUG [{data_source_type}]: Using default device {selected_device} (no matches found)")
                 else:
@@ -1215,7 +1252,6 @@ def process_test_data(
 
                     for param in param_list:
                         if not isinstance(param, dict):
-                            # Skip malformed parameter entries
                             continue
 
                         test_code = param.get("test_code")
