@@ -220,40 +220,50 @@ def update_corporate_sample(request,barcode):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Corporatehealthcheckup
     collection = db.core_sample
+    
     if request.method == "PUT":
         try:
             if hasattr(request, 'data'):
                 body = request.data
             else:
                 body = json.loads(request.body)
+            
             bulk_updates = body.get("bulk_updates", [])
+            
             if not bulk_updates:
                 return JsonResponse({"error": "bulk_updates are required"}, status=400)
+            
             # Configure IST timezone
             from django.utils import timezone
             import pytz
             ist_timezone = pytz.timezone('Asia/Kolkata')
             current_time = timezone.now().astimezone(ist_timezone)
             formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
+            
             success_count = 0
             error_count = 0
             errors = []
+            
             for update_data in bulk_updates:
                 try:
                     barcode = update_data.get("barcode")
                     updates = update_data.get("updates", [])
+                    
                     if not barcode or not updates:
                         error_count += 1
                         errors.append(f"Missing barcode or updates for one item")
                         continue
+                    
                     # Find the patient sample record
                     patient_sample = collection.find_one({"barcode": barcode})
                     if not patient_sample:
                         error_count += 1
                         errors.append(f"Sample not found for barcode: {barcode}")
                         continue
+                    
                     # Parse testdetails
                     testdetails = json.loads(patient_sample.get('testdetails', '[]'))
+                    
                     for update in updates:
                         test_id = update.get("test_id")
                         testname = update.get("testname")
@@ -263,30 +273,36 @@ def update_corporate_sample(request,barcode):
                         outsourced_by = update.get("outsourced_by")
                         remarks = update.get("remarks")
                         batch_number = update.get("batch_number")
+                        
                         if new_status is None:
                             error_count += 1
                             errors.append(f"samplestatus is required for barcode: {barcode}")
                             continue
+                        
                         # Find the specific test entry
                         test_entry = None
                         for entry in testdetails:
                             test_match = (
-                                (testname and entry.get("testname") == testname) or
+                                (testname and entry.get("testname") == testname) or 
                                 (test_id and entry.get("test_id") == test_id)
                             )
                             batch_match = (
-                                batch_number is None or
+                                batch_number is None or 
                                 entry.get("batch_number") == batch_number
                             )
+                            
                             if test_match and batch_match:
                                 test_entry = entry
                                 break
+                        
                         if test_entry is None:
                             error_count += 1
                             errors.append(f"Test not found for barcode: {barcode}, test_id: {test_id}")
                             continue
+                        
                         # Update the sample status and associated fields
                         test_entry['samplestatus'] = new_status
+                        
                         if new_status == "Received":
                             test_entry['received_time'] = formatted_time
                             test_entry['received_by'] = received_by
@@ -294,6 +310,7 @@ def update_corporate_sample(request,barcode):
                             test_entry.pop('rejected_time', None)
                             test_entry.pop('rejected_by', None)
                             test_entry.pop('remarks', None)
+                            
                         elif new_status == "Rejected":
                             test_entry['rejected_time'] = formatted_time
                             test_entry['rejected_by'] = rejected_by
@@ -303,6 +320,7 @@ def update_corporate_sample(request,barcode):
                             test_entry.pop('received_by', None)
                             test_entry.pop('outsourced_time', None)
                             test_entry.pop('outsourced_by', None)
+                            
                         elif new_status == "Outsource":
                             test_entry['outsourced_time'] = formatted_time
                             test_entry['outsourced_by'] = outsourced_by
@@ -312,15 +330,19 @@ def update_corporate_sample(request,barcode):
                             test_entry.pop('rejected_time', None)
                             test_entry.pop('rejected_by', None)
                             test_entry.pop('remarks', None)
+                    
                     # Save changes back to the database
                     collection.update_one(
                         {"barcode": barcode},
                         {"$set": {"testdetails": json.dumps(testdetails)}}
                     )
+                    
                     success_count += 1
+                    
                 except Exception as e:
                     error_count += 1
                     errors.append(f"Error updating barcode {barcode}: {str(e)}")
+            
             return JsonResponse({
                 "status": "success" if error_count == 0 else "partial_success",
                 "message": f"Successfully updated {success_count} samples. {error_count} errors occurred.",
@@ -328,9 +350,11 @@ def update_corporate_sample(request,barcode):
                 "error_count": error_count,
                 "errors": errors
             }, status=200)
+            
         except Exception as e:
             logger.error(f"Error in bulk update: {str(e)}")
             return JsonResponse({"error": str(e)}, status=500)
+        
         finally:
             client.close()
 
@@ -473,7 +497,7 @@ def update_corporate_batch_received_status(request, batch_no):
                 body = json.loads(request.body)
             received_status = body.get('received', True)
             remarks = body.get('remarks', None)
-            employee_id = request.data.get('auth-user-id') or "system"
+            employee_id = body.get('auth-user-id')
         except json.JSONDecodeError:
             received_status = True
             remarks = None
@@ -549,15 +573,15 @@ def update_corporate_batch_received_status(request, batch_no):
 
 @api_view(['GET','PATCH'])
 @csrf_exempt
-@permission_classes([ HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_overall_report(request):
     try:
         # MongoDB setup
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup  # Database name
-        patients_collection = db.corporatehealthcheckup_billing  # Changed to franchise_billing
-        sample_status_colletion = db.corporatehealthcheckup_samplestatus # Collection name for sample 
-        franchise_patient_collection = db.Corporatehealthcheckup_patient  # Collection for patient details
+        patients_collection = db.core_billing  # Changed to franchise_billing
+        sample_status_colletion = db.core_sample # Collection name for sample 
+        franchise_patient_collection = db.core_employeeregistration  # Collection for patient details
 
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
@@ -596,17 +620,24 @@ def corporate_overall_report(request):
             for patient_detail in patient_details:
                 patient_details_map[patient_detail.get("employee_id")] = patient_detail
         
-        # Status data: bulk fetch from MongoDB - use employee_id
-        sample_status_records = sample_status_colletion.find({
-            "employee_id": {"$in": employee_ids}
-        })
+        # FIXED: Status data - fetch from core_sample using barcode instead of employee_id
+        sample_status_records = []
+        if barcodes:
+            sample_status_records = list(sample_status_colletion.find({
+                "barcode": {"$in": barcodes}
+            }))
 
-        # Convert to list and extract only needed fields - ADD NULL CHECKS
-        sample_status_records = [
-            {"employee_id": record.get("employee_id"), "testdetails": record.get("testdetails")}
-            for record in sample_status_records
-            if record and isinstance(record, dict)  # Ensure record is a dict
-        ]
+        # FIXED: Convert to list and extract needed fields with barcode mapping
+        sample_status_list = []
+        for record in sample_status_records:
+            if record and isinstance(record, dict):
+                barcode = record.get("barcode")
+                testdetails = record.get("testdetails")
+                if barcode and testdetails:
+                    sample_status_list.append({
+                        "barcode": barcode,
+                        "testdetails": testdetails
+                    })
         
         # For TestValue objects, use barcode to link with franchise_billing
         if from_date and to_date:
@@ -627,13 +658,28 @@ def corporate_overall_report(request):
             if patient.get("barcode") and patient.get("employee_id"):
                 barcode_to_patient_map[patient.get("barcode")] = patient.get("employee_id")
         
-        # Organize status data - ADD SAFETY CHECKS
+        # FIXED: Organize sample status data using barcode mapping
         sample_status_map = {}
-        for record in sample_status_records:
-            if record and isinstance(record, dict) and record.get("testdetails"):
-                employee_id_key = record.get("employee_id")
-                if employee_id_key:
-                    sample_status_map.setdefault(employee_id_key, []).extend(record["testdetails"])
+        for record in sample_status_list:
+            if record and isinstance(record, dict):
+                barcode = record.get("barcode")
+                testdetails = record.get("testdetails")
+                
+                if barcode and barcode in barcode_to_patient_map and testdetails:
+                    employee_id_key = barcode_to_patient_map[barcode]
+                    
+                    # Parse testdetails if it's a JSON string
+                    parsed_testdetails = []
+                    if isinstance(testdetails, str):
+                        try:
+                            parsed_testdetails = json.loads(testdetails)
+                        except json.JSONDecodeError:
+                            parsed_testdetails = []
+                    elif isinstance(testdetails, list):
+                        parsed_testdetails = testdetails
+                    
+                    if parsed_testdetails:
+                        sample_status_map.setdefault(employee_id_key, []).extend(parsed_testdetails)
         
         # Organize test value data using barcode mapping
         test_value_map = {}
@@ -661,100 +707,23 @@ def corporate_overall_report(request):
             # SAFETY CHECK: Ensure patient_detail is a dict
             if not isinstance(patient_detail, dict):
                 patient_detail = {}
-            
-            # Payment method parsing - UPDATED TO RETURN COMPLETE DETAILS
-            payment_details = {}
-            raw = patient.get("paymentMode", "")  # Changed from payment_method to paymentMode
-            if raw:
-                if isinstance(raw, dict):
-                    payment_details = raw
-                elif isinstance(raw, str):
-                    try:
-                        cleaned = raw.strip('"')
-                        payment_data = json.loads(cleaned) if cleaned else {}
-                        if isinstance(payment_data, dict):
-                            payment_details = payment_data
-                        else:
-                            payment_details = {"paymentmethod": str(payment_data)}
-                    except:
-                        payment_details = {"paymentmethod": raw}
-            else:
-                payment_details = {"paymentmethod": "N/A"}
-            
-            # Partial payment handling - similar to first document
-            if payment_details.get("paymentmethod") == "PartialPayment":
-                partial_data = patient.get("PartialPayment", "")
-                try:
-                    if isinstance(partial_data, str):
-                        partial_data = json.loads(partial_data.strip('"')) if partial_data.strip('"') else {}
-                    if isinstance(partial_data, dict):
-                        # Merge partial payment details with existing payment details
-                        payment_details.update(partial_data)
-                        payment_details["paymentmethod"] = "PartialPayment"
-                except:
-                    pass
-            
-            # Test list - ADD SAFETY CHECKS
-            test_list = []
-            test_field = patient.get("testdetails", [])
-            if isinstance(test_field, str):
-                try:
-                    test_list = json.loads(test_field)
-                    if not isinstance(test_list, list):
-                        test_list = []
-                except:
-                    test_list = []
-            elif isinstance(test_field, list):
-                test_list = test_field
-            
-            # SAFETY CHECK: Ensure test_list items are dicts and handle different field names
+          
+            # FIXED: Get test names from core_sample instead of core_billing
+            sample_tests = sample_status_map.get(pid, [])
             testnames = ", ".join([
-                test.get("test_name", test.get("testname", "")) if isinstance(test, dict) else str(test)
-                for test in test_list
+                test.get("testname", "") if isinstance(test, dict) else str(test)
+                for test in sample_tests
             ])
-            no_of_tests = len(test_list)
+            no_of_tests = len(sample_tests)
             
             # Age handling - similar to first document
             age_value = patient_detail.get("age", "N/A")
             age_type = patient_detail.get("age_type", "")
-            age = f"{age_value} {age_type}" if age_type else str(age_value)
-            
-            # Handle discount from franchise_billing structure
-            discount_percentage = patient.get('discountPercentage', '0')
-            discount_amount = patient.get('discountAmount', '0')
-            try:
-                discount = int(float(discount_percentage or 0))
-            except:
-                discount = 0
-            
-            # Amounts - updated field names for franchise_billing
-            try:
-                total_amount = int(float(patient.get("netAmount", 0) or 0))
-            except:
-                total_amount = 0
-            
-            # Credit amount handling (may not exist in franchise_billing)
-            try:
-                credit_amount = int(float(patient.get("credit_amount", 0) or 0))
-            except:
-                credit_amount = 0
-            
-            credit_details = []
-            credit_details_raw = patient.get("credit_details")
-            if isinstance(credit_details_raw, str):
-                try:
-                    credit_details = json.loads(credit_details_raw)
-                    if not isinstance(credit_details, list):
-                        credit_details = []
-                except:
-                    credit_details = []
-            elif isinstance(credit_details_raw, list):
-                credit_details = credit_details_raw
+            age = f"{age_value} {age_type}" if age_type else str(age_value)            
             
             # Status determination
             barcode = patient.get("barcode")
             status = "Registered"
-            sample_tests = sample_status_map.get(pid, [])
             test_values = test_value_map.get(pid, {}).get("testdetails", [])
             
             # Use barcode from test_value_map if available, similar to first document
@@ -763,12 +732,22 @@ def corporate_overall_report(request):
             
             # SAFETY CHECKS for sample_tests
             all_collected = all(
-                t.get("samplestatus") == "Sample Collected" if isinstance(t, dict) else False
+                t.get("samplestatus") == "Collected" if isinstance(t, dict) else False
                 for t in sample_tests
             ) if sample_tests else False
             
             partially_collected = any(
-                t.get("samplestatus") == "Sample Collected" if isinstance(t, dict) else False
+                t.get("samplestatus") == "Collected" if isinstance(t, dict) else False
+                for t in sample_tests
+            )
+
+            all_transferred = all(
+                t.get("samplestatus") == "Transferred" if isinstance(t, dict) else False
+                for t in sample_tests
+            ) if sample_tests else False
+            
+            partially_transferred = any(
+                t.get("samplestatus") == "Transferred" if isinstance(t, dict) else False
                 for t in sample_tests
             )
             
@@ -786,41 +765,81 @@ def corporate_overall_report(request):
                 status = "Collected"
             elif partially_collected:
                 status = "Partially Collected"
+            if all_transferred:
+                status = "Transferred"
+            elif partially_transferred:
+                status = "Partially Transferred"
             
             if all_received:
                 status = "Received"
             elif partially_received:
                 status = "Partially Received"
             
-            # SAFETY CHECKS for test_values
+            # FIXED: Status logic for approval - compare against sample_tests count
             if test_values:
-                all_tested = all(
-                    t.get("value") is not None if isinstance(t, dict) else False
-                    for t in test_values
+                # Check if test has parameters with values (for complex tests like CBC)
+                all_tested = False
+                partially_tested = False
+                
+                for test in test_values:
+                    if isinstance(test, dict):
+                        # Check if test has direct value
+                        if test.get("value") is not None:
+                            partially_tested = True
+                        # Check if test has parameters with values (for complex tests)
+                        elif test.get("parameters"):
+                            params_with_values = [
+                                p for p in test.get("parameters", []) 
+                                if isinstance(p, dict) and p.get("value") is not None
+                            ]
+                            if params_with_values:
+                                partially_tested = True
+                
+                # Check if all tests are tested
+                all_tests_have_values = True
+                for test in test_values:
+                    if isinstance(test, dict):
+                        has_value = False
+                        # Check direct value
+                        if test.get("value") is not None:
+                            has_value = True
+                        # Check parameters
+                        elif test.get("parameters"):
+                            params_with_values = [
+                                p for p in test.get("parameters", []) 
+                                if isinstance(p, dict) and p.get("value") is not None
+                            ]
+                            if params_with_values:
+                                has_value = True
+                        
+                        if not has_value:
+                            all_tests_have_values = False
+                            break
+                
+                all_tested = all_tests_have_values and len(test_values) > 0
+                
+                # FIXED: Compare approved tests with total sample tests, not just test_values
+                approved_tests_count = sum(
+                    1 for t in test_values 
+                    if isinstance(t, dict) and t.get("approve")
                 )
-                partially_tested = any(
-                    t.get("value") is not None if isinstance(t, dict) else False
-                    for t in test_values
-                )
-                approve_all = all(
-                    t.get("approve") if isinstance(t, dict) else False
-                    for t in test_values
-                )
-                approve_partial = any(
-                    t.get("approve") if isinstance(t, dict) else False
-                    for t in test_values
-                )
+                total_sample_tests = len(sample_tests)
+                
+                approve_all = (approved_tests_count == total_sample_tests) and total_sample_tests > 0
+                approve_partial = approved_tests_count > 0 and approved_tests_count < total_sample_tests
+                
                 dispatch_all = all(
                     t.get("dispatch") if isinstance(t, dict) else False
                     for t in test_values
                 )
                 
-                if all_received or partially_received:
-                    if all_tested:
-                        status = "Tested"
-                    elif partially_tested:
-                        status = "Partially Tested"
+                # Update status based on test completion
+                if all_tested:
+                    status = "Tested"
+                elif partially_tested:
+                    status = "Partially Tested"
                 
+                # FIXED: Use the corrected approval logic
                 if approve_all:
                     status = "Approved"
                 elif approve_partial:
@@ -847,25 +866,20 @@ def corporate_overall_report(request):
             # Final patient object - matching structure with first document
             formatted_data.append({
                 "date": formatted_date,
-                "employee_id": pid,
-                "patient_name": patient_detail.get("patientname", "N/A"),  # From franchise_patient
+                "patient_id": pid,
+                "patient_name": patient_detail.get("employee_name", "N/A"),  # From franchise_patient
                 "gender": patient_detail.get("gender", "N/A"),  # From franchise_patient
-                "refby": patient.get("referredDoctor", "N/A"),
                 "age": age,
                 "email": patient_detail.get("email", "N/A"),  # From franchise_patient             
-                "branch": patient.get("franchise_id", "N/A"),  # Use franchise_id as branch               
-                "total_amount": total_amount,
-                "credit_amount": credit_amount,
-                "credit_details": credit_details,
-                "discount": discount,
-                "payment_method": payment_details,
+                "branch": patient_detail.get("company_id", "N/A"),  # Use franchise_id as branch  
                 "test_names": testnames,
                 "no_of_tests": no_of_tests,
-                "bill_no": patient.get("bill_no", "N/A"),  # May not exist in franchise_billing
-                "registeredby": patient.get("registeredBy", "N/A"),
                 "barcode": barcode,
                 "status": status,
             })
+        
+        # Close MongoDB connection
+        client.close()
         
         return JsonResponse(formatted_data, safe=False)
     
@@ -908,6 +922,13 @@ def corporate_patient_test_details(request):
         
         # Get franchise sample data using barcode
         franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
+        if not franchise_sample:
+            return JsonResponse({'error': 'No sample records found for the given barcode'}, status=404)
+        
+        # Get test values from Django model - THIS IS NOW THE PRIMARY FILTER
+        test_values = TestValue.objects.filter(barcode=barcode)
+        if not test_values.exists():
+            return JsonResponse({'error': 'No test value records found for the given barcode'}, status=404)
         
         # Get barcodes information - collect all unique barcodes for this patient
         barcodes = []
@@ -922,9 +943,6 @@ def corporate_patient_test_details(request):
             barcodes = list(dict.fromkeys(barcodes))
         except Exception:
             barcodes = []
-        
-        # Get test values from Django model for additional details
-        test_values = TestValue.objects.filter(barcode=barcode)
         
         # Parse testdetails from franchise_billing
         try:
@@ -942,74 +960,97 @@ def corporate_patient_test_details(request):
         
         # Build patient details response
         patient_details = {
-            "employee_id": employee_id,
-            "patientname": franchise_patient.get("patientname", "N/A"),
+            "patient_id": employee_id,
+            "patientname": franchise_patient.get("employee_name", "N/A"),
             "age": franchise_patient.get("age", "N/A"),
+            "age_type": franchise_patient.get("age_type", "Years"),
             "gender": franchise_patient.get("gender", "N/A"),
             "date": franchise_billing.get("created_date"),
             "barcode": franchise_billing.get("barcode", "N/A"),
-            "barcodes": barcodes,  # Added barcodes field
-            "refby": franchise_billing.get("referredDoctor", "N/A"),
+            "barcodes": barcodes,
             "branch": franchise_billing.get("franchise_id", "N/A"),
+            "refby": "SELF",
             "testdetails": []
         }
         
-        # Process test details
-        for billing_test in billing_testdetails:
-            # Use test_name from billing (matches your document structure)
-            testname = billing_test.get("test_name")
-            
-            # Find corresponding sample status
-            sample_status = None
-            for sample_test in sample_testdetails:
-                if sample_test.get("testname") == testname:
-                    sample_status = sample_test
-                    break
-            
-            # Find corresponding test value details
-            test_value_details = None
-            if test_values.exists():
-                for test_value in test_values:
-                    for test_detail in test_value.testdetails:
-                        if test_detail.get("testname") == testname:
-                            test_value_details = test_detail
+        # Process ONLY tests that exist in TestValue model
+        for test_value in test_values:
+            try:
+                # Parse testdetails JSON from TestValue model
+                testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
+                if not isinstance(testvalue_details, list):
+                    continue
+                    
+                # Process each test in TestValue
+                for test_detail in testvalue_details:
+                    testname = test_detail.get("testname")
+                    if not testname:
+                        continue
+                    
+                    # Find corresponding sample status
+                    sample_status = None
+                    for sample_test in sample_testdetails:
+                        if sample_test.get("testname") == testname:
+                            sample_status = sample_test
                             break
-                    if test_value_details:
-                        break
-            
-            # Build test detail object
-            test_detail = {
-                "testname": testname,
-                "test_id": billing_test.get("test_id", "N/A"),
-                "MRP": billing_test.get("MRP", "N/A"),
-                "department": sample_status.get("department", "N/A") if sample_status else "N/A",
-                "samplestatus": sample_status.get("samplestatus", "N/A") if sample_status else "N/A",
-                "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
-                "collected_by": sample_status.get("collected_by", "N/A") if sample_status else "N/A",
-                "sampletransferred_time": sample_status.get("sampletransferred_time") if sample_status else None,
-                "transferred_by": sample_status.get("transferred_by", "N/A") if sample_status else "N/A",
-                "received_time": sample_status.get("received_time") if sample_status else None,
-                "received_by": sample_status.get("received_by", "N/A") if sample_status else "N/A",
-                "batch_number": sample_status.get("batch_number", "N/A") if sample_status else "N/A",
-                "remarks": sample_status.get("remarks") if sample_status else None
-            }
-            
-            # Add test value details if available
-            if test_value_details:
-                test_detail.update({
-                    "verified_by": test_value_details.get("verified_by", "N/A"),
-                    "method": test_value_details.get("method", "N/A"),
-                    "specimen_type": test_value_details.get("specimen_type", "N/A"),
-                    "value": test_value_details.get("value", "N/A"),
-                    "unit": test_value_details.get("unit", "N/A"),
-                    "reference_range": test_value_details.get("reference_range", "N/A"),
-                    "parameters": test_value_details.get("parameters", [])
-                })
-            
-            patient_details["testdetails"].append(test_detail)
+                    
+                    # Find corresponding billing info for MRP and test_id  
+                    billing_info = None
+                    for billing_test in billing_testdetails:
+                        billing_testname = billing_test.get("testname") or billing_test.get("test_name")
+                        if billing_testname == testname:
+                            billing_info = billing_test
+                            break
+                    
+                    # Build test detail object - ONLY if we have TestValue data
+                    test_response = {
+                        "department": test_detail.get("department", sample_status.get("department", "N/A") if sample_status else "N/A"),
+                        "NABL": test_detail.get("NABL", True),
+                        "testname": testname,
+                        "verified_by": test_detail.get("verified_by", "N/A"),
+                        "approve_by": test_detail.get("approve_by", "N/A"),
+                        "approve_time": test_detail.get("approve_time", "N/A"),
+                        "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
+                        "received_time": sample_status.get("received_time") if sample_status else None
+                    }
+                    
+                    # Check if test has parameters
+                    if test_detail.get("parameters"):
+                        # Test with parameters - add parameters array
+                        processed_parameters = []
+                        for param in test_detail.get("parameters", []):
+                            processed_param = {
+                                "name": param.get("name", "N/A"),
+                                "value": param.get("value", "N/A"),
+                                "unit": param.get("unit", "N/A"),
+                                "specimen_type": param.get("specimen_type", "N/A"),
+                                "reference_range": param.get("reference_range", "N/A"),
+                                "method": param.get("method", "N/A")
+                            }
+                            processed_parameters.append(processed_param)
+                        
+                        test_response["parameters"] = processed_parameters
+                    else:
+                        # Test without parameters - add direct values
+                        test_response.update({
+                            "method": test_detail.get("method", "N/A"),
+                            "specimen_type": test_detail.get("specimen_type", "N/A"),
+                            "value": test_detail.get("value", "N/A"),
+                            "unit": test_detail.get("unit", "N/A"),
+                            "reference_range": test_detail.get("reference_range", "N/A")
+                        })
+                    
+                    patient_details["testdetails"].append(test_response)
+                    
+            except (json.JSONDecodeError, AttributeError):
+                continue
         
         # Close MongoDB connection
         client.close()
+        
+        # Return empty if no test details found
+        if not patient_details["testdetails"]:
+            return JsonResponse({'error': 'No approved test records found'}, status=404)
         
         return JsonResponse(patient_details, safe=False)
         
