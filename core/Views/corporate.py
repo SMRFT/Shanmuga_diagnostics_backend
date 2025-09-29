@@ -497,7 +497,7 @@ def update_corporate_batch_received_status(request, batch_no):
                 body = json.loads(request.body)
             received_status = body.get('received', True)
             remarks = body.get('remarks', None)
-            employee_id = body.get('auth-user-id')
+            employee_id = request.data.get('auth-user-id') or "system"
         except json.JSONDecodeError:
             received_status = True
             remarks = None
