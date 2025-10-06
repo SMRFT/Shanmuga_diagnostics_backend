@@ -93,7 +93,16 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms_check_sample_status(?:/[^/]+)+/$': 'SD-P-HMSCS',
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms_sample_status_data(?:/[^/]+)+/$': 'SD-P-HMSSD',
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms_patch_sample_status(?:/[^/]+)+/$': 'SD-P-HMSPS',
-
+    
+    #Corporate:
+    '/_b_a_c_k_e_n_d/Diagnostics/corporate-batches/':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate-batches/?(\?.*)?$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate-receive(?:/[^/]+)+/$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get_corporate_Transferred(?:/[^/]+)+/$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/update_corporate_sample(?:/[^/]+)+/$':'SD-P-SSU',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_overall_report/?(\?.*)?$':'SD-API-OAR',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get-corporate-test-values(?:/[^/]+)+/$':'SD-P-POV', 
 
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms_get_sample_collected/?(\?.*)?$':'SD-P-HMSGC',
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms_update_sample_collected(?:/[^/]+)+/$':'SD-P-HMSUC',

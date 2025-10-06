@@ -725,6 +725,8 @@ def compare_test_details(request):
     barcode = request.GET.get('barcode')
     device_id = request.GET.get('device_id')
     source = request.GET.get('source', 'all')
+    # NEW: Get specific test name filter
+    test_name_filter = request.GET.get('test_name')
 
     if not barcode:
         return JsonResponse({'error': 'Barcode parameter is required'}, status=400)
@@ -768,6 +770,12 @@ def compare_test_details(request):
                     test_name = test_detail.get('test_name', test_code) if test_detail else test_code
                     hms_test_list.append({'testname': test_name, 'test_id': test_code})
 
+        # FILTER BY TEST NAME IF PROVIDED
+        if test_name_filter and hms_test_list:
+            hms_test_list = [test for test in hms_test_list 
+                           if (test.get('testname') == test_name_filter or 
+                               test.get('test_name') == test_name_filter)]
+
         hms_sample_status_map = {}
         try:
             sample_status_obj = Hmssamplestatus.objects.get(barcode=barcode)
@@ -792,12 +800,12 @@ def compare_test_details(request):
             hms_test_data = process_test_data(
                 hms_test_list, hms_sample_status_map, hms_patient_id, hms_patient_name,
                 barcode, device_id, core_testdetails_collection,
-                interface_testvalue_collection, 'hms'
+                interface_testvalue_collection, 'hms', test_name_filter
             )
             final_test_data.extend(hms_test_data['test_data'])
             processed_records.extend(hms_test_data['processed_records'])
 
-    # Corporate Health Checkup processing (combine billing and samplestatus)
+    # Corporate Health Checkup processing
     if source in ['corporate', 'all']:
         corporate_patient_id = None
         corporate_patient_name = None
@@ -817,6 +825,12 @@ def compare_test_details(request):
                     corporate_test_list = []
             elif isinstance(testdetails, list):
                 corporate_test_list = testdetails
+
+        # FILTER BY TEST NAME IF PROVIDED
+        if test_name_filter and corporate_test_list:
+            corporate_test_list = [test for test in corporate_test_list 
+                                 if (test.get('testname') == test_name_filter or 
+                                     test.get('test_name') == test_name_filter)]
 
         # Sample status record for sample status per test
         try:
@@ -843,7 +857,7 @@ def compare_test_details(request):
             corporate_test_data = process_test_data(
                 corporate_test_list, corporate_sample_status_map, corporate_patient_id,
                 corporate_patient_name, barcode, device_id, core_testdetails_collection,
-                interface_testvalue_collection, 'corporate'
+                interface_testvalue_collection, 'corporate', test_name_filter
             )
             final_test_data.extend(corporate_test_data['test_data'])
             processed_records.extend(corporate_test_data['processed_records'])
@@ -894,6 +908,12 @@ def compare_test_details(request):
                             test_name = test_detail.get('test_name', test_code) if test_detail else test_code
                             regular_test_list.append({'test_name': test_name, 'test_id': test_code})
 
+        # FILTER BY TEST NAME IF PROVIDED
+        if test_name_filter and regular_test_list:
+            regular_test_list = [test for test in regular_test_list 
+                               if (test.get('testname') == test_name_filter or 
+                                   test.get('test_name') == test_name_filter)]
+
         regular_sample_status_map = {}
         try:
             sample_status_detail = SampleStatus.objects.get(barcode=barcode)
@@ -941,7 +961,7 @@ def compare_test_details(request):
                 patient_name = regular_patient_name
             regular_test_data = process_test_data(
                 regular_test_list, regular_sample_status_map, regular_patient_id, regular_patient_name,
-                barcode, device_id, core_testdetails_collection, interface_testvalue_collection, 'regular'
+                barcode, device_id, core_testdetails_collection, interface_testvalue_collection, 'regular', test_name_filter
             )
             final_test_data.extend(regular_test_data['test_data'])
             processed_records.extend(regular_test_data['processed_records'])
@@ -953,7 +973,11 @@ def compare_test_details(request):
         pass
 
     if not final_test_data:
-        return JsonResponse({'error': f'No data found for barcode: {barcode} in any collection'}, status=404)
+        error_msg = f'No data found for barcode: {barcode}'
+        if test_name_filter:
+            error_msg += f' and test: {test_name_filter}'
+        error_msg += ' in any collection'
+        return JsonResponse({'error': error_msg}, status=404)
 
     response_data = {
         'success': True,
@@ -965,115 +989,149 @@ def compare_test_details(request):
         'test_count': len(final_test_data),
         'data': final_test_data,
         'processed_records': processed_records,
-        'data_sources': list(set([item.get('data_source') for item in final_test_data if item.get('data_source')]))
+        'data_sources': list(set([item.get('data_source') for item in final_test_data if item.get('data_source')])),
+        'filtered_by_test': test_name_filter if test_name_filter else None
     }
     return Response(response_data, status=200)
 
 
-def process_test_data(test_list, sample_status_map, patient_id, patient_name, barcode, device_id, 
-                     core_testdetails_collection, interface_testvalue_collection, data_source_type):
+def process_test_data(
+    test_list,
+    sample_status_map,
+    patient_id,
+    patient_name,
+    barcode,
+    device_id,
+    core_testdetails_collection,
+    interface_testvalue_collection,
+    data_source_type,
+    test_name_filter=None,  # NEW: Add test name filter parameter
+):
     """
-    Helper function to process test data for both HMS and Regular sources
+    Helper function to process test data for HMS, Corporate, and Regular sources
+    - Now supports filtering by specific test name
+    - Only queries interface_testvalue for relevant test codes
     """
     final_test_data = []
     processed_records = []
-    
-    # Process each test in the test list
+
+    def to_iso_or_str(dt):
+        if not dt:
+            return None
+        if hasattr(dt, "isoformat"):
+            try:
+                return dt.isoformat()
+            except Exception:
+                return str(dt)
+        if isinstance(dt, str):
+            return dt
+        return str(dt)
+
+    def normalize_parameters(parameters):
+        """
+        Normalize parameters to a dict keyed by device-id string -> list of parameter dicts.
+        """
+        if parameters is None:
+            return {}
+        if isinstance(parameters, dict):
+            normalized = {}
+            for k, v in parameters.items():
+                if v is None:
+                    normalized[str(k)] = []
+                elif isinstance(v, list):
+                    normalized[str(k)] = v
+                elif isinstance(v, dict):
+                    normalized[str(k)] = [v]
+                else:
+                    normalized[str(k)] = [v] if v is not None else []
+            return normalized
+        if isinstance(parameters, list):
+            return {"default": parameters}
+        return {}
+
     for test_item in test_list:
-        test_name = test_item.get('test_name') or test_item.get('testname')
-        test_id = test_item.get('test_id')
-        
-        # Get sample status for this test
-        sample_status_info = sample_status_map.get(test_name, {'status': 'Unknown', 'source': 'none'})
-        sample_status = sample_status_info['status']
-        data_source = sample_status_info['source']
-        
-        # Only process if the sample status is 'Received' or if we want to show all
-        if sample_status == "Received" or sample_status == 'Unknown':
-            # Get test details using BOTH test_name AND test_id for exact match
-            test_details_cursor = core_testdetails_collection.find({
-                "test_name": test_name,
-                "test_id": test_id
-            })
-            
-            test_details_list = list(test_details_cursor)
-            
-            # If no results with both criteria, try just test_id
+        test_name = test_item.get("test_name") or test_item.get("testname")
+        test_id = test_item.get("test_id")
+
+        # SKIP if test_name_filter is provided and doesn't match
+        if test_name_filter and test_name != test_name_filter:
+            continue
+
+        sample_status_info = sample_status_map.get(test_name, {"status": "Unknown", "source": "none"})
+        sample_status = sample_status_info["status"]
+        data_source = sample_status_info["source"]
+
+        if sample_status in ("Received", "Unknown"):
+            # Try exact match test_name + test_id
+            query = {"test_name": test_name, "test_id": test_id}
+            test_details_list = list(core_testdetails_collection.find(query))
+
+            # Fallback to test_id
             if not test_details_list and test_id:
-                test_details_cursor = core_testdetails_collection.find({"test_id": test_id})
-                test_details_list = list(test_details_cursor)
-            
-            # If still no results, try just test_name
+                test_details_list = list(core_testdetails_collection.find({"test_id": test_id}))
+
+            # Fallback to test_name
             if not test_details_list:
-                test_details_cursor = core_testdetails_collection.find({"test_name": test_name})
-                test_details_list = list(test_details_cursor)
-                # If multiple results, try to pick the one that matches test_id if available
-                if len(test_details_list) > 1 and test_id:
-                    for detail in test_details_list:
-                        if detail.get('test_id') == test_id:
-                            test_details_list = [detail]
+                candidates = list(core_testdetails_collection.find({"test_name": test_name}))
+                if len(candidates) > 1 and test_id:
+                    picked = None
+                    for detail in candidates:
+                        if detail.get("test_id") == test_id:
+                            picked = detail
                             break
-            
+                    test_details_list = [picked] if picked else candidates
+                else:
+                    test_details_list = candidates
+
             test_found = False
             for test_detail in test_details_list:
                 test_found = True
-                # Get parameters (it's already a dict, no need to parse JSON)
-                parameters = test_detail.get('parameters', {})
-                
+
+                raw_parameters = test_detail.get("parameters", {})
+                parameters = normalize_parameters(raw_parameters)
+
                 print(f"DEBUG [{data_source_type}]: Processing test_id {test_id}, test_name: {test_name}")
-                print(f"DEBUG [{data_source_type}]: Found test_detail with device_ids: {list(parameters.keys())}")
-                
+                print(f"DEBUG [{data_source_type}]: parameters type={type(raw_parameters).__name__}, normalized keys={list(parameters.keys())}")
+
+                # Handle tests without parameters
                 if not parameters:
-                    # Handle tests without parameters
-                    test_code = test_detail.get('test_code', f"{test_name.replace(' ', '').upper()}01")
-                    
+                    test_code = test_detail.get("test_code", f"{(test_name or '').replace(' ', '').upper()}01")
+
+                    # FOCUSED QUERY: Only query for this specific test code and barcode
                     test_value_query = {
                         "Barcode": barcode,
                         "TestCode": test_code,
-                        "processingstatus": "pending"
+                        "processingstatus": "pending",
                     }
-                    
                     if device_id:
                         test_value_query["DeviceID"] = device_id
-                    
+
                     test_value_doc = interface_testvalue_collection.find_one(
-                        test_value_query,
-                        sort=[("Receiveddate", -1)]
+                        test_value_query, sort=[("Receiveddate", -1)]
                     )
-                    
+
                     if test_value_doc:
-                        test_value = test_value_doc.get('Value', '')
-                        processing_status = test_value_doc.get('processingstatus', 'N/A')
-                        device_id_used = test_value_doc.get('DeviceID', 'N/A')
-                        
-                        # Track this record for processing status update
-                        processed_records.append({
-                            'barcode': barcode,
-                            'test_code': test_code,
-                            'device_id': device_id_used,
-                            'record_id': str(test_value_doc.get('_id')),
-                            'data_source_type': data_source_type
-                        })
+                        test_value = test_value_doc.get("Value", "")
+                        processing_status = test_value_doc.get("processingstatus", "N/A")
+                        device_id_used = test_value_doc.get("DeviceID", "N/A")
+
+                        processed_records.append(
+                            {
+                                "barcode": barcode,
+                                "test_code": test_code,
+                                "device_id": device_id_used,
+                                "record_id": str(test_value_doc.get("_id")),
+                                "data_source_type": data_source_type,
+                            }
+                        )
                     else:
-                        test_value = ''
-                        processing_status = 'N/A'
-                        device_id_used = 'N/A'
-                    
-                    # FIXED: Convert datetime objects to strings for JSON serialization
-                    created_date = test_value_doc.get('CreatedDate') if test_value_doc else None
-                    received_date = test_value_doc.get('Receiveddate') if test_value_doc else None
-                    
-                    # Convert datetime objects to strings
-                    if created_date and hasattr(created_date, 'isoformat'):
-                        created_date = created_date.isoformat()
-                    elif created_date and not isinstance(created_date, str):
-                        created_date = str(created_date)
-                    
-                    if received_date and hasattr(received_date, 'isoformat'):
-                        received_date = received_date.isoformat()
-                    elif received_date and not isinstance(received_date, str):
-                        received_date = str(received_date)
-                    
+                        test_value = ""
+                        processing_status = "N/A"
+                        device_id_used = "N/A"
+
+                    created_date = to_iso_or_str(test_value_doc.get("CreatedDate") if test_value_doc else None)
+                    received_date = to_iso_or_str(test_value_doc.get("Receiveddate") if test_value_doc else None)
+
                     test_info = {
                         "patient_id": patient_id,
                         "patientname": patient_name,
@@ -1083,161 +1141,158 @@ def process_test_data(test_list, sample_status_map, patient_id, patient_name, ba
                         "testname": test_name,
                         "test_code": test_code,
                         "parameter_name": None,
-                        "unit": test_detail.get('unit', 'N/A'),
-                        "reference_range": test_detail.get('reference_range', 'N/A'),
-                        "method": test_detail.get('method', 'N/A'),
-                        "department": test_detail.get('department', 'N/A'),
-                        "specimen_type": test_detail.get('specimen_type', 'N/A'),
-                        "NABL": test_detail.get('NABL', 'N/A'),
+                        "unit": test_detail.get("unit", "N/A"),
+                        "reference_range": test_detail.get("reference_range", "N/A"),
+                        "method": test_detail.get("method", "N/A"),
+                        "department": test_detail.get("department", "N/A"),
+                        "specimen_type": test_detail.get("specimen_type", "N/A"),
+                        "NABL": test_detail.get("NABL", "N/A"),
                         "test_value": test_value,
                         "processing_status": processing_status,
                         "sample_status": sample_status,
                         "data_source": data_source,
                         "data_source_type": data_source_type,
-                        "lab_unique_id": test_value_doc.get('lab_unique_id', 'N/A') if test_value_doc else 'N/A',
+                        "lab_unique_id": test_value_doc.get("lab_unique_id", "N/A") if test_value_doc else "N/A",
                         "created_date": created_date,
-                        "received_date": received_date
+                        "received_date": received_date,
                     }
-                    
                     final_test_data.append(test_info)
                     continue
-                
+
                 # DEVICE SELECTION LOGIC FOR PARAMETERIZED TESTS
                 has_interface_data = False
                 selected_device = None
+
+                # FOCUSED QUERY: Get all test codes for this specific test from parameters
+                all_test_codes_for_this_test = []
+                for device_key in parameters:
+                    param_test_codes = [
+                        p.get("test_code") for p in parameters[device_key] 
+                        if isinstance(p, dict) and p.get("test_code")
+                    ]
+                    all_test_codes_for_this_test.extend(param_test_codes)
+
+                # Remove duplicates
+                all_test_codes_for_this_test = list(set(all_test_codes_for_this_test))
                 
-                # Find which device actually has data for this barcode
-                all_barcode_records = list(interface_testvalue_collection.find({
+                # FOCUSED QUERY: Only get records for this barcode and these specific test codes
+                focused_query = {
                     "Barcode": barcode,
+                    "TestCode": {"$in": all_test_codes_for_this_test},
                     "processingstatus": "pending"
-                }))
+                }
                 
-                print(f"DEBUG [{data_source_type}]: Found {len(all_barcode_records)} pending records for barcode {barcode}")
-                
+                all_barcode_records = list(interface_testvalue_collection.find(focused_query))
+                print(f"DEBUG [{data_source_type}]: Found {len(all_barcode_records)} focused records for test {test_name}")
+
+                interface_test_codes = []
+                interface_device_ids = []
                 if all_barcode_records:
-                    # Get the actual test codes from interface data
-                    interface_test_codes = [record.get('TestCode') for record in all_barcode_records if record.get('TestCode')]
-                    interface_device_ids = list(set([record.get('DeviceID') for record in all_barcode_records if record.get('DeviceID')]))
-                    
+                    interface_test_codes = [
+                        r.get("TestCode") for r in all_barcode_records if r.get("TestCode")
+                    ]
+                    interface_device_ids = list(
+                        set([str(r.get("DeviceID")) for r in all_barcode_records if r.get("DeviceID")])
+                    )
+
                     print(f"DEBUG [{data_source_type}]: Interface test codes: {interface_test_codes}")
                     print(f"DEBUG [{data_source_type}]: Interface device IDs: {interface_device_ids}")
                     print(f"DEBUG [{data_source_type}]: Available parameter devices: {list(parameters.keys())}")
-                    
-                    # Find the device that has matching test codes
+
                     best_match_device = None
                     best_match_count = 0
-                    
+
+                    # Score devices by test code overlap
                     for device_key in parameters:
-                        # Get test codes for this device from parameters
-                        param_test_codes = [param.get('test_code') for param in parameters[device_key] if param.get('test_code')]
-                        
-                        # Count how many test codes match with interface data
+                        param_test_codes = [
+                            p.get("test_code") for p in parameters[device_key] if isinstance(p, dict) and p.get("test_code")
+                        ]
                         matches = len(set(param_test_codes) & set(interface_test_codes))
-                        
-                        print(f"DEBUG [{data_source_type}]: Device {device_key} - Parameter test codes: {param_test_codes[:5]}...")
                         print(f"DEBUG [{data_source_type}]: Device {device_key} - Matches with interface: {matches}")
-                        
                         if matches > best_match_count:
                             best_match_count = matches
                             best_match_device = device_key
-                    
-                    # Also check if any interface device ID directly matches a parameter device
+
+                    # Direct device id matches (ensure str)
                     for interface_dev_id in interface_device_ids:
-                        if str(interface_dev_id) in parameters:
-                            # Double check this device has matching test codes
-                            param_test_codes = [param.get('test_code') for param in parameters[str(interface_dev_id)] if param.get('test_code')]
+                        if interface_dev_id in parameters:
+                            param_test_codes = [
+                                p.get("test_code") for p in parameters[interface_dev_id] if isinstance(p, dict) and p.get("test_code")
+                            ]
                             matches = len(set(param_test_codes) & set(interface_test_codes))
-                            
                             print(f"DEBUG [{data_source_type}]: Direct device match {interface_dev_id} - Matches: {matches}")
-                            
                             if matches > best_match_count:
                                 best_match_count = matches
-                                best_match_device = str(interface_dev_id)
-                    
+                                best_match_device = interface_dev_id
+
                     if best_match_device and best_match_count > 0:
                         selected_device = best_match_device
                         has_interface_data = True
                         print(f"DEBUG [{data_source_type}]: SELECTED DEVICE: {selected_device} with {best_match_count} matching test codes")
                     else:
-                        # No matches found, check if requested device exists
+                        # No matches found: honor requested device if present
                         if device_id and str(device_id) in parameters:
                             selected_device = str(device_id)
-                            print(f"DEBUG [{data_source_type}]: Using requested device {device_id} (no test code matches)")
+                            print(f"DEBUG [{data_source_type}]: Using requested device {selected_device} (no test code matches)")
                         else:
-                            # Use first available device
-                            selected_device = sorted(parameters.keys())
+                            # Use first available device key
+                            selected_device = sorted(parameters.keys())[0] if parameters else None
                             print(f"DEBUG [{data_source_type}]: Using default device {selected_device} (no matches found)")
-                
                 else:
                     # No interface data found
                     if device_id and str(device_id) in parameters:
                         selected_device = str(device_id)
                     else:
+                        selected_device = sorted(parameters.keys())[0] if parameters else None
+                    print(f"DEBUG [{data_source_type}]: Using device {selected_device} (no interface data)")
 
-                        # Use first available device
-                        selected_device = sorted(parameters.keys())[0]
-                        print(f"DEBUG [{data_source_type}]: Using default device {selected_device} (no matches found)")
-
-
-
-                # Process parameters for the selected device
                 if selected_device and selected_device in parameters:
-                    param_list = parameters[selected_device]
+                    param_list = parameters[selected_device] or []
                     print(f"DEBUG [{data_source_type}]: Processing {len(param_list)} parameters for device: {selected_device}")
-                    
+
                     for param in param_list:
-                        test_code = param.get('test_code')
+                        if not isinstance(param, dict):
+                            continue
+
+                        test_code = param.get("test_code")
                         if not test_code:
                             continue
-                        
-                        # Initialize default values
-                        test_value = ''
-                        processing_status = 'No Data'
-                        lab_unique_id = 'N/A'
+
+                        test_value = ""
+                        processing_status = "No Data"
+                        lab_unique_id = "N/A"
                         created_date = None
                         received_date = None
-                        
+
                         if has_interface_data:
-                            # Look for exact test code match in interface data
                             matching_record = None
                             for record in all_barcode_records:
-                                if (record.get('TestCode') == test_code and 
-                                    record.get('processingstatus') == 'pending'):
+                                if record.get("TestCode") == test_code and record.get("processingstatus") == "pending":
                                     matching_record = record
                                     break
-                            
+
                             if matching_record:
-                                # Track this record for processing status update
-                                processed_records.append({
-                                    'barcode': barcode,
-                                    'test_code': test_code,
-                                    'device_id': matching_record.get('DeviceID'),
-                                    'record_id': str(matching_record.get('_id')),
-                                    'data_source_type': data_source_type
-                                })
-                                
-                                # Set values from interface_testvalue
-                                test_value = matching_record.get('Value', '')
-                                processing_status = matching_record.get('processingstatus', 'pending')
-                                lab_unique_id = matching_record.get('lab_unique_id', 'N/A')
-                                created_date = matching_record.get('CreatedDate')
-                                received_date = matching_record.get('Receiveddate')
-                                
+                                processed_records.append(
+                                    {
+                                        "barcode": barcode,
+                                        "test_code": test_code,
+                                        "device_id": matching_record.get("DeviceID"),
+                                        "record_id": str(matching_record.get("_id")),
+                                        "data_source_type": data_source_type,
+                                    }
+                                )
+                                test_value = matching_record.get("Value", "")
+                                processing_status = matching_record.get("processingstatus", "pending")
+                                lab_unique_id = matching_record.get("lab_unique_id", "N/A")
+                                created_date = matching_record.get("CreatedDate")
+                                received_date = matching_record.get("Receiveddate")
                                 print(f"DEBUG [{data_source_type}]: Found data for {test_code}: Value={test_value}")
                             else:
                                 print(f"DEBUG [{data_source_type}]: No interface data found for {test_code}")
-                        
-                        # FIXED: Convert datetime objects to strings for JSON serialization
-                        if created_date and hasattr(created_date, 'isoformat'):
-                            created_date = created_date.isoformat()
-                        elif created_date and not isinstance(created_date, str):
-                            created_date = str(created_date)
-                        
-                        if received_date and hasattr(received_date, 'isoformat'):
-                            received_date = received_date.isoformat()
-                        elif received_date and not isinstance(received_date, str):
-                            received_date = str(received_date)
-                        
+
+                        created_date = to_iso_or_str(created_date)
+                        received_date = to_iso_or_str(received_date)
+
                         test_info = {
                             "patient_id": patient_id,
                             "patientname": patient_name,
@@ -1246,13 +1301,13 @@ def process_test_data(test_list, sample_status_map, patient_id, patient_name, ba
                             "test_id": test_id,
                             "testname": test_name,
                             "test_code": test_code,
-                            "parameter_name": param.get('test_name'),
-                            "unit": param.get('unit'),
-                            "reference_range": param.get('reference_range'),
-                            "method": param.get('method'),
-                            "department": test_detail.get('department'),
-                            "specimen_type": test_detail.get('specimen_type', param.get('specimen_type')),
-                            "NABL": test_detail.get('NABL', 'N/A'),
+                            "parameter_name": param.get("test_name"),
+                            "unit": param.get("unit"),
+                            "reference_range": param.get("reference_range"),
+                            "method": param.get("method"),
+                            "department": test_detail.get("department"),
+                            "specimen_type": test_detail.get("specimen_type", param.get("specimen_type")),
+                            "NABL": test_detail.get("NABL", "N/A"),
                             "test_value": test_value,
                             "processing_status": processing_status,
                             "sample_status": sample_status,
@@ -1260,16 +1315,14 @@ def process_test_data(test_list, sample_status_map, patient_id, patient_name, ba
                             "data_source_type": data_source_type,
                             "lab_unique_id": lab_unique_id,
                             "created_date": created_date,
-                            "received_date": received_date
+                            "received_date": received_date,
                         }
-                        
                         final_test_data.append(test_info)
-                
-                # Break after processing first test_detail to avoid duplicates
+
+                # Avoid duplicates: process only the first matching test_detail
                 break
-            
+
             if not test_found:
-                # If no test details found in core_testdetails, create a basic entry
                 test_info = {
                     "patient_id": patient_id,
                     "patientname": patient_name,
@@ -1292,14 +1345,11 @@ def process_test_data(test_list, sample_status_map, patient_id, patient_name, ba
                     "data_source_type": data_source_type,
                     "lab_unique_id": "N/A",
                     "created_date": None,
-                    "received_date": None
+                    "received_date": None,
                 }
                 final_test_data.append(test_info)
-    
-    return {
-        'test_data': final_test_data,
-        'processed_records': processed_records
-    }
+
+    return {"test_data": final_test_data, "processed_records": processed_records}
 
 
 def update_processing_status(barcode, test_code, device_id, latest_record_id_str):
