@@ -1107,3 +1107,306 @@ def get_corporate_test_value(request):
     except Exception as e:
         print(f"[ERROR] While processing test values: {str(e)}")
         return JsonResponse({'error': 'Internal server error', 'details': str(e)}, status=500)
+
+
+import base64
+import gridfs
+from bson import ObjectId
+
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+def corporate_health_report(request):
+    barcode = request.GET.get('barcode')
+    if not barcode:
+        return JsonResponse({'error': 'Barcode is required'}, status=400)
+    
+    try:
+        # MongoDB connection
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        
+        # Collections
+        franchise_billing_collection = db.core_billing
+        franchise_sample_collection = db.core_sample
+        franchise_patient_collection = db.core_employeeregistration
+        franchise_investigation_collection = db.core_investigation
+        franchise_ophthalmology_collection = db.core_opthomology
+        
+        # Get franchise billing data
+        franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
+        if not franchise_billing:
+            return JsonResponse({'error': 'Billing record not found'}, status=404)
+        
+        employee_id = franchise_billing.get('employee_id')
+        if not employee_id:
+            return JsonResponse({'error': 'Employee ID not found'}, status=404)
+        
+        # Get patient data
+        franchise_patient = franchise_patient_collection.find_one({"employee_id": employee_id})
+        if not franchise_patient:
+            return JsonResponse({'error': 'Patient not found'}, status=404)
+        
+        # Get sample data
+        franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
+        
+        # Get investigation data (only if status is approved)
+        franchise_investigation = franchise_investigation_collection.find_one({
+            "barcode": barcode,
+            "status": "approved"
+        })
+        
+        # Get ophthalmology data (only if status is approved)
+        franchise_ophthalmology = franchise_ophthalmology_collection.find_one({
+            "barcode": barcode,
+            "status": "approved"
+        })
+        
+        # Get test values from Django model
+        test_values = TestValue.objects.filter(barcode=barcode)
+        
+        # Parse vitals from investigation
+        vitals_data = {}
+        investigation_file_ids = {}
+        investigation_notes = {
+            "ecg_notes": "Normal",
+            "pft_notes": "Normal",
+            "audiometry_notes": "Normal",
+            "xray_notes": "Normal"
+        }
+        
+        if franchise_investigation:
+            try:
+                vitals_data = json.loads(franchise_investigation.get('vitals', '{}'))
+            except json.JSONDecodeError:
+                vitals_data = {}
+            
+            # Store only file IDs instead of fetching file content
+            investigation_file_ids = {
+                "ecg_file": franchise_investigation.get("ecg_file"),
+                "pft_file": franchise_investigation.get("pft_file"),
+                "audiometric_file": franchise_investigation.get("audiometric_file"),
+                "xray_file": franchise_investigation.get("xray_file"),
+                "xrayfilm_file": franchise_investigation.get("xrayfilm_file")
+            }
+            
+            # Get investigation notes
+            investigation_notes = {
+                "ecg_notes": franchise_investigation.get("ecg_notes", "Normal"),
+                "pft_notes": franchise_investigation.get("pft_notes", "Normal"),
+                "audiometry_notes": franchise_investigation.get("audiometry_notes", "Normal"),
+                "xray_notes": "Normal"
+            }
+        
+        # Parse ophthalmology data - Get actual data from database
+        right_eye_data = {}
+        left_eye_data = {}
+        visual_acuity_data = {}
+        ophthalmology_remarks = ""
+        
+        if franchise_ophthalmology:
+            try:
+                right_eye_data = json.loads(franchise_ophthalmology.get('right_eye', '{}'))
+                left_eye_data = json.loads(franchise_ophthalmology.get('left_eye', '{}'))
+                visual_acuity_data = json.loads(franchise_ophthalmology.get('visual_acuity', '{}'))
+                ophthalmology_remarks = franchise_ophthalmology.get('remarks', '')
+            except json.JSONDecodeError:
+                pass
+        
+        # Get all barcodes for this patient
+        barcodes = []
+        try:
+            all_barcodes = franchise_billing_collection.find(
+                {"employee_id": employee_id}, 
+                {"barcode": 1, "_id": 0}
+            )
+            barcodes = [bc.get("barcode") for bc in all_barcodes if bc.get("barcode")]
+            barcodes = list(dict.fromkeys(barcodes))
+        except Exception:
+            barcodes = []
+        
+        # Parse sample testdetails
+        sample_testdetails = []
+        if franchise_sample:
+            try:
+                sample_testdetails = json.loads(franchise_sample.get('testdetails', '[]'))
+            except json.JSONDecodeError:
+                sample_testdetails = []
+        
+        # Build patient details response
+        patient_details = {
+            "patient_id": employee_id,
+            "patientname": franchise_patient.get("employee_name", "N/A"),
+            "age": franchise_patient.get("age", "N/A"),
+            "age_type": "Years",
+            "gender": franchise_patient.get("gender", "N/A"),
+            "date": franchise_billing.get("created_date"),
+            "barcode": barcode,
+            "barcodes": barcodes,
+            "company_name": franchise_patient.get("company_name", "N/A"),
+            "department": franchise_patient.get("department", "N/A"),
+            "dob": franchise_patient.get("dob"),
+            
+            # Vitals
+            "vitals": {
+                "height": vitals_data.get("height_cm", "N/A"),
+                "weight": vitals_data.get("weight_kg", "N/A"),
+                "bmi": vitals_data.get("bmi", "N/A"),
+                "blood_pressure": vitals_data.get("blood_pressure", "N/A"),
+                "pulse": vitals_data.get("pulse", "N/A"),
+                "spo2": vitals_data.get("spo2", "N/A")
+            },
+            
+            # Clinical Examination
+            "clinical_examination": {
+                "cardiovascular_system": "Normal",
+                "respiratory_system": "Normal",
+                "central_nervous_system": "Normal",
+                "locomotor_system": "Normal",
+                "skin": "Normal"
+            },
+            
+            # Medical History
+            "medical_history": {
+                "past_medical_history": "Nil Significant",
+                "family_history": "Nil Significant",
+                "present_history": franchise_investigation.get("patient_history", "Nil Significant") if franchise_investigation else "Nil Significant"
+            },
+            
+            # Ophthalmology Data (actual data from database)
+            "ophthalmology": {
+                "right_eye": right_eye_data,
+                "left_eye": left_eye_data,
+                "visual_acuity": visual_acuity_data,
+                "color_vision": "Normal",
+                "color_blindness_test": {
+                    "right": "17/17",
+                    "left": "17/17",
+                    "result": "Normal"
+                },
+                "vision_status": "Normal Vision" if not ophthalmology_remarks else "Refer to remarks",
+                "remarks": ophthalmology_remarks
+            },
+            
+            # Investigation Notes
+            "investigation_notes": investigation_notes,
+            
+            # Investigation File IDs (not base64 data)
+            "investigation_file_ids": investigation_file_ids,
+            
+            # Lab Test Details
+            "testdetails": [],
+            
+            # Final Assessment
+            "final_assessment": {
+                "fitness_status": "Medically Fit for the Job",
+                "impression": "Reports within Normal Limits",
+                "advice": "Proper Diet, Regular Exercise"
+            }
+        }
+        
+        # Process lab tests from TestValue model
+        if test_values.exists():
+            for test_value in test_values:
+                try:
+                    testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
+                    if not isinstance(testvalue_details, list):
+                        continue
+                    
+                    for test_detail in testvalue_details:
+                        testname = test_detail.get("testname")
+                        if not testname:
+                            continue
+                        
+                        # Find corresponding sample status
+                        sample_status = None
+                        for sample_test in sample_testdetails:
+                            if sample_test.get("testname") == testname:
+                                sample_status = sample_test
+                                break
+                        
+                        # Build test detail object
+                        test_response = {
+                            "department": test_detail.get("department", "LAB"),
+                            "testname": testname,
+                            "verified_by": test_detail.get("verified_by", "N/A"),
+                            "approve_by": test_detail.get("approve_by", "N/A"),
+                            "approve_time": test_detail.get("approve_time", "N/A"),
+                            "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
+                            "received_time": sample_status.get("received_time") if sample_status else None
+                        }
+                        
+                        # Check if test has parameters
+                        if test_detail.get("parameters"):
+                            processed_parameters = []
+                            for param in test_detail.get("parameters", []):
+                                processed_param = {
+                                    "name": param.get("name", "N/A"),
+                                    "value": param.get("value", "N/A"),
+                                    "unit": param.get("unit", "N/A"),
+                                    "specimen_type": param.get("specimen_type", "N/A"),
+                                    "reference_range": param.get("reference_range", "N/A"),
+                                    "method": param.get("method", "N/A")
+                                }
+                                processed_parameters.append(processed_param)
+                            
+                            test_response["parameters"] = processed_parameters
+                        else:
+                            test_response.update({
+                                "method": test_detail.get("method", "N/A"),
+                                "specimen_type": test_detail.get("specimen_type", "N/A"),
+                                "value": test_detail.get("value", "N/A"),
+                                "unit": test_detail.get("unit", "N/A"),
+                                "reference_range": test_detail.get("reference_range", "N/A")
+                            })
+                        
+                        patient_details["testdetails"].append(test_response)
+                        
+                except (json.JSONDecodeError, AttributeError) as e:
+                    print(f"Error processing test: {str(e)}")
+                    continue
+        
+        # Close MongoDB connection
+        client.close()
+        
+        return JsonResponse(patient_details, safe=False)
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# Add new endpoint to fetch individual files
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+def get_investigation_file(request):
+    file_id = request.GET.get('file_id')
+    if not file_id:
+        return JsonResponse({'error': 'File ID is required'}, status=400)
+    
+    try:
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        fs = gridfs.GridFS(db)
+        
+        file_obj_id = ObjectId(file_id)
+        if not fs.exists(file_obj_id):
+            return JsonResponse({'error': 'File not found'}, status=404)
+        
+        grid_out = fs.get(file_obj_id)
+        file_data = grid_out.read()
+        
+        # Convert to base64 and return as JSON
+        import base64
+        base64_data = base64.b64encode(file_data).decode('utf-8')
+        
+        response_data = {
+            'data': base64_data,
+            'contentType': grid_out.content_type,
+            'filename': grid_out.filename,
+            'length': grid_out.length
+        }
+        
+        client.close()
+        return JsonResponse(response_data)
+        
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
