@@ -1113,6 +1113,10 @@ import base64
 import gridfs
 from bson import ObjectId
 
+import base64
+import gridfs
+from bson import ObjectId
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def corporate_health_report(request):
@@ -1270,6 +1274,7 @@ def corporate_health_report(request):
             "patientname": franchise_patient.get("employee_name"),
             "age": franchise_patient.get("age"),
             "gender": franchise_patient.get("gender"),
+            "department": franchise_patient.get("department"),
             "date": franchise_billing.get("created_date"),
             "barcode": barcode,
             "barcodes": barcodes,
