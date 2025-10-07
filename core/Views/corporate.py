@@ -1164,51 +1164,83 @@ def corporate_health_report(request):
         # Get test values from Django model
         test_values = TestValue.objects.filter(barcode=barcode)
         
-        # Parse vitals from investigation
+        # Parse vitals from investigation - only include if available and not empty
         vitals_data = {}
-        investigation_file_ids = {}
-        investigation_notes = {
-            "ecg_notes": "Normal",
-            "pft_notes": "Normal",
-            "audiometry_notes": "Normal",
-            "xray_notes": "Normal"
-        }
-        
         if franchise_investigation:
             try:
-                vitals_data = json.loads(franchise_investigation.get('vitals', '{}'))
+                vitals_raw = json.loads(franchise_investigation.get('vitals', '{}'))
+                # Only include non-empty vitals
+                for key, value in vitals_raw.items():
+                    if value and str(value).strip() and str(value).strip() != "0":
+                        vitals_data[key] = value
             except json.JSONDecodeError:
                 vitals_data = {}
-            
-            # Store only file IDs instead of fetching file content
-            investigation_file_ids = {
-                "ecg_file": franchise_investigation.get("ecg_file"),
-                "pft_file": franchise_investigation.get("pft_file"),
-                "audiometric_file": franchise_investigation.get("audiometric_file"),
-                "xray_file": franchise_investigation.get("xray_file"),
-                "xrayfilm_file": franchise_investigation.get("xrayfilm_file")
-            }
-            
-            # Get investigation notes
-            investigation_notes = {
-                "ecg_notes": franchise_investigation.get("ecg_notes", "Normal"),
-                "pft_notes": franchise_investigation.get("pft_notes", "Normal"),
-                "audiometry_notes": franchise_investigation.get("audiometry_notes", "Normal"),
-                "xray_notes": "Normal"
-            }
         
-        # Parse ophthalmology data - Get actual data from database
-        right_eye_data = {}
-        left_eye_data = {}
-        visual_acuity_data = {}
-        ophthalmology_remarks = ""
+        # Store investigation file IDs and notes - only if available
+        investigation_file_ids = {}
+        investigation_notes = {}
         
+        if franchise_investigation:
+            # Only add file IDs that exist
+            for file_field in ["ecg_file", "pft_file", "audiometric_file", "xray_file", "xrayfilm_file"]:
+                file_id = franchise_investigation.get(file_field)
+                if file_id:
+                    investigation_file_ids[file_field] = file_id
+            
+            # Only add notes that exist and are not empty/default
+            for note_field, key in [
+                ("ecg_notes", "ecg_notes"),
+                ("pft_notes", "pft_notes"),
+                ("audiometry_notes", "audiometry_notes")
+            ]:
+                note_value = franchise_investigation.get(note_field)
+                if note_value and note_value.strip():
+                    investigation_notes[key] = note_value
+        
+        # Parse medical history - only if exists and not default values
+        medical_history_data = {}
+        if franchise_investigation:
+            patient_history = franchise_investigation.get("patient_history")
+            if patient_history and patient_history.strip():
+                # Exclude default/empty values
+                if patient_history.lower() not in ["nil", "nil significant", "no previous history", "none"]:
+                    medical_history_data["patient_history"] = patient_history
+        
+        # Parse clinical examination - only if exists and not default
+        clinical_examination_data = {}
+        if franchise_investigation:
+            for field in ["cardiovascular_system", "respiratory_system", "central_nervous_system", 
+                         "locomotor_system", "skin"]:
+                value = franchise_investigation.get(field)
+                if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
+                    clinical_examination_data[field] = value
+        
+        # Parse ophthalmology data - only if exists
+        ophthalmology_data = None
         if franchise_ophthalmology:
             try:
                 right_eye_data = json.loads(franchise_ophthalmology.get('right_eye', '{}'))
                 left_eye_data = json.loads(franchise_ophthalmology.get('left_eye', '{}'))
                 visual_acuity_data = json.loads(franchise_ophthalmology.get('visual_acuity', '{}'))
                 ophthalmology_remarks = franchise_ophthalmology.get('remarks', '')
+                color_vision = franchise_ophthalmology.get('color_vision', '')
+                vision_status = franchise_ophthalmology.get('vision_status', '')
+                
+                # Only include if there's actual data
+                if right_eye_data or left_eye_data or visual_acuity_data:
+                    ophthalmology_data = {}
+                    if right_eye_data:
+                        ophthalmology_data["right_eye"] = right_eye_data
+                    if left_eye_data:
+                        ophthalmology_data["left_eye"] = left_eye_data
+                    if visual_acuity_data:
+                        ophthalmology_data["visual_acuity"] = visual_acuity_data
+                    if ophthalmology_remarks and ophthalmology_remarks.strip():
+                        ophthalmology_data["remarks"] = ophthalmology_remarks
+                    if color_vision and color_vision.strip():
+                        ophthalmology_data["color_vision"] = color_vision
+                    if vision_status and vision_status.strip():
+                        ophthalmology_data["vision_status"] = vision_status
             except json.JSONDecodeError:
                 pass
         
@@ -1232,77 +1264,55 @@ def corporate_health_report(request):
             except json.JSONDecodeError:
                 sample_testdetails = []
         
-        # Build patient details response
+        # Build patient details response - only with available data
         patient_details = {
             "patient_id": employee_id,
-            "patientname": franchise_patient.get("employee_name", "N/A"),
-            "age": franchise_patient.get("age", "N/A"),
-            "age_type": "Years",
-            "gender": franchise_patient.get("gender", "N/A"),
+            "patientname": franchise_patient.get("employee_name"),
+            "age": franchise_patient.get("age"),
+            "gender": franchise_patient.get("gender"),
             "date": franchise_billing.get("created_date"),
             "barcode": barcode,
             "barcodes": barcodes,
-            "company_name": franchise_patient.get("company_name", "N/A"),
-            "department": franchise_patient.get("department", "N/A"),
-            "dob": franchise_patient.get("dob"),
-            
-            # Vitals
-            "vitals": {
-                "height": vitals_data.get("height_cm", "N/A"),
-                "weight": vitals_data.get("weight_kg", "N/A"),
-                "bmi": vitals_data.get("bmi", "N/A"),
-                "blood_pressure": vitals_data.get("blood_pressure", "N/A"),
-                "pulse": vitals_data.get("pulse", "N/A"),
-                "spo2": vitals_data.get("spo2", "N/A")
-            },
-            
-            # Clinical Examination
-            "clinical_examination": {
-                "cardiovascular_system": "Normal",
-                "respiratory_system": "Normal",
-                "central_nervous_system": "Normal",
-                "locomotor_system": "Normal",
-                "skin": "Normal"
-            },
-            
-            # Medical History
-            "medical_history": {
-                "past_medical_history": "Nil Significant",
-                "family_history": "Nil Significant",
-                "present_history": franchise_investigation.get("patient_history", "Nil Significant") if franchise_investigation else "Nil Significant"
-            },
-            
-            # Ophthalmology Data (actual data from database)
-            "ophthalmology": {
-                "right_eye": right_eye_data,
-                "left_eye": left_eye_data,
-                "visual_acuity": visual_acuity_data,
-                "color_vision": "Normal",
-                "color_blindness_test": {
-                    "right": "17/17",
-                    "left": "17/17",
-                    "result": "Normal"
-                },
-                "vision_status": "Normal Vision" if not ophthalmology_remarks else "Refer to remarks",
-                "remarks": ophthalmology_remarks
-            },
-            
-            # Investigation Notes
-            "investigation_notes": investigation_notes,
-            
-            # Investigation File IDs (not base64 data)
-            "investigation_file_ids": investigation_file_ids,
-            
-            # Lab Test Details
-            "testdetails": [],
-            
-            # Final Assessment
-            "final_assessment": {
-                "fitness_status": "Medically Fit for the Job",
-                "impression": "Reports within Normal Limits",
-                "advice": "Proper Diet, Regular Exercise"
-            }
+            "testdetails": []
         }
+        
+        # Only add optional fields if they exist
+        if franchise_patient.get("company_name"):
+            patient_details["company_name"] = franchise_patient.get("company_name")
+        
+        if franchise_patient.get("department"):
+            patient_details["department"] = franchise_patient.get("department")
+        
+        if franchise_patient.get("dob"):
+            patient_details["dob"] = franchise_patient.get("dob")
+        
+        # Only add vitals if data exists
+        if vitals_data:
+            patient_details["vitals"] = {}
+            for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2"]:
+                if vitals_data.get(key):
+                    display_key = key.replace("_cm", "").replace("_kg", "")
+                    patient_details["vitals"][display_key] = vitals_data.get(key)
+        
+        # Only add medical history if data exists (excluding defaults)
+        if medical_history_data:
+            patient_details["medical_history"] = medical_history_data
+        
+        # Only add clinical examination if data exists
+        if clinical_examination_data:
+            patient_details["clinical_examination"] = clinical_examination_data
+        
+        # Only add ophthalmology if data exists
+        if ophthalmology_data:
+            patient_details["ophthalmology"] = ophthalmology_data
+        
+        # Only add investigation notes if they exist
+        if investigation_notes:
+            patient_details["investigation_notes"] = investigation_notes
+        
+        # Only add investigation file IDs if they exist
+        if investigation_file_ids:
+            patient_details["investigation_file_ids"] = investigation_file_ids
         
         # Process lab tests from TestValue model
         if test_values.exists():
@@ -1324,40 +1334,63 @@ def corporate_health_report(request):
                                 sample_status = sample_test
                                 break
                         
-                        # Build test detail object
-                        test_response = {
-                            "department": test_detail.get("department", "LAB"),
-                            "testname": testname,
-                            "verified_by": test_detail.get("verified_by", "N/A"),
-                            "approve_by": test_detail.get("approve_by", "N/A"),
-                            "approve_time": test_detail.get("approve_time", "N/A"),
-                            "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
-                            "received_time": sample_status.get("received_time") if sample_status else None
-                        }
+                        # Build test detail object - only with available fields
+                        test_response = {"testname": testname}
+                        
+                        if test_detail.get("department"):
+                            test_response["department"] = test_detail.get("department")
+                        
+                        if test_detail.get("verified_by"):
+                            test_response["verified_by"] = test_detail.get("verified_by")
+                        
+                        if test_detail.get("approve_by"):
+                            test_response["approve_by"] = test_detail.get("approve_by")
+                        
+                        if test_detail.get("approve_time"):
+                            test_response["approve_time"] = test_detail.get("approve_time")
+                        
+                        if sample_status:
+                            if sample_status.get("samplecollected_time"):
+                                test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
+                            if sample_status.get("received_time"):
+                                test_response["received_time"] = sample_status.get("received_time")
                         
                         # Check if test has parameters
                         if test_detail.get("parameters"):
                             processed_parameters = []
                             for param in test_detail.get("parameters", []):
-                                processed_param = {
-                                    "name": param.get("name", "N/A"),
-                                    "value": param.get("value", "N/A"),
-                                    "unit": param.get("unit", "N/A"),
-                                    "specimen_type": param.get("specimen_type", "N/A"),
-                                    "reference_range": param.get("reference_range", "N/A"),
-                                    "method": param.get("method", "N/A")
-                                }
-                                processed_parameters.append(processed_param)
+                                processed_param = {}
+                                
+                                if param.get("name"):
+                                    processed_param["name"] = param.get("name")
+                                if param.get("value"):
+                                    processed_param["value"] = param.get("value")
+                                if param.get("unit"):
+                                    processed_param["unit"] = param.get("unit")
+                                if param.get("specimen_type"):
+                                    processed_param["specimen_type"] = param.get("specimen_type")
+                                if param.get("reference_range"):
+                                    processed_param["reference_range"] = param.get("reference_range")
+                                if param.get("method"):
+                                    processed_param["method"] = param.get("method")
+                                
+                                if processed_param:
+                                    processed_parameters.append(processed_param)
                             
-                            test_response["parameters"] = processed_parameters
+                            if processed_parameters:
+                                test_response["parameters"] = processed_parameters
                         else:
-                            test_response.update({
-                                "method": test_detail.get("method", "N/A"),
-                                "specimen_type": test_detail.get("specimen_type", "N/A"),
-                                "value": test_detail.get("value", "N/A"),
-                                "unit": test_detail.get("unit", "N/A"),
-                                "reference_range": test_detail.get("reference_range", "N/A")
-                            })
+                            # Add individual test fields only if they exist
+                            if test_detail.get("method"):
+                                test_response["method"] = test_detail.get("method")
+                            if test_detail.get("specimen_type"):
+                                test_response["specimen_type"] = test_detail.get("specimen_type")
+                            if test_detail.get("value"):
+                                test_response["value"] = test_detail.get("value")
+                            if test_detail.get("unit"):
+                                test_response["unit"] = test_detail.get("unit")
+                            if test_detail.get("reference_range"):
+                                test_response["reference_range"] = test_detail.get("reference_range")
                         
                         patient_details["testdetails"].append(test_response)
                         
