@@ -869,6 +869,7 @@ def corporate_overall_report(request):
                 "patient_id": pid,
                 "patient_name": patient_detail.get("employee_name", "N/A"),  # From franchise_patient
                 "gender": patient_detail.get("gender", "N/A"),  # From franchise_patient
+                "department": patient_detail.get("department", "N/A"),  # From franchise_patient
                 "age": age,
                 "email": patient_detail.get("email", "N/A"),  # From franchise_patient             
                 "branch": patient_detail.get("company_id", "N/A"),  # Use franchise_id as branch  
@@ -1109,9 +1110,38 @@ def get_corporate_test_value(request):
         return JsonResponse({'error': 'Internal server error', 'details': str(e)}, status=500)
 
 
-import base64
-import gridfs
+
+
+from django.http import HttpResponse, JsonResponse
+from rest_framework.decorators import api_view
 from bson import ObjectId
+import gridfs
+from pymongo import MongoClient
+import os
+
+@api_view(['GET'])
+# @csrf_exempt  # optional
+# @permission_classes([HasRoleAndDataPermission])  # optional
+def get_pdf_from_gridfs_corporate(request, file_id):
+    try:
+        # Connect to MongoDB
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        fs = gridfs.GridFS(db)
+
+        # Get the file from GridFS
+        file_obj = fs.get(ObjectId(file_id))
+        
+        # Return as HTTP response
+        response = HttpResponse(file_obj.read(), content_type="application/pdf")
+        response["Content-Disposition"] = f'attachment; filename="{file_obj.filename}"'  # forces download
+        return response
+    except gridfs.errors.NoFile:
+        return JsonResponse({"error": "File not found"}, status=404)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
 
 import base64
 import gridfs
@@ -1134,7 +1164,7 @@ def corporate_health_report(request):
         franchise_sample_collection = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
         franchise_investigation_collection = db.core_investigation
-        franchise_ophthalmology_collection = db.core_opthomology
+        franchise_ophthalmology_collection = db.core_ophthalmology
         
         # Get franchise billing data
         franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
@@ -1219,34 +1249,107 @@ def corporate_health_report(request):
                 if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
                     clinical_examination_data[field] = value
         
-        # Parse ophthalmology data - only if exists
+        # Parse ophthalmology data - UPDATED LOGIC
         ophthalmology_data = None
         if franchise_ophthalmology:
             try:
-                right_eye_data = json.loads(franchise_ophthalmology.get('right_eye', '{}'))
-                left_eye_data = json.loads(franchise_ophthalmology.get('left_eye', '{}'))
-                visual_acuity_data = json.loads(franchise_ophthalmology.get('visual_acuity', '{}'))
-                ophthalmology_remarks = franchise_ophthalmology.get('remarks', '')
-                color_vision = franchise_ophthalmology.get('color_vision', '')
-                vision_status = franchise_ophthalmology.get('vision_status', '')
+                ophthalmology_data = {}
                 
-                # Only include if there's actual data
-                if right_eye_data or left_eye_data or visual_acuity_data:
-                    ophthalmology_data = {}
-                    if right_eye_data:
-                        ophthalmology_data["right_eye"] = right_eye_data
-                    if left_eye_data:
-                        ophthalmology_data["left_eye"] = left_eye_data
-                    if visual_acuity_data:
-                        ophthalmology_data["visual_acuity"] = visual_acuity_data
-                    if ophthalmology_remarks and ophthalmology_remarks.strip():
-                        ophthalmology_data["remarks"] = ophthalmology_remarks
-                    if color_vision and color_vision.strip():
-                        ophthalmology_data["color_vision"] = color_vision
-                    if vision_status and vision_status.strip():
-                        ophthalmology_data["vision_status"] = vision_status
-            except json.JSONDecodeError:
-                pass
+                # Parse visual_acuity string - handle malformed JSON
+                visual_acuity_str = franchise_ophthalmology.get('visual_acuity', '')
+                print(f"Raw visual_acuity from DB: {visual_acuity_str}")
+                
+                if visual_acuity_str:
+                    try:
+                        # The string format is: { "distance": {"right": "7", "left": "7"}},{ "nearVision": {"right": "7", "left": "7"}},{ "colourVision": {"right": "7", "left": "7"}}
+                        # We need to wrap it in array brackets and parse
+                        
+                        # Method 1: Convert to valid JSON array
+                        json_array_str = '[' + visual_acuity_str + ']'
+                        parsed_array = json.loads(json_array_str)
+                        
+                        # Merge all objects into one
+                        parsed_va = {}
+                        for obj in parsed_array:
+                            parsed_va.update(obj)
+                        
+                        print(f"Merged parsed_va: {parsed_va}")
+                        
+                        # Transform to simplified structure without uncorrected/corrected
+                        visual_acuity_data = {}
+                        
+                        # Add distance vision if available
+                        if parsed_va.get("distance"):
+                            visual_acuity_data["distance"] = {
+                                "right": str(parsed_va.get("distance", {}).get("right", "6/6")),
+                                "left": str(parsed_va.get("distance", {}).get("left", "6/6"))
+                            }
+                        
+                        # Add near vision if available
+                        if parsed_va.get("nearVision"):
+                            visual_acuity_data["near_vision"] = {
+                                "right": str(parsed_va.get("nearVision", {}).get("right", "N-6")),
+                                "left": str(parsed_va.get("nearVision", {}).get("left", "N-6"))
+                            }
+                        
+                        # Add color vision if available
+                        if parsed_va.get("colourVision"):
+                            visual_acuity_data["color_vision"] = {
+                                "right": str(parsed_va.get("colourVision", {}).get("right", "Normal")),
+                                "left": str(parsed_va.get("colourVision", {}).get("left", "Normal"))
+                            }
+                        
+                        print(f"Final visual_acuity_data: {visual_acuity_data}")
+                        
+                        if visual_acuity_data:
+                            ophthalmology_data["visual_acuity"] = visual_acuity_data
+                            
+                    except (json.JSONDecodeError, KeyError, AttributeError, TypeError) as e:
+                        print(f"Error parsing visual_acuity: {str(e)}")
+                        print(f"Error type: {type(e).__name__}")
+                
+                # Add remarks if available
+                remarks = franchise_ophthalmology.get('remarks', '')
+                if remarks and remarks.strip():
+                    ophthalmology_data["remarks"] = remarks
+                
+                # Add patient complaints if available
+                patient_complaints = franchise_ophthalmology.get('patient_complaints', '')
+                if patient_complaints and patient_complaints.strip():
+                    ophthalmology_data["patient_complaints"] = patient_complaints
+                
+                # Add right_eye and left_eye if available (for SPH, CYL, AXIS, ADD)
+                right_eye = franchise_ophthalmology.get('right_eye')
+                if right_eye:
+                    try:
+                        ophthalmology_data["right_eye"] = json.loads(right_eye) if isinstance(right_eye, str) else right_eye
+                    except json.JSONDecodeError:
+                        pass
+                
+                left_eye = franchise_ophthalmology.get('left_eye')
+                if left_eye:
+                    try:
+                        ophthalmology_data["left_eye"] = json.loads(left_eye) if isinstance(left_eye, str) else left_eye
+                    except json.JSONDecodeError:
+                        pass
+                
+                # Add color_vision field if available (separate field from visual_acuity)
+                color_vision = franchise_ophthalmology.get('color_vision', '')
+                if color_vision and color_vision.strip():
+                    ophthalmology_data["color_vision_status"] = color_vision
+                
+                # Add vision_status if available
+                vision_status = franchise_ophthalmology.get('vision_status', '')
+                if vision_status and vision_status.strip():
+                    ophthalmology_data["vision_status"] = vision_status
+                
+                # Only include ophthalmology if there's actual data
+                if not ophthalmology_data:
+                    ophthalmology_data = None
+                    
+            except Exception as e:
+                print(f"Error parsing ophthalmology data: {str(e)}")
+                ophthalmology_data = None
         
         # Get all barcodes for this patient
         barcodes = []
@@ -1274,7 +1377,6 @@ def corporate_health_report(request):
             "patientname": franchise_patient.get("employee_name"),
             "age": franchise_patient.get("age"),
             "gender": franchise_patient.get("gender"),
-            "department": franchise_patient.get("department"),
             "date": franchise_billing.get("created_date"),
             "barcode": barcode,
             "barcodes": barcodes,
@@ -1410,6 +1512,7 @@ def corporate_health_report(request):
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
 
 
 # Add new endpoint to fetch individual files
