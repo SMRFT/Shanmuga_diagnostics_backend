@@ -704,14 +704,11 @@ def get_samplestatus_testvalue(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
-    
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def compare_test_details(request):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client.Diagnostics  # Database name
-
+    db = client.Diagnostics
     core_testdetails_collection = db.core_testdetails
     interface_testvalue_collection = db.interface_testvalue
 
@@ -725,7 +722,6 @@ def compare_test_details(request):
     barcode = request.GET.get('barcode')
     device_id = request.GET.get('device_id')
     source = request.GET.get('source', 'all')
-    # NEW: Get specific test name filter
     test_name_filter = request.GET.get('test_name')
 
     if not barcode:
@@ -770,7 +766,6 @@ def compare_test_details(request):
                     test_name = test_detail.get('test_name', test_code) if test_detail else test_code
                     hms_test_list.append({'testname': test_name, 'test_id': test_code})
 
-        # FILTER BY TEST NAME IF PROVIDED
         if test_name_filter and hms_test_list:
             hms_test_list = [test for test in hms_test_list 
                            if (test.get('testname') == test_name_filter or 
@@ -812,7 +807,6 @@ def compare_test_details(request):
         corporate_test_list = []
         corporate_sample_status_map = {}
 
-        # Billing record for test details and patient info
         billing_record = corporate_billing_collection.find_one({"barcode": barcode})
         if billing_record:
             corporate_patient_id = billing_record.get('patient_id')
@@ -826,13 +820,11 @@ def compare_test_details(request):
             elif isinstance(testdetails, list):
                 corporate_test_list = testdetails
 
-        # FILTER BY TEST NAME IF PROVIDED
         if test_name_filter and corporate_test_list:
             corporate_test_list = [test for test in corporate_test_list 
                                  if (test.get('testname') == test_name_filter or 
                                      test.get('test_name') == test_name_filter)]
 
-        # Sample status record for sample status per test
         try:
             sample_status_detail = corporate_sample_collection.find_one({"barcode": barcode})
             if sample_status_detail:
@@ -908,7 +900,6 @@ def compare_test_details(request):
                             test_name = test_detail.get('test_name', test_code) if test_detail else test_code
                             regular_test_list.append({'test_name': test_name, 'test_id': test_code})
 
-        # FILTER BY TEST NAME IF PROVIDED
         if test_name_filter and regular_test_list:
             regular_test_list = [test for test in regular_test_list 
                                if (test.get('testname') == test_name_filter or 
@@ -1005,12 +996,11 @@ def process_test_data(
     core_testdetails_collection,
     interface_testvalue_collection,
     data_source_type,
-    test_name_filter=None,  # NEW: Add test name filter parameter
+    test_name_filter=None,
 ):
     """
     Helper function to process test data for HMS, Corporate, and Regular sources
-    - Now supports filtering by specific test name
-    - Only queries interface_testvalue for relevant test codes
+    - Now includes sub_title and value_option for parameters
     """
     final_test_data = []
     processed_records = []
@@ -1155,6 +1145,8 @@ def process_test_data(
                         "lab_unique_id": test_value_doc.get("lab_unique_id", "N/A") if test_value_doc else "N/A",
                         "created_date": created_date,
                         "received_date": received_date,
+                        "sub_title": None,  # No subtitle for non-parameterized tests
+                        "value_option": None,  # No value options for non-parameterized tests
                     }
                     final_test_data.append(test_info)
                     continue
@@ -1293,6 +1285,7 @@ def process_test_data(
                         created_date = to_iso_or_str(created_date)
                         received_date = to_iso_or_str(received_date)
 
+                        # IMPORTANT: Include sub_title and value_option from parameter
                         test_info = {
                             "patient_id": patient_id,
                             "patientname": patient_name,
@@ -1316,6 +1309,8 @@ def process_test_data(
                             "lab_unique_id": lab_unique_id,
                             "created_date": created_date,
                             "received_date": received_date,
+                            "sub_title": param.get("sub_title"),  # ADD sub_title
+                            "value_option": param.get("value_option"),  # ADD value_option
                         }
                         final_test_data.append(test_info)
 
@@ -1346,12 +1341,13 @@ def process_test_data(
                     "lab_unique_id": "N/A",
                     "created_date": None,
                     "received_date": None,
+                    "sub_title": None,
+                    "value_option": None,
                 }
                 final_test_data.append(test_info)
 
     return {"test_data": final_test_data, "processed_records": processed_records}
-
-
+    
 def update_processing_status(barcode, test_code, device_id, latest_record_id_str):
     """
     Helper function to update processing status:
