@@ -604,7 +604,8 @@ def get_patient_test_details(request):
                             "specimen_type": test.get("specimen_type", ""),
                             "value": test.get("value", ""),
                             "unit": test.get("unit", ""),
-                            "reference_range": test.get("reference_range", "")
+                            "reference_range": test.get("reference_range", ""),
+                            "sub_title": test.get("sub_title", "")
                         })
                     approved_tests.append(test_detail)
             # Only add patient details if there are approved tests
@@ -619,8 +620,6 @@ def get_patient_test_details(request):
                     "barcode": test_value_record.barcode,
                     "bill_no": bill_no,
                     "barcodes": barcodes,
-                    'email': patient.email if patient else "N/A",
-                    'phone': patient.phone if patient else "N/A",
                     "testdetails": approved_tests,
                     "refby": billing.refby if billing else "N/A",
                     "B2B": billing.B2B if billing else False,
@@ -636,11 +635,7 @@ def get_patient_test_details(request):
             return JsonResponse(all_results, safe=False)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
-  
-
-
-
+    
 @csrf_exempt
 def send_email(request):
     try:

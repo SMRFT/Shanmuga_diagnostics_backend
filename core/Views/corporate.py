@@ -889,8 +889,6 @@ def corporate_overall_report(request):
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
     
-
-
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def corporate_patient_test_details(request):
@@ -962,14 +960,14 @@ def corporate_patient_test_details(request):
         # Build patient details response
         patient_details = {
             "patient_id": employee_id,
-            "patientname": franchise_patient.get("employee_name", "N/A"),
-            "age": franchise_patient.get("age", "N/A"),
+            "patientname": franchise_patient.get("employee_name", ""),
+            "age": franchise_patient.get("age", ""),
             "age_type": franchise_patient.get("age_type", "Years"),
-            "gender": franchise_patient.get("gender", "N/A"),
+            "gender": franchise_patient.get("gender", ""),
             "date": franchise_billing.get("created_date"),
-            "barcode": franchise_billing.get("barcode", "N/A"),
+            "barcode": franchise_billing.get("barcode", ""),
             "barcodes": barcodes,
-            "branch": franchise_billing.get("franchise_id", "N/A"),
+            "branch": franchise_billing.get("franchise_id", ""),
             "refby": "SELF",
             "testdetails": []
         }
@@ -1005,12 +1003,12 @@ def corporate_patient_test_details(request):
                     
                     # Build test detail object - ONLY if we have TestValue data
                     test_response = {
-                        "department": test_detail.get("department", sample_status.get("department", "N/A") if sample_status else "N/A"),
+                        "department": test_detail.get("department", sample_status.get("department", "") if sample_status else ""),
                         "NABL": test_detail.get("NABL", True),
                         "testname": testname,
-                        "verified_by": test_detail.get("verified_by", "N/A"),
-                        "approve_by": test_detail.get("approve_by", "N/A"),
-                        "approve_time": test_detail.get("approve_time", "N/A"),
+                        "verified_by": test_detail.get("verified_by", ""),
+                        "approve_by": test_detail.get("approve_by", ""),
+                        "approve_time": test_detail.get("approve_time", ""),
                         "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
                         "received_time": sample_status.get("received_time") if sample_status else None
                     }
@@ -1021,12 +1019,13 @@ def corporate_patient_test_details(request):
                         processed_parameters = []
                         for param in test_detail.get("parameters", []):
                             processed_param = {
-                                "name": param.get("name", "N/A"),
-                                "value": param.get("value", "N/A"),
-                                "unit": param.get("unit", "N/A"),
-                                "specimen_type": param.get("specimen_type", "N/A"),
-                                "reference_range": param.get("reference_range", "N/A"),
-                                "method": param.get("method", "N/A")
+                                "name": param.get("name", ""),
+                                "value": param.get("value", ""),
+                                "unit": param.get("unit", ""),
+                                "specimen_type": param.get("specimen_type", ""),
+                                "reference_range": param.get("reference_range", ""),
+                                "method": param.get("method", ""),
+                                "sub_title": param.get("sub_title", "")
                             }
                             processed_parameters.append(processed_param)
                         
@@ -1034,11 +1033,11 @@ def corporate_patient_test_details(request):
                     else:
                         # Test without parameters - add direct values
                         test_response.update({
-                            "method": test_detail.get("method", "N/A"),
-                            "specimen_type": test_detail.get("specimen_type", "N/A"),
-                            "value": test_detail.get("value", "N/A"),
-                            "unit": test_detail.get("unit", "N/A"),
-                            "reference_range": test_detail.get("reference_range", "N/A")
+                            "method": test_detail.get("method", ""),
+                            "specimen_type": test_detail.get("specimen_type", ""),
+                            "value": test_detail.get("value", ""),
+                            "unit": test_detail.get("unit", ""),
+                            "reference_range": test_detail.get("reference_range", "")
                         })
                     
                     patient_details["testdetails"].append(test_response)
@@ -1057,7 +1056,6 @@ def corporate_patient_test_details(request):
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
 
 @api_view(['GET'])
 @permission_classes([ HasRoleAndDataPermission])
@@ -1480,6 +1478,8 @@ def corporate_health_report(request):
                                     processed_param["reference_range"] = param.get("reference_range")
                                 if param.get("method"):
                                     processed_param["method"] = param.get("method")
+                                if param.get("sub_title"):
+                                    processed_param["sub_title"] = param.get("sub_title")
                                 
                                 if processed_param:
                                     processed_parameters.append(processed_param)
@@ -1498,6 +1498,8 @@ def corporate_health_report(request):
                                 test_response["unit"] = test_detail.get("unit")
                             if test_detail.get("reference_range"):
                                 test_response["reference_range"] = test_detail.get("reference_range")
+                            if test_detail.get("reference_range"):
+                                test_response["sub_title"] = test_detail.get("sub_title")
                         
                         patient_details["testdetails"].append(test_response)
                         
@@ -1512,9 +1514,7 @@ def corporate_health_report(request):
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
-
-
+    
 # Add new endpoint to fetch individual files
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
