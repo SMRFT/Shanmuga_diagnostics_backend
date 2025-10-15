@@ -42,7 +42,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise-receive(?:/[^/]+)+/$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/get_franchise_Transferred(?:/[^/]+)+/$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/update_franchise_sample(?:/[^/]+)+/$':'SD-P-SSU',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_overall_report/?(\?.*)?$':'SD-API-OAR',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_overall_report/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/franchise_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',  
     '/_b_a_c_k_e_n_d/Diagnostics/get-test-values/':'SD-P-SSU',  
@@ -61,7 +61,7 @@ PAGE_MAPPING = {
 
     #Reports:
 
-    r'^/_b_a_c_k_e_n_d/Diagnostics/overall_report/?(\?.*)?$':'SD-API-OAR',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/overall_report/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/patient_test_sorting/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/get_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
@@ -100,9 +100,14 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/corporate-receive(?:/[^/]+)+/$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/get_corporate_Transferred(?:/[^/]+)+/$':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/Diagnostics/update_corporate_sample(?:/[^/]+)+/$':'SD-P-SSU',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_overall_report/?(\?.*)?$':'SD-API-OAR',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_overall_report/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_patient_test_details/?(\?.*)?$':'SD-P-POV',
-    r'^/_b_a_c_k_e_n_d/Diagnostics/get-corporate-test-values(?:/[^/]+)+/$':'SD-P-POV', 
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get-corporate-test-values(?:/[^/]+)+/$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_approval_report/?(\?.*)?$':'SD-P-CHC',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/corporate_health_report/?(\?.*)?$':'SD-P-CHC',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get_investigation_file/?(\?.*)?$':'SD-P-CHC',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get_investigation_status/?(\?.*)?$':'SD-P-CHC',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/save_overall_approval/?(\?.*)?$':'SD-P-CHC',
 
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms_get_sample_collected/?(\?.*)?$':'SD-P-HMSGC',
     r'^/_b_a_c_k_e_n_d/Diagnostics/hms_update_sample_collected(?:/[^/]+)+/$':'SD-P-HMSUC',

@@ -30,11 +30,6 @@ import re
 @permission_classes([HasRoleAndDataPermission])
 def get_test_values(request):
     client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
-    db = client.franchise
-    billing_col = db.franchise_billing
-    patient_col = db.franchise_patient
-
-    # corp db
     corp = client.Corporatehealthcheckup
     billing_collection = corp.core_billing
     patient_collection = corp.core_employeeregistration
@@ -44,9 +39,8 @@ def get_test_values(request):
     patient_id_filter = request.GET.get('patient_id')
     testname_filter = request.GET.get('testname')
 
-    patients = TestValue.objects.all()
-
-    # Date filters
+    # 🟢 1️⃣ Pre-filter Django data in one query
+    patients = TestValue.objects.all().only('barcode', 'testdetails', 'date', 'created_date')
     if from_date and to_date:
         try:
             parsed_from_date = datetime.strptime(from_date, '%Y-%m-%d').date()
@@ -54,113 +48,73 @@ def get_test_values(request):
             patients = patients.filter(date__gte=parsed_from_date, date__lte=parsed_to_date)
         except ValueError:
             return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
-
     patients = patients.order_by('-date')
 
-    # Process testname filter
-    if testname_filter and testname_filter != 'undefined':
-        testname_filter = unquote_plus(testname_filter)
+    # 🟢 2️⃣ Collect all barcodes to batch MongoDB lookups
+    barcode_list = [str(p.barcode).zfill(5) for p in patients if p.barcode]
+    barcode_to_patient = {}
+
+    if barcode_list:
+        mongo_docs = list(billing_collection.find({"barcode": {"$in": barcode_list}}, {"barcode": 1, "employee_id": 1}))
+        emp_ids = [doc.get("employee_id") for doc in mongo_docs if doc.get("employee_id")]
+        emp_docs = list(patient_collection.find({"employee_id": {"$in": emp_ids}}, {"employee_id": 1, "employee_name": 1, "age": 1}))
+
+        emp_map = {emp["employee_id"]: emp for emp in emp_docs}
+        for doc in mongo_docs:
+            emp_id = doc.get("employee_id")
+            if emp_id in emp_map:
+                barcode_to_patient[str(doc["barcode"])] = {
+                    "patient_id": emp_id,
+                    "patientname": emp_map[emp_id].get("employee_name", "N/A"),
+                    "age": emp_map[emp_id].get("age", "N/A")
+                }
+
+    # 🟢 3️⃣ Process testname filter once
+    def normalize_testname(name):
+        if not name:
+            return ""
+        normalized = re.sub(r'\s+', ' ', name.strip().lower())
+        normalized = normalized.replace('&', 'and').replace('/', ' ')
+        return normalized
+
+    filter_normalized = normalize_testname(testname_filter) if testname_filter and testname_filter != 'undefined' else None
 
     patient_data = []
 
+    # 🟢 4️⃣ Iterate with pre-fetched Mongo data
     for patient in patients:
+        barcode_val = str(patient.barcode).zfill(5)
+        lookup = barcode_to_patient.get(barcode_val, {})
+        current_patient_id = lookup.get("patient_id") or getattr(patient, 'patient_id', None)
+
+        # Skip if patient_id filter doesn’t match
+        if patient_id_filter and current_patient_id != patient_id_filter:
+            continue
+
+        patient_name = lookup.get("patientname", "N/A")
+        patient_age = lookup.get("age", "N/A")
+
+        # Parse testdetails once
         try:
             test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails
         except (json.JSONDecodeError, TypeError):
             test_details = []
 
-        # defaults
-        patient_name, patient_age, current_patient_id = "N/A", "N/A", None
-
-        # 1️⃣ BarcodeTestDetails (local model)
-        barcode_details = BarcodeTestDetails.objects.filter(barcode=str(patient.barcode).zfill(5)).first()
-        if barcode_details:
-            current_patient_id = barcode_details.patient_id
-            patient_record = Patient.objects.filter(patient_id=current_patient_id).first()
-            if patient_record:
-                patient_name = patient_record.patientname
-                patient_age = patient_record.age
-
-        # 2️⃣ MongoDB franchise_billing → franchise_patient
-        if not current_patient_id:
-            barcode_val = str(patient.barcode).zfill(5)
-            billing_doc = billing_col.find_one({"barcode": barcode_val})
-            if billing_doc:
-                current_patient_id = billing_doc.get("patient_id")
-                patient_doc = patient_col.find_one({"patient_id": current_patient_id})
-                if patient_doc:
-                    patient_name = patient_doc.get("patientname", "N/A")
-                    patient_age = patient_doc.get("age", "N/A")
-
-        # 3️⃣ HMS Billing (Django models)
-        if not current_patient_id:
-            barcode_val = str(patient.barcode).zfill(5)
-            hms_barcode = Hmsbarcode.objects.filter(barcode=barcode_val).first()
-            if hms_barcode:
-                hms_billing = HmspatientBilling.objects.filter(billnumber=hms_barcode.billnumber).first()
-                if hms_billing:
-                    current_patient_id = hms_billing.patient_id
-                    patient_name = hms_billing.patientname
-                    patient_age = hms_billing.age
-
-            if not current_patient_id:
-                hms_sample = Hmssamplestatus.objects.filter(barcode=barcode_val).first()
-                if hms_sample:
-                    hms_billing = HmspatientBilling.objects.filter(billnumber=hms_sample.barcode).first()
-                    if hms_billing:
-                        current_patient_id = hms_billing.patient_id
-                        patient_name = hms_billing.patientname
-                        patient_age = hms_billing.age
-
-        # 4️⃣ corp manage lookup
-        if not current_patient_id:
-            corp_doc = billing_collection.find_one({"barcode": str(patient.barcode)})
-            if corp_doc:
-                current_patient_id = corp_doc.get("employee_id")
-                emp_doc = patient_collection.find_one({"employee_id": current_patient_id})
-                if emp_doc:
-                    patient_name = emp_doc.get("employee_name", "N/A")
-                    patient_age = emp_doc.get("age", "N/A")
-
-        # 5️⃣ Final fallback
-        if not current_patient_id:
-            current_patient_id = getattr(patient, 'patient_id', None)
-
-        # Patient ID filter
-        if patient_id_filter and current_patient_id != patient_id_filter:
-            continue
-
-        # Testname filtering
-        if testname_filter and testname_filter != 'undefined':
-            def normalize_testname(name):
-                if not name:
-                    return ""
-                normalized = re.sub(r'\s+', ' ', name.strip().lower())
-                normalized = normalized.replace('&', 'and')
-                normalized = normalized.replace('/', ' ')
-                return normalized
-
-            filter_normalized = normalize_testname(testname_filter)
+        # Testname filter
+        if filter_normalized:
             filtered_test_details = []
             for test in test_details:
-                test_name = test.get('testname', '')
-                test_normalized = normalize_testname(test_name)
-                match_found = (
-                    test_normalized == filter_normalized or
-                    filter_normalized in test_normalized or
-                    test_normalized in filter_normalized or
-                    all(word in test_normalized for word in filter_normalized.split() if len(word) > 2)
-                )
-                if match_found:
+                test_name = normalize_testname(test.get('testname', ''))
+                if (
+                    test_name == filter_normalized or
+                    filter_normalized in test_name or
+                    all(word in test_name for word in filter_normalized.split() if len(word) > 2)
+                ):
                     filtered_test_details.append(test)
             test_details = filtered_test_details
 
         # Only pending tests
-        filtered_tests = [
-            test for test in test_details
-            if not test.get('approve', False) and not test.get('rerun', False)
-        ]
-
+        filtered_tests = [t for t in test_details if not t.get('approve', False) and not t.get('rerun', False)]
         if not filtered_tests:
             continue
 
@@ -168,7 +122,7 @@ def get_test_values(request):
             "patient_id": current_patient_id,
             "patientname": patient_name,
             "age": patient_age,
-            "barcode": str(patient.barcode).zfill(5),
+            "barcode": barcode_val,
             "date": patient.date,
             "created_date": patient.created_date,
             "testdetails": filtered_tests
@@ -216,6 +170,9 @@ def approve_test_detail(request, patient_id, test_index):
             return JsonResponse({"message": "Test detail approved successfully."})
         return JsonResponse({"error": "Failed to update test detail."}, status=500)
     return JsonResponse({"error": "Invalid test index."}, status=400)
+
+
+
 @api_view(["PATCH"])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])

@@ -133,12 +133,15 @@ urlpatterns = [
 
 
     #Corporate Reports:
+#Corporate Reports:     
     path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
     path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),
-    path('get-corporate-test-values/', corporate.get_corporate_test_value, name='get_corporate_test_value'),
-    path("get-corporate-file/<str:file_id>/", corporate.get_pdf_from_gridfs_corporate, name="get_corporate_pdf"),
+    path('corporate_approval_report/', corporate.corporate_approval_report, name='corporate_approval_report'),
     path('corporate_health_report/', corporate.corporate_health_report, name='corporate_health_report'),
     path('get_investigation_file/', corporate.get_investigation_file, name='get_investigation_file'),
+    path('get_investigation_status/', corporate.get_investigation_status, name='get_investigation_status'),
+    path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
+    path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
 
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),

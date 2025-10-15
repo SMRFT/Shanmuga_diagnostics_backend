@@ -343,7 +343,7 @@ def hms_overall_report(request):
         return JsonResponse({"error": str(e)}, status=500)
     
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def get_hms_patient_test_details(request):
     barcode = request.GET.get('barcode')
     
@@ -437,7 +437,8 @@ def get_hms_patient_test_details(request):
                             "specimen_type": test.get("specimen_type", ""),
                             "value": test.get("value", ""),
                             "unit": test.get("unit", ""),
-                            "reference_range": test.get("reference_range", "")
+                            "reference_range": test.get("reference_range", ""),
+                            "sub_title": test.get("sub_title", "")
                         })
                     
                     approved_tests.append(test_detail)
