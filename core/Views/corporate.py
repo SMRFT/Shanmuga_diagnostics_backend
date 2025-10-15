@@ -285,11 +285,11 @@ def update_corporate_sample(request,barcode):
                         test_entry = None
                         for entry in testdetails:
                             test_match = (
-                                (testname and entry.get("testname") == testname) or
+                                (testname and entry.get("testname") == testname) or 
                                 (test_id and entry.get("test_id") == test_id)
                             )
                             batch_match = (
-                                batch_number is None or
+                                batch_number is None or 
                                 entry.get("batch_number") == batch_number
                             )
                            

@@ -472,7 +472,7 @@ def get_hms_patient_test_details(request):
             
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
+    
 @csrf_exempt
 def hms_send_email(request):
     try:

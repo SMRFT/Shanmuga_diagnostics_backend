@@ -704,8 +704,6 @@ def get_samplestatus_testvalue(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
-    
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def compare_test_details(request):
@@ -1351,6 +1349,8 @@ def process_test_data(
     return {"test_data": final_test_data, "processed_records": processed_records}
 
 
+    return {"test_data": final_test_data, "processed_records": processed_records}
+    
 def update_processing_status(barcode, test_code, device_id, latest_record_id_str):
     """
     Helper function to update processing status:
