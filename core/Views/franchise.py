@@ -784,6 +784,7 @@ def franchise_overall_report(request):
                 "gender": patient_detail.get("gender", "N/A"),  # From franchise_patient
                 "refby": patient.get("referredDoctor", "N/A"),
                 "age": age,
+                "age_type": age_type,
                 "email": patient_detail.get("email", "N/A"),  # From franchise_patient             
                 "branch": patient.get("franchise_id", "N/A"),  # Use franchise_id as branch               
                 "total_amount": total_amount,

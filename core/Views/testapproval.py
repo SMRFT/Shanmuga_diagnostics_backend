@@ -22,9 +22,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-
-from urllib.parse import unquote_plus
-import re
 from urllib.parse import unquote_plus
 import re
 
@@ -174,6 +171,9 @@ def approve_test_detail(request, patient_id, test_index):
             return JsonResponse({"message": "Test detail approved successfully."})
         return JsonResponse({"error": "Failed to update test detail."}, status=500)
     return JsonResponse({"error": "Invalid test index."}, status=400)
+
+
+
 @api_view(["PATCH"])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])

@@ -1347,6 +1347,9 @@ def process_test_data(
                 final_test_data.append(test_info)
 
     return {"test_data": final_test_data, "processed_records": processed_records}
+
+
+    return {"test_data": final_test_data, "processed_records": processed_records}
     
 def update_processing_status(barcode, test_code, device_id, latest_record_id_str):
     """
