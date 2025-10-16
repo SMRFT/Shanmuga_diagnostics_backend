@@ -1702,22 +1702,18 @@ def get_investigation_status(request):
     barcode = request.GET.get('barcode')
     if not barcode:
         return JsonResponse({'error': 'Barcode is required'}, status=400)
-   
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
-       
         franchise_investigation_collection = db.core_investigation
         franchise_ophthalmology_collection = db.core_ophthalmology
         franchise_sample_collection = db.core_sample
-
         investigation = franchise_investigation_collection.find_one({"barcode": barcode})
         ophthalmology = franchise_ophthalmology_collection.find_one({"barcode": barcode})
-
         investigation_status = {}
         if investigation:
             investigation_status = {
-                "xray_report": investigation.get("status", "pending"),
+                "xray_report": "approved" if investigation.get("xray_report") else "pending",
                 "xrayfilm_file": "approved" if investigation.get("xrayfilm_file") else "pending",
                 "ecg_file": "approved" if investigation.get("ecg_file") else "pending",
                 "pft_file": "approved" if investigation.get("pft_file") else "pending",
@@ -1727,11 +1723,9 @@ def get_investigation_status(request):
                 "audiometry_notes": investigation.get("audiometry_notes", ""),
                 "xray_notes": investigation.get("xray_notes", "")
             }
-       
         ophthalmology_status = None
         if ophthalmology:
             ophthalmology_status = ophthalmology.get("status", "pending")
-
         total_sample_tests = 0
         try:
             franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
@@ -1742,7 +1736,6 @@ def get_investigation_status(request):
             total_sample_tests = len(sample_tests)
         except Exception:
             total_sample_tests = 0
-
         approved_tests_count = 0
         try:
             # Fetching testdetails from TestValue model
@@ -1756,21 +1749,16 @@ def get_investigation_status(request):
         except Exception as e:
             print(f"Error calculating approved_tests_count: {e}")
             approved_tests_count = 0
-
         lab_approval = "approved" if (total_sample_tests > 0 and approved_tests_count >= total_sample_tests) else "pending"
-
         client.close()
-       
         return JsonResponse({
             'success': True,
             'investigation': investigation_status,
             'ophthalmology': ophthalmology_status,
             'lab_approval': lab_approval,
         })
-       
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
 
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])

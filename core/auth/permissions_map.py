@@ -14,7 +14,6 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/Diagnostics/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/Diagnostics/clinical_name/':'SD-API-CN',
 
-
     #barcode:
     r'^/_b_a_c_k_e_n_d/Diagnostics/patients_get_barcode/?(\?.*)?$': 'SD-P-BG',
     '/_b_a_c_k_e_n_d/Diagnostics/get-max-barcode/': 'SD-P-BTD',
