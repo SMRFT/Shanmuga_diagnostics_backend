@@ -52,7 +52,7 @@ def get_samplestatus_testvalue(request):
         from_date_str = request.query_params.get('from_date', None)
         to_date_str = request.query_params.get('to_date', None)
         date_str = request.query_params.get('date', None)
-        source = request.query_params.get('source', 'all')  # 'hms', 'regular', or 'all'
+        source = request.query_params.get('source', 'all')
         
         # Determine date range
         if from_date_str and to_date_str:
@@ -73,13 +73,8 @@ def get_samplestatus_testvalue(request):
         else:
             return Response({"error": "Either 'date' or both 'from_date' and 'to_date' parameters are required."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Initialize combined results
-        combined_results = []
-        processed_barcodes = {}
-        
         # Helper function to safely convert datetime to string
         def safe_datetime_to_string(dt_obj):
-            """Convert datetime object to string safely"""
             if dt_obj is None:
                 return None
             if isinstance(dt_obj, str):
@@ -88,342 +83,303 @@ def get_samplestatus_testvalue(request):
                 return dt_obj.isoformat()
             return str(dt_obj)
         
-        # Process HMS Sample Status (if source is 'hms' or 'all')
+        # ============================================
+        # OPTIMIZATION 1: Collect all barcodes first
+        # ============================================
+        all_barcodes = set()
+        sample_data_by_barcode = {}
+        
+        # Collect barcodes from HMS
         if source in ['hms', 'all']:
-            hms_sample_statuses = Hmssamplestatus.objects.filter(
+            hms_samples = Hmssamplestatus.objects.filter(
                 date__gte=start_of_range,
                 date__lte=end_of_range
-            ).order_by('-date', '-created_date')
+            ).select_related().order_by('-created_date')
             
-            for sample_status in hms_sample_statuses:
-                try:
-                    testdetails = json.loads(sample_status.testdetails) if isinstance(sample_status.testdetails, str) else sample_status.testdetails
-                except json.JSONDecodeError:
-                    continue
-                
-                filtered_tests = [
-                    test for test in testdetails
-                    if test.get('samplestatus') in ['Received', 'Outsource']
-                ]
-                
-                if filtered_tests:
-                    barcode = sample_status.barcode
-                    
-                    if barcode not in processed_barcodes or sample_status.created_date > processed_barcodes[barcode]['created_date']:
-                        # Default values
-                        patient_name = "Unknown Patient"
-                        patient_id = "Unknown ID"
-                        age = "Unknown"
-                        gender = "Unknown"
-                        
-                        try:
-                            # Get HMS barcode details
-                            barcode_details = Hmsbarcode.objects.get(barcode=barcode)
-                            billnumber = barcode_details.billnumber
-                            
-                            # Try to match billing using billnumber
-                            try:
-                                billing_details = HmspatientBilling.objects.get(billnumber=billnumber)
-                                patient_name = billing_details.patientname
-                                patient_id = billing_details.patient_id
-                                age = billing_details.age
-                                gender = billing_details.gender
-                            except HmspatientBilling.DoesNotExist:
-                                pass
-                                
-                        except Hmsbarcode.DoesNotExist:
-                            if hasattr(sample_status, 'patient_id'):
-                                patient_id = sample_status.patient_id
-                        
-                        # Get TestValue data for HMS
-                        all_test_values = TestValue.objects.filter(
-                            barcode=barcode
-                        ).order_by('-created_date', '-lastmodified_date')
-                        
-                        updated_tests = []
-                        for test in filtered_tests:
-                            test_name = test.get('testname', '').strip().lower()
-                            test_code = test.get('testcode', test_name).strip().lower()
-                            
-                            test.update({
-                                'rerun': False,
-                                'approve': False,
-                                'test_value_exists': False,
-                                'approve_time': None,
-                                'rerun_time': None,
-                                'approve_by': None
-                            })
-                            
-                            matching_value = None
-                            for tv in all_test_values:
-                                try:
-                                    tv_details = json.loads(tv.testdetails) if isinstance(tv.testdetails, str) else tv.testdetails
-                                except Exception:
-                                    tv_details = []
-                                
-                                for tv_test in tv_details:
-                                    tv_test_name = tv_test.get('testname', '').strip().lower()
-                                    tv_test_code = tv_test.get('testcode', tv_test_name).strip().lower()
-                                    
-                                    if tv_test_name == test_name or tv_test_code == test_code:
-                                        matching_value = tv_test
-                                        break
-                                if matching_value:
-                                    break
-                            
-                            if matching_value:
-                                test.update({
-                                    'test_value_exists': True,
-                                    'approve': bool(matching_value.get('approve', False)),
-                                    'rerun': bool(matching_value.get('rerun', False)),
-                                    'approve_time': matching_value.get('approve_time'),
-                                    'rerun_time': matching_value.get('rerun_time'),
-                                    'approve_by': matching_value.get('approve_by')
-                                })
-                            
-                            updated_tests.append(test)
-                        
-                        sample_status_dict = {
-                            'id': sample_status.id,
-                            'created_by': sample_status.created_by,
-                            'created_date': safe_datetime_to_string(sample_status.created_date),
-                            'lastmodified_by': sample_status.lastmodified_by,
-                            'lastmodified_date': safe_datetime_to_string(sample_status.lastmodified_date),
-                            'patient_id': patient_id,
-                            'patientname': patient_name,
-                            'age': age,
-                            'gender': gender,
-                            'barcode': barcode,
-                            'date': safe_datetime_to_string(sample_status.date),
-                            'testdetails': updated_tests,
-                            'data_source': 'hms_django_model'
-                        }
-                        
-                        processed_barcodes[barcode] = {
-                            'created_date': sample_status.created_date,
-                            'data': sample_status_dict
-                        }
+            for sample in hms_samples:
+                barcode = sample.barcode
+                all_barcodes.add(barcode)
+                if barcode not in sample_data_by_barcode:
+                    sample_data_by_barcode[barcode] = {
+                        'source': 'hms',
+                        'sample': sample,
+                        'created_date': sample.created_date
+                    }
         
-        # Process Regular Sample Status (if source is 'regular' or 'all')
+        # Collect barcodes from Regular
         if source in ['regular', 'all']:
-            regular_sample_statuses = SampleStatus.objects.filter(
+            regular_samples = SampleStatus.objects.filter(
                 date__gte=start_of_range, 
                 date__lte=end_of_range
-            ).order_by('-date', '-created_date')
+            ).select_related().order_by('-created_date')
             
-            for sample_status in regular_sample_statuses:
-                try:
-                    testdetails = json.loads(sample_status.testdetails) if isinstance(sample_status.testdetails, str) else sample_status.testdetails
-                except json.JSONDecodeError:
+            for sample in regular_samples:
+                barcode = sample.barcode
+                all_barcodes.add(barcode)
+                if barcode not in sample_data_by_barcode or sample.created_date > sample_data_by_barcode[barcode]['created_date']:
+                    sample_data_by_barcode[barcode] = {
+                        'source': 'regular',
+                        'sample': sample,
+                        'created_date': sample.created_date
+                    }
+        
+        # ============================================
+        # OPTIMIZATION 2: Bulk fetch all related data
+        # ============================================
+        
+        # Fetch ALL TestValues for all barcodes in ONE query
+        test_values_by_barcode = {}
+        if all_barcodes:
+            all_test_values = TestValue.objects.filter(
+                barcode__in=all_barcodes
+            ).order_by('barcode', '-created_date', '-lastmodified_date')
+            
+            # Group by barcode for O(1) lookup
+            for tv in all_test_values:
+                if tv.barcode not in test_values_by_barcode:
+                    test_values_by_barcode[tv.barcode] = []
+                test_values_by_barcode[tv.barcode].append(tv)
+        
+        # Fetch all HMS barcode details in one query
+        hms_barcodes_dict = {}
+        if source in ['hms', 'all'] and all_barcodes:
+            hms_barcodes = Hmsbarcode.objects.filter(
+                barcode__in=all_barcodes
+            ).select_related()
+            hms_barcodes_dict = {hb.barcode: hb for hb in hms_barcodes}
+        
+        # Fetch all HMS billing details in one query
+        hms_billing_dict = {}
+        if source in ['hms', 'all'] and hms_barcodes_dict:
+            billnumbers = [hb.billnumber for hb in hms_barcodes_dict.values() if hasattr(hb, 'billnumber')]
+            if billnumbers:
+                hms_billings = HmspatientBilling.objects.filter(
+                    billnumber__in=billnumbers
+                )
+                hms_billing_dict = {hb.billnumber: hb for hb in hms_billings}
+        
+        # Fetch all regular barcode details in one query
+        regular_barcodes_dict = {}
+        if source in ['regular', 'all'] and all_barcodes:
+            regular_barcodes = BarcodeTestDetails.objects.filter(
+                barcode__in=all_barcodes
+            )
+            regular_barcodes_dict = {rb.barcode: rb for rb in regular_barcodes}
+        
+        # ============================================
+        # OPTIMIZATION 3: Process with cached data
+        # ============================================
+        
+        def parse_testdetails(testdetails_raw):
+            """Cache-friendly test details parser"""
+            try:
+                return json.loads(testdetails_raw) if isinstance(testdetails_raw, str) else testdetails_raw
+            except (json.JSONDecodeError, TypeError):
+                return []
+        
+        def match_test_values(test, barcode, test_values_by_barcode):
+            """Optimized test value matching with pre-fetched data"""
+            test_name = test.get('testname', '').strip().lower()
+            test_code = test.get('testcode', test_name).strip().lower()
+            
+            test.update({
+                'rerun': False,
+                'approve': False,
+                'test_value_exists': False,
+                'approve_time': None,
+                'rerun_time': None,
+                'approve_by': None
+            })
+            
+            # Use cached test values
+            test_values = test_values_by_barcode.get(barcode, [])
+            
+            for tv in test_values:
+                tv_details = parse_testdetails(tv.testdetails)
+                
+                for tv_test in tv_details:
+                    tv_test_name = tv_test.get('testname', '').strip().lower()
+                    tv_test_code = tv_test.get('testcode', tv_test_name).strip().lower()
+                    
+                    if tv_test_name == test_name or tv_test_code == test_code:
+                        test.update({
+                            'test_value_exists': True,
+                            'approve': bool(tv_test.get('approve', False)),
+                            'rerun': bool(tv_test.get('rerun', False)),
+                            'approve_time': tv_test.get('approve_time'),
+                            'rerun_time': tv_test.get('rerun_time'),
+                            'approve_by': tv_test.get('approve_by')
+                        })
+                        return test
+            
+            return test
+        
+        combined_results = []
+        
+        # Process HMS samples
+        if source in ['hms', 'all']:
+            for barcode, data in sample_data_by_barcode.items():
+                if data['source'] != 'hms':
                     continue
+                
+                sample_status = data['sample']
+                testdetails = parse_testdetails(sample_status.testdetails)
                 
                 filtered_tests = [
                     test for test in testdetails
                     if test.get('samplestatus') in ['Received', 'Outsource']
                 ]
                 
-                if filtered_tests:
-                    barcode = sample_status.barcode
-                    
-                    # Check if this is the latest document for this barcode
-                    if barcode not in processed_barcodes or sample_status.created_date > processed_barcodes[barcode]['created_date']:
-                        try:
-                            barcode_details = BarcodeTestDetails.objects.get(barcode=barcode)
-                            patient_name = barcode_details.patientname
-                            patient_id = barcode_details.patient_id
-                            age = barcode_details.age
-                            gender = barcode_details.gender
-                        except BarcodeTestDetails.DoesNotExist:
-                            patient_name = "Unknown Patient"
-                            patient_id = sample_status.patient_id if hasattr(sample_status, 'patient_id') else "Unknown ID"
-                            age = "Unknown"
-                            gender = "Unknown"
-                        
-                        # Get TestValue data for regular
-                        all_test_values = TestValue.objects.filter(
-                            barcode=barcode
-                        ).order_by('-created_date', '-lastmodified_date')
-                        
-                        updated_tests = []
-                        for test in filtered_tests:
-                            test_name = test.get('testname', '').strip().lower()
-                            test_code = test.get('testcode', test_name).strip().lower()
-                            
-                            # Default values
-                            test['rerun'] = False
-                            test['approve'] = False
-                            test['test_value_exists'] = False
-                            test['approve_time'] = None
-                            test['rerun_time'] = None
-                            test['approve_by'] = None
-                            
-                            matching_value = None
-                            # Loop through all TestValues until we find the latest matching one
-                            for tv in all_test_values:
-                                try:
-                                    tv_details = json.loads(tv.testdetails) if isinstance(tv.testdetails, str) else tv.testdetails
-                                except Exception:
-                                    tv_details = []
-                                
-                                for tv_test in tv_details:
-                                    tv_test_name = tv_test.get('testname', '').strip().lower()
-                                    tv_test_code = tv_test.get('testcode', tv_test_name).strip().lower()
-                                    
-                                    if tv_test_name == test_name or tv_test_code == test_code:
-                                        matching_value = tv_test
-                                        break
-                                
-                                if matching_value:
-                                    break
-                            
-                            # If we found a match, update the test with values
-                            if matching_value:
-                                test['test_value_exists'] = True
-                                test['approve'] = bool(matching_value.get('approve', False))
-                                test['rerun'] = bool(matching_value.get('rerun', False))
-                                test['approve_time'] = matching_value.get('approve_time')
-                                test['rerun_time'] = matching_value.get('rerun_time')
-                                test['approve_by'] = matching_value.get('approve_by')
-                            
-                            updated_tests.append(test)
-                        
-                        sample_status_dict = {
-                            'id': sample_status.id,
-                            'created_by': sample_status.created_by,
-                            'created_date': safe_datetime_to_string(sample_status.created_date),
-                            'lastmodified_by': sample_status.lastmodified_by,
-                            'lastmodified_date': safe_datetime_to_string(sample_status.lastmodified_date),
-                            'patient_id': patient_id,
-                            'patientname': patient_name,
-                            'age': age,
-                            'gender': gender,
-                            'barcode': barcode,
-                            'date': safe_datetime_to_string(sample_status.date),
-                            'testdetails': updated_tests,
-                            'data_source': 'regular_django_model'
-                        }
-                        
-                        processed_barcodes[barcode] = {
-                            'created_date': sample_status.created_date,
-                            'data': sample_status_dict
-                        }
+                if not filtered_tests:
+                    continue
                 
-        # ✅ Process CHC Sample Status (if source is 'chc' or 'all')
-       
+                # Use cached barcode and billing data
+                patient_name = "Unknown Patient"
+                patient_id = "Unknown ID"
+                age = "Unknown"
+                gender = "Unknown"
+                
+                barcode_details = hms_barcodes_dict.get(barcode)
+                if barcode_details:
+                    billing_details = hms_billing_dict.get(barcode_details.billnumber)
+                    if billing_details:
+                        patient_name = billing_details.patientname
+                        patient_id = billing_details.patient_id
+                        age = billing_details.age
+                        gender = billing_details.gender
+                elif hasattr(sample_status, 'patient_id'):
+                    patient_id = sample_status.patient_id
+                
+                # Match test values
+                updated_tests = [
+                    match_test_values(test, barcode, test_values_by_barcode)
+                    for test in filtered_tests
+                ]
+                
+                combined_results.append({
+                    'id': sample_status.id,
+                    'created_by': sample_status.created_by,
+                    'created_date': safe_datetime_to_string(sample_status.created_date),
+                    'lastmodified_by': sample_status.lastmodified_by,
+                    'lastmodified_date': safe_datetime_to_string(sample_status.lastmodified_date),
+                    'patient_id': patient_id,
+                    'patientname': patient_name,
+                    'age': age,
+                    'gender': gender,
+                    'barcode': barcode,
+                    'date': safe_datetime_to_string(sample_status.date),
+                    'testdetails': updated_tests,
+                    'data_source': 'hms_django_model'
+                })
+        
+        # Process Regular samples
+        if source in ['regular', 'all']:
+            for barcode, data in sample_data_by_barcode.items():
+                if data['source'] != 'regular':
+                    continue
+                
+                sample_status = data['sample']
+                testdetails = parse_testdetails(sample_status.testdetails)
+                
+                filtered_tests = [
+                    test for test in testdetails
+                    if test.get('samplestatus') in ['Received', 'Outsource']
+                ]
+                
+                if not filtered_tests:
+                    continue
+                
+                # Use cached barcode data
+                barcode_details = regular_barcodes_dict.get(barcode)
+                if barcode_details:
+                    patient_name = barcode_details.patientname
+                    patient_id = barcode_details.patient_id
+                    age = barcode_details.age
+                    gender = barcode_details.gender
+                else:
+                    patient_name = "Unknown Patient"
+                    patient_id = sample_status.patient_id if hasattr(sample_status, 'patient_id') else "Unknown ID"
+                    age = "Unknown"
+                    gender = "Unknown"
+                
+                # Match test values
+                updated_tests = [
+                    match_test_values(test, barcode, test_values_by_barcode)
+                    for test in filtered_tests
+                ]
+                
+                combined_results.append({
+                    'id': sample_status.id,
+                    'created_by': sample_status.created_by,
+                    'created_date': safe_datetime_to_string(sample_status.created_date),
+                    'lastmodified_by': sample_status.lastmodified_by,
+                    'lastmodified_date': safe_datetime_to_string(sample_status.lastmodified_date),
+                    'patient_id': patient_id,
+                    'patientname': patient_name,
+                    'age': age,
+                    'gender': gender,
+                    'barcode': barcode,
+                    'date': safe_datetime_to_string(sample_status.date),
+                    'testdetails': updated_tests,
+                    'data_source': 'regular_django_model'
+                })
+        
+        # ============================================
+        # CHC MongoDB Processing (Optimized)
+        # ============================================
         if source in ['chc', 'all']:
             try:
-                print("🔍 Checking CHC samples...")
-                print("👉 start_of_range:", start_of_range)
-                print("👉 end_of_range:", end_of_range)
-
-                # Connect to CHC MongoDB
                 client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
                 corp = client.Corporatehealthcheckup
                 sample_collection = corp.core_sample
                 billing_collection = corp.core_billing
                 patient_collection = corp.core_employeeregistration
 
-                # Query MongoDB for CHC samples within date range
                 chc_query = {
-                    "created_date": {
-                        "$gte": start_of_range,
-                        "$lt": end_of_range
-                    }
+                    "created_date": {"$gte": start_of_range, "$lt": end_of_range}
                 }
                 chc_samples = list(sample_collection.find(chc_query).sort("created_date", -1))
-                print(f"👉 Total CHC samples found: {len(chc_samples)}")
-
-                chc_processed_barcodes = {}
-
+                
+                # Bulk fetch CHC barcodes
+                chc_barcodes = [s.get('barcode') for s in chc_samples if s.get('barcode')]
+                
+                # Bulk fetch billing and patient data
+                billing_map = {b['barcode']: b for b in billing_collection.find({"barcode": {"$in": chc_barcodes}})}
+                employee_ids = [b.get('employee_id') for b in billing_map.values() if b.get('employee_id')]
+                patient_map = {p['employee_id']: p for p in patient_collection.find({"employee_id": {"$in": employee_ids}})}
+                
+                # Bulk fetch TestValues for CHC barcodes
+                chc_test_values_by_barcode = {}
+                if chc_barcodes:
+                    chc_tvs = TestValue.objects.filter(barcode__in=chc_barcodes).order_by('barcode', '-created_date')
+                    for tv in chc_tvs:
+                        if tv.barcode not in chc_test_values_by_barcode:
+                            chc_test_values_by_barcode[tv.barcode] = []
+                        chc_test_values_by_barcode[tv.barcode].append(tv)
+                
+                chc_processed = {}
                 for record in chc_samples:
-                    if '_id' in record:
-                        record['_id'] = str(record['_id'])
-
                     barcode = record.get('barcode', '')
-
-                    # Skip if already processed (keep latest only)
-                    if barcode in processed_barcodes or (
-                        barcode in chc_processed_barcodes and record.get('created_date') <= chc_processed_barcodes[barcode]['created_date']
-                    ):
+                    if not barcode or barcode in chc_processed:
                         continue
-
-                    try:
-                        testdetails = record['testdetails'] if isinstance(record['testdetails'], list) else json.loads(record['testdetails'])
-                    except Exception:
-                        continue
-
-                    # Filter only "Received" or "Outsource" tests
-                    filtered_tests = [
-                        test for test in testdetails
-                        if test.get('samplestatus') in ['Received', 'Outsource']
-                    ]
-
+                    
+                    testdetails = parse_testdetails(record.get('testdetails'))
+                    filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received', 'Outsource']]
+                    
                     if not filtered_tests:
                         continue
-
-                    # Get related billing details
-                    billing = billing_collection.find_one({"barcode": barcode}) or {}
-                    print(f"👉 Processing barcode: {barcode}, Billing found: {'Yes' if billing else 'No'}")
-                    patient_id = billing.get("employee_id", None)
-                    employee_id = patient_id
-                    print(f"👉 Employee ID: {employee_id}")
-
-                    # Get patient details
-                    patient = patient_collection.find_one({"employee_id": patient_id}) if patient_id else {}
-                    patient_name = patient.get("employee_name", "Unknown Patient")
-                    age = patient.get("age", "Unknown")
-                    gender = patient.get("gender", "Unknown")
-
-                    # Fetch TestValue data from Django DB
-                    all_test_values = TestValue.objects.filter(
-                        barcode=barcode
-                    ).order_by('-created_date', '-lastmodified_date')
-
-                    updated_tests = []
-                    for test in filtered_tests:
-                        test_name = test.get('testname', '').strip().lower()
-                        test_code = test.get('testcode', test_name).strip().lower()
-
-                        test.update({
-                            'rerun': False,
-                            'approve': False,
-                            'test_value_exists': False,
-                            'approve_time': None,
-                            'rerun_time': None,
-                            'approve_by': None
-                        })
-
-                        matching_value = None
-                        for tv in all_test_values:
-                            try:
-                                tv_details = json.loads(tv.testdetails) if isinstance(tv.testdetails, str) else tv.testdetails
-                            except Exception:
-                                tv_details = []
-
-                            for tv_test in tv_details:
-                                tv_test_name = tv_test.get('testname', '').strip().lower()
-                                tv_test_code = tv_test.get('testcode', tv_test_name).strip().lower()
-                                if tv_test_name == test_name or tv_test_code == test_code:
-                                    matching_value = tv_test
-                                    break
-                            if matching_value:
-                                break
-
-                        if matching_value:
-                            test.update({
-                                'test_value_exists': True,
-                                'approve': bool(matching_value.get('approve', False)),
-                                'rerun': bool(matching_value.get('rerun', False)),
-                                'approve_time': matching_value.get('approve_time'),
-                                'rerun_time': matching_value.get('rerun_time'),
-                                'approve_by': matching_value.get('approve_by')
-                            })
-
-                        updated_tests.append(test)
-
-                    # Build final CHC dict
-                    sample_dict = {
-                        'id': record.get('_id'),
+                    
+                    billing = billing_map.get(barcode, {})
+                    employee_id = billing.get("employee_id")
+                    patient = patient_map.get(employee_id, {})
+                    
+                    updated_tests = [
+                        match_test_values(test, barcode, chc_test_values_by_barcode)
+                        for test in filtered_tests
+                    ]
+                    
+                    combined_results.append({
+                        'id': str(record.get('_id')),
                         'created_by': record.get('created_by', ''),
                         'created_date': safe_datetime_to_string(record.get('created_date')),
                         'lastmodified_by': record.get('lastmodified_by', ''),
@@ -431,278 +387,110 @@ def get_samplestatus_testvalue(request):
                         'barcode': barcode,
                         'company_id': record.get('company_id', ''),
                         'patient_id': employee_id or 'Unknown ID',
-                        'patientname': patient_name,
+                        'patientname': patient.get("employee_name", "Unknown Patient"),
                         'date': safe_datetime_to_string(record.get('date')),
-                        'age': age,
-                        'gender': gender,
+                        'age': patient.get("age", "Unknown"),
+                        'gender': patient.get("gender", "Unknown"),
                         'testdetails': updated_tests,
                         'data_source': 'chc_mongodb'
-                    }
-
-                    chc_processed_barcodes[barcode] = {
-                        'created_date': record.get('created_date'),
-                        'data': sample_dict
-                    }
-
-                # Add CHC MongoDB results to combined_results
-                for barcode_data in chc_processed_barcodes.values():
-                    combined_results.append(barcode_data['data'])
-
+                    })
+                    chc_processed[barcode] = True
+                
                 client.close()
-
-            except Exception as chc_error:
-                print(f"CHC MongoDB error: {str(chc_error)}")
-
-        # Add Django model results to combined_results
-        for barcode_data in processed_barcodes.values():
-            combined_results.append(barcode_data['data'])
+            except Exception as e:
+                print(f"CHC MongoDB error: {str(e)}")
         
-        # Process MongoDB data (if source is 'regular' or 'all')
-        mongodb_processed_barcodes = {}
-        
+        # ============================================
+        # Regular MongoDB Processing (Optimized)
+        # ============================================
         if source in ['regular', 'all']:
             try:
-                # Connect to MongoDB
                 client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
                 db = client.franchise
                 sample_collection = db.franchise_sample
                 billing_collection = db.franchise_billing
                 patient_collection = db.franchise_patient
                 
-                # Query MongoDB for records within the date range
                 mongo_query = {
-                    "created_date": {
-                        "$gte": start_of_range,
-                        "$lt": end_of_range
-                    }
+                    "created_date": {"$gte": start_of_range, "$lt": end_of_range}
                 }
+                mongodb_samples = list(sample_collection.find(mongo_query).sort("created_date", -1))
                 
-                # Fetch data from MongoDB sample collection - order by created_date desc to get latest first
-                mongodb_sample_records = list(sample_collection.find(mongo_query).sort("created_date", -1))
+                # Bulk fetch billing and patient data
+                mongo_barcodes = [s.get('barcode') for s in mongodb_samples if s.get('barcode')]
+                billing_map = {b['barcode']: b for b in billing_collection.find({"barcode": {"$in": mongo_barcodes}})}
+                patient_ids = [b.get('patient_id') for b in billing_map.values() if b.get('patient_id')]
+                patient_map = {p['patient_id']: p for p in patient_collection.find({"patient_id": {"$in": patient_ids}})}
                 
-                # Extract all unique barcodes from the sample records
-                barcodes = set()
-                for record in mongodb_sample_records:
-                    if 'barcode' in record and record['barcode']:
-                        barcodes.add(record['barcode'])
+                # Bulk fetch TestValues
+                mongo_test_values_by_barcode = {}
+                if mongo_barcodes:
+                    mongo_tvs = TestValue.objects.filter(barcode__in=mongo_barcodes).order_by('barcode', '-created_date')
+                    for tv in mongo_tvs:
+                        if tv.barcode not in mongo_test_values_by_barcode:
+                            mongo_test_values_by_barcode[tv.barcode] = []
+                        mongo_test_values_by_barcode[tv.barcode].append(tv)
                 
-                # Fetch billing data for all barcodes in one query
-                billing_data = {}
-                if barcodes:
-                    billing_query = {"barcode": {"$in": list(barcodes)}}
-                    billings = list(billing_collection.find(billing_query))
-                    
-                    # Create a dictionary for quick lookup: barcode -> patient_id
-                    for billing in billings:
-                        billing_data[billing.get('barcode')] = billing.get('patient_id')
-                
-                # Extract all unique patient_ids from billing data
-                patient_ids = set(billing_data.values())
-                patient_ids.discard(None)  # Remove None values
-                
-                # Fetch patient data for all patient_ids in one query
-                patient_data = {}
-                if patient_ids:
-                    patient_query = {"patient_id": {"$in": list(patient_ids)}}
-                    patients = list(patient_collection.find(patient_query))
-                    
-                    # Create a dictionary for quick lookup: patient_id -> patient_details
-                    for patient in patients:
-                        patient_data[patient.get('patient_id')] = {
-                            'patientname': patient.get('patientname', ''),
-                            'age': patient.get('age', ''),
-                            'gender': patient.get('gender', ''),
-                            'phoneNumber': patient.get('phoneNumber', ''),
-                            'email': patient.get('email', ''),
-                            'city': patient.get('city', ''),
-                            'area': patient.get('area', ''),
-                            'pincode': patient.get('pincode', ''),
-                            'dateOfBirth': patient.get('dateOfBirth', '')
-                        }
-                
-                # Process MongoDB records - only keep the latest document per barcode
-                for record in mongodb_sample_records:
-                    # Convert ObjectId to string for JSON serialization
-                    if '_id' in record:
-                        record['_id'] = str(record['_id'])
-                    
-                    # Get barcode and franchise_id from sample record
+                mongo_processed = {}
+                for record in mongodb_samples:
                     barcode = record.get('barcode', '')
-                    franchise_id = record.get('franchise_id', '')
-                    
-                    # Skip if we already processed a newer document for this barcode
-                    # or if this barcode already exists in Django results (Django takes precedence)
-                    if barcode in processed_barcodes:
+                    if not barcode or barcode in all_barcodes or barcode in mongo_processed:
                         continue
-                        
-                    if barcode in mongodb_processed_barcodes:
-                        # Compare created_date to see if this is newer
-                        if record.get('created_date') <= mongodb_processed_barcodes[barcode]['created_date']:
-                            continue
                     
-                    # Get patient_id from billing data using barcode
-                    patient_id = billing_data.get(barcode)
+                    testdetails = parse_testdetails(record.get('testdetails'))
+                    filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received', 'Outsource']]
                     
-                    # Get patient details using patient_id
-                    if patient_id and patient_id in patient_data:
-                        patient_details = patient_data[patient_id]
-                        patient_name = patient_details['patientname']
-                        age = patient_details['age']
-                        gender = patient_details['gender']
-                        phone_number = patient_details['phoneNumber']
-                        email = patient_details['email']
-                        city = patient_details['city']
-                        area = patient_details['area']
-                        pincode = patient_details['pincode']
-                        date_of_birth = patient_details['dateOfBirth']
-                    else:
-                        # Set default values if patient not found
-                        patient_name = 'Unknown Patient'
-                        age = 'Unknown'
-                        gender = 'Unknown'
-                        phone_number = ''
-                        email = ''
-                        city = ''
-                        area = ''
-                        pincode = ''
-                        date_of_birth = ''
+                    if not filtered_tests:
+                        continue
                     
-                    # Check if the record has testdetails and apply similar filtering
-                    if 'testdetails' in record:
-                        try:
-                            testdetails = record['testdetails'] if isinstance(record['testdetails'], list) else json.loads(record['testdetails'])
-                            
-                            # Filter tests with samplestatus 'Received' or 'Outsource'
-                            filtered_tests = [
-                                test for test in testdetails
-                                if test.get('samplestatus') in ['Received', 'Outsource']
-                            ]
-                            
-                            if filtered_tests:
-                                # Get ALL TestValues for this barcode (most recent created_date first)
-                                all_test_values = TestValue.objects.filter(
-                                    barcode=barcode
-                                ).order_by('-created_date', '-lastmodified_date')
-                                
-                                updated_tests = []
-                                for test in filtered_tests:
-                                    test_name = test.get('testname', '').strip().lower()
-                                    test_code = test.get('testcode', test_name).strip().lower()
-                                    
-                                    # Default values
-                                    test['rerun'] = False
-                                    test['approve'] = False
-                                    test['test_value_exists'] = False
-                                    test['approve_time'] = None
-                                    test['rerun_time'] = None
-                                    test['approve_by'] = None
-                                    
-                                    matching_value = None
-                                    # Loop through all TestValues until we find the latest matching one
-                                    for tv in all_test_values:
-                                        try:
-                                            tv_details = json.loads(tv.testdetails) if isinstance(tv.testdetails, str) else tv.testdetails
-                                        except Exception:
-                                            tv_details = []
-                                        
-                                        for tv_test in tv_details:
-                                            tv_test_name = tv_test.get('testname', '').strip().lower()
-                                            tv_test_code = tv_test.get('testcode', tv_test_name).strip().lower()
-                                            
-                                            if tv_test_name == test_name or tv_test_code == test_code:
-                                                matching_value = tv_test
-                                                break  # Found latest, stop inner loop
-                                        
-                                        if matching_value:
-                                            break  # Stop outer loop too, we found the most recent match
-                                    
-                                    # If we found a match, update the test with values
-                                    if matching_value:
-                                        test['test_value_exists'] = True
-                                        test['approve'] = bool(matching_value.get('approve', False))
-                                        test['rerun'] = bool(matching_value.get('rerun', False))
-                                        test['approve_time'] = matching_value.get('approve_time')
-                                        test['rerun_time'] = matching_value.get('rerun_time')
-                                        test['approve_by'] = matching_value.get('approve_by')
-                                    
-                                    updated_tests.append(test)
-                                
-                                # Create a standardized record format with proper datetime conversion
-                                mongo_record_dict = {
-                                    'id': str(record.get('_id', '')),
-                                    'created_by': record.get('created_by', ''),
-                                    'created_date': safe_datetime_to_string(record.get('created_date')),
-                                    'lastmodified_by': record.get('lastmodified_by', ''),
-                                    'lastmodified_date': safe_datetime_to_string(record.get('lastmodified_date')),
-                                    'patient_id': patient_id or 'Unknown ID',
-                                    'patientname': patient_name,
-                                    'age': age,
-                                    'gender': gender,
-                                    'phoneNumber': phone_number,
-                                    'email': email,
-                                    'city': city,
-                                    'area': area,
-                                    'pincode': pincode,
-                                    'dateOfBirth': date_of_birth,
-                                    'barcode': barcode,
-                                    'franchise_id': franchise_id,
-                                    'date': safe_datetime_to_string(record.get('created_date')),  # Using created_date as date
-                                    'testdetails': updated_tests,
-                                    'data_source': 'mongodb'
-                                }
-                                
-                                # Store this as the latest document for this barcode
-                                mongodb_processed_barcodes[barcode] = {
-                                    'created_date': record.get('created_date'),
-                                    'data': mongo_record_dict
-                                }
-                        except (json.JSONDecodeError, TypeError):
-                            # If testdetails cannot be parsed, skip this record
-                            continue
+                    patient_id = billing_map.get(barcode, {}).get('patient_id')
+                    patient = patient_map.get(patient_id, {})
+                    
+                    updated_tests = [
+                        match_test_values(test, barcode, mongo_test_values_by_barcode)
+                        for test in filtered_tests
+                    ]
+                    
+                    combined_results.append({
+                        'id': str(record.get('_id', '')),
+                        'created_by': record.get('created_by', ''),
+                        'created_date': safe_datetime_to_string(record.get('created_date')),
+                        'lastmodified_by': record.get('lastmodified_by', ''),
+                        'lastmodified_date': safe_datetime_to_string(record.get('lastmodified_date')),
+                        'patient_id': patient_id or 'Unknown ID',
+                        'patientname': patient.get('patientname', 'Unknown Patient'),
+                        'age': patient.get('age', 'Unknown'),
+                        'gender': patient.get('gender', 'Unknown'),
+                        'phoneNumber': patient.get('phoneNumber', ''),
+                        'email': patient.get('email', ''),
+                        'city': patient.get('city', ''),
+                        'area': patient.get('area', ''),
+                        'pincode': patient.get('pincode', ''),
+                        'dateOfBirth': patient.get('dateOfBirth', ''),
+                        'barcode': barcode,
+                        'company_id': record.get('franchise_id', ''),
+                        'date': safe_datetime_to_string(record.get('created_date')),
+                        'testdetails': updated_tests,
+                        'data_source': 'mongodb'
+                    })
+                    mongo_processed[barcode] = True
                 
-                # Add MongoDB results to combined_results
-                for barcode_data in mongodb_processed_barcodes.values():
-                    combined_results.append(barcode_data['data'])
-                
-                # Close MongoDB connection
                 client.close()
-                
-            except Exception as mongo_error:
-                # If MongoDB connection fails, continue with just Django model data
-                print(f"MongoDB connection error: {str(mongo_error)}")
+            except Exception as e:
+                print(f"MongoDB error: {str(e)}")
         
-        # FIXED: Safe sorting with datetime conversion
-        def safe_sort_key(item):
-            """Extract date for sorting, handling mixed datetime types"""
-            date_value = item.get('date', '')
-            if not date_value:
-                return ''
-            
-            # If it's already a string, return as is for sorting
-            if isinstance(date_value, str):
-                return date_value
-            
-            # If it's a datetime object, convert to string
-            if hasattr(date_value, 'isoformat'):
-                return date_value.isoformat()
-            
-            # Fallback to string conversion
-            return str(date_value)
-        
-        # Sort combined results by date (most recent first) using safe key
-        try:
-            combined_results.sort(key=safe_sort_key, reverse=True)
-        except Exception as sort_error:
-            print(f"Sort error: {sort_error}")
-            # If sorting fails, return unsorted results
-            pass
+        # Sort results
+        combined_results.sort(key=lambda x: x.get('date', ''), reverse=True)
         
         return Response(combined_results, status=status.HTTP_200_OK)
         
-    except ValueError as ve:
+    except ValueError:
         return Response({"error": "Invalid date format. Use YYYY-MM-DD format."}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+    
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -1145,8 +933,8 @@ def process_test_data(
                         "lab_unique_id": test_value_doc.get("lab_unique_id", "N/A") if test_value_doc else "N/A",
                         "created_date": created_date,
                         "received_date": received_date,
-                        "sub_title": None,  # No subtitle for non-parameterized tests
-                        "value_option": None,  # No value options for non-parameterized tests
+                        "sub_title": None,
+                        "value_option": test_detail.get("value_option", []),  # ADD THIS LINE - Extract value_option from test_detail
                     }
                     final_test_data.append(test_info)
                     continue
