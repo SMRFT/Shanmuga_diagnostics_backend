@@ -635,11 +635,7 @@ def get_patient_test_details(request):
             return JsonResponse(all_results, safe=False)
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
-  
-
-
-
+    
 @csrf_exempt
 def send_email(request):
     try:
