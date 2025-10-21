@@ -1780,6 +1780,130 @@ def get_investigation_status(request):
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
 
+@api_view(['POST'])
+@csrf_exempt 
+@permission_classes([HasRoleAndDataPermission])
+def get_batch_investigation_status(request):
+    """
+    Get investigation and ophthalmology status for multiple patients in one call
+    """
+    barcodes = request.data.get('barcodes', [])
+    
+    if not barcodes or not isinstance(barcodes, list):
+        return JsonResponse({'error': 'Barcodes array is required'}, status=400)
+    
+    # Normalize barcodes to strings to avoid type mismatches
+    barcodes = [str(bc) for bc in barcodes]
+    
+    print(f"Processing {len(barcodes)} barcodes: {barcodes[:5]}...")  # Debug
+    
+    try:
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        
+        franchise_investigation_collection = db.core_investigation
+        franchise_ophthalmology_collection = db.core_ophthalmology
+        franchise_sample_collection = db.core_sample
+
+        # Fetch all investigations at once
+        investigations = list(franchise_investigation_collection.find(
+            {"barcode": {"$in": barcodes}}
+        ))
+        print(f"Found {len(investigations)} investigations")
+        
+        # Fetch all ophthalmology records at once
+        ophthalmologies = list(franchise_ophthalmology_collection.find(
+            {"barcode": {"$in": barcodes}}
+        ))
+        print(f"Found {len(ophthalmologies)} ophthalmology records")
+        
+        # Fetch all sample records at once
+        samples = list(franchise_sample_collection.find(
+            {"barcode": {"$in": barcodes}}
+        ))
+        print(f"Found {len(samples)} sample records")
+        
+        # Fetch all test values at once
+        test_value_records = TestValue.objects.filter(barcode__in=barcodes)
+        print(f"Found {len(test_value_records)} test value records")
+        
+        # Create maps for quick lookup - normalize barcode keys to strings
+        investigation_map = {str(inv['barcode']): inv for inv in investigations}
+        ophthalmology_map = {str(oph['barcode']): oph for oph in ophthalmologies}
+        sample_map = {str(samp['barcode']): samp for samp in samples}
+        
+        # Process test values
+        approved_tests_map = {}
+        for record in test_value_records:
+            barcode = str(record.barcode)
+            td = record.testdetails
+            tests_list = json.loads(td) if isinstance(td, str) else (td or [])
+            approved_count = sum(1 for t in tests_list if isinstance(t, dict) and t.get("approve"))
+            approved_tests_map[barcode] = approved_tests_map.get(barcode, 0) + approved_count
+        
+        # Build response for all barcodes
+        results = {}
+        for barcode in barcodes:
+            barcode_str = str(barcode)
+            investigation = investigation_map.get(barcode_str)
+            ophthalmology = ophthalmology_map.get(barcode_str)
+            sample = sample_map.get(barcode_str)
+            
+            # Investigation status - default to empty dict if no investigation found
+            investigation_status = {}
+            if investigation:
+                investigation_status = {
+                    "xray_report": "approved" if investigation.get("xray_report") else "pending",
+                    "xrayfilm_file": "approved" if investigation.get("xrayfilm_file") else "pending",
+                    "ecg_file": "approved" if investigation.get("ecg_file") else "pending",
+                    "pft_file": "approved" if investigation.get("pft_file") else "pending",
+                    "audiometric_file": "approved" if investigation.get("audiometric_file") else "pending",
+                }
+            else:
+                # Default all to pending if no investigation record
+                investigation_status = {
+                    "xray_report": "pending",
+                    "xrayfilm_file": "pending",
+                    "ecg_file": "pending",
+                    "pft_file": "pending",
+                    "audiometric_file": "pending",
+                }
+            
+            # Ophthalmology status
+            ophthalmology_status = "pending"
+            if ophthalmology:
+                ophthalmology_status = ophthalmology.get("status", "pending")
+            
+            # Lab approval calculation
+            total_sample_tests = 0
+            if sample and sample.get('testdetails'):
+                raw = sample.get('testdetails')
+                sample_tests = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                total_sample_tests = len(sample_tests)
+            
+            approved_tests_count = approved_tests_map.get(barcode_str, 0)
+            lab_approval = "approved" if (total_sample_tests > 0 and approved_tests_count >= total_sample_tests) else "pending"
+            
+            # Use barcode_str as key to ensure consistency
+            results[barcode_str] = {
+                'investigation': investigation_status,
+                'ophthalmology': ophthalmology_status,
+                'lab_approval': lab_approval,
+            }
+        
+        client.close()
+        
+        print(f"Returning results for {len(results)} barcodes")
+        
+        return JsonResponse({
+            'success': True,
+            'results': results
+        })
+        
+    except Exception as e:
+        print(f"Error in batch status fetch: {e}")
+        print(traceback.format_exc())
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])

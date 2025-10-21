@@ -67,6 +67,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/Diagnostics/upload-pdf/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/credit_amount/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/Diagnostics/update-credit/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/Diagnostics/get_batch_investigation_status/?(\?.*)?$':'SD-P-CHC',
 
     # Invoice URLs
     r'/_b_a_c_k_e_n_d/Diagnostics/get_clinicalname_invoice/': 'SD-API-IVM',
