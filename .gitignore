@@ -2,19 +2,26 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.pyd
 
-# Virtual environment
+# Virtual environments
 venv/
+.venv/
 env/
 ENV/
-.venv/
 
-# IDE / Editor settings
+# Django
+*.log
+db.sqlite3
+media/
+staticfiles/
+*.pot
+*.pyc
+*.mo
+
+# IDE / Editor
 .vscode/
 .idea/
 
-# OS files
+# macOS
 .DS_Store
-venv/
-__pycache__/
-*.py[cod]
