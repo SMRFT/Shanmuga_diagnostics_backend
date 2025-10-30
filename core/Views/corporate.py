@@ -1958,3 +1958,398 @@ def save_overall_approval(request):
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+@api_view(['POST'])
+@permission_classes([HasRoleAndDataPermission])
+def get_batch_corporate_health_reports(request):
+    """
+    Get multiple corporate health reports in one call for batch PDF generation
+    """
+    barcodes = request.data.get('barcodes', [])
+    
+    if not barcodes or not isinstance(barcodes, list):
+        return JsonResponse({'error': 'Barcodes array is required'}, status=400)
+    
+    if len(barcodes) > 100:
+        return JsonResponse({'error': 'Maximum 100 barcodes allowed per batch'}, status=400)
+    
+    # Normalize barcodes to strings
+    barcodes = [str(bc) for bc in barcodes]
+    
+    print(f"Processing batch of {len(barcodes)} barcodes")
+    
+    try:
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        
+        # Collections
+        franchise_billing_collection = db.core_billing
+        franchise_sample_collection = db.core_sample
+        franchise_patient_collection = db.core_employeeregistration
+        franchise_investigation_collection = db.core_investigation
+        franchise_ophthalmology_collection = db.core_ophthalmology
+        franchise_overall_approval_collection = db.overallApproval
+        franchise_company_collection = db.core_company
+        
+        results = {}
+        
+        for barcode in barcodes:
+            try:
+                # Get franchise billing data
+                franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
+                if not franchise_billing:
+                    results[barcode] = {'error': 'Billing record not found'}
+                    continue
+                
+                employee_id = franchise_billing.get('employee_id')
+                if not employee_id:
+                    results[barcode] = {'error': 'Employee ID not found'}
+                    continue
+                
+                # Get patient data
+                franchise_patient = franchise_patient_collection.find_one({"employee_id": employee_id})
+                if not franchise_patient:
+                    results[barcode] = {'error': 'Patient not found'}
+                    continue
+                
+                # Get company data
+                company_data = None
+                company_id = franchise_patient.get("company_id")
+                if company_id:
+                    company_data = franchise_company_collection.find_one({"company_id": company_id})
+                
+                # Get sample data
+                franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
+                
+                # Get investigation data (only if status is approved)
+                franchise_investigation = franchise_investigation_collection.find_one({
+                    "barcode": barcode,
+                    "status": "approved"
+                })
+                
+                # Get ophthalmology data (only if status is approved)
+                franchise_ophthalmology = franchise_ophthalmology_collection.find_one({
+                    "barcode": barcode,
+                    "status": "approved"
+                })
+                
+                # Get overall approval data
+                franchise_overall_approval = franchise_overall_approval_collection.find_one({
+                    "barcode": barcode,
+                    "status": "approved"
+                })
+                
+                # Get test values from Django model
+                test_values = TestValue.objects.filter(barcode=barcode)
+                
+                # Parse vitals from investigation
+                vitals_data = {}
+                if franchise_investigation:
+                    try:
+                        vitals_raw = json.loads(franchise_investigation.get('vitals', '{}'))
+                        for key, value in vitals_raw.items():
+                            if value and str(value).strip() and str(value).strip() != "0":
+                                vitals_data[key] = value
+                    except json.JSONDecodeError:
+                        vitals_data = {}
+                
+                # Store investigation notes (WITHOUT file IDs for simple PDF)
+                investigation_notes = {}
+                
+                if franchise_investigation:
+                    # Notes only - no file IDs
+                    for note_field, key in [
+                        ("ecg_notes", "ecg_notes"),
+                        ("pft_notes", "pft_notes"),
+                        ("audiometry_notes", "audiometry_notes"),
+                        ("xray_notes", "xray_notes"),
+                        ("xray_report", "xray_report")
+                    ]:
+                        note_value = franchise_investigation.get(note_field)
+                        if note_value and note_value.strip():
+                            investigation_notes[key] = note_value
+                
+                # Parse medical history
+                medical_history_data = {}
+                if franchise_investigation:
+                    patient_history = franchise_investigation.get("patient_history")
+                    if patient_history and patient_history.strip():
+                        if patient_history.lower() not in ["nil", "nil significant", "no previous history", "none"]:
+                            medical_history_data["patient_history"] = patient_history
+                
+                # Parse clinical examination
+                clinical_examination_data = {}
+                if franchise_investigation:
+                    for field in ["cardiovascular_system", "respiratory_system", "central_nervous_system", 
+                                 "locomotor_system", "skin"]:
+                        value = franchise_investigation.get(field)
+                        if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
+                            clinical_examination_data[field] = value
+                
+                # Parse ophthalmology data (same as original)
+                ophthalmology_data = None
+                if franchise_ophthalmology:
+                    try:
+                        ophthalmology_data = {}
+                        
+                        visual_acuity_str = franchise_ophthalmology.get('visual_acuity', '')
+                        
+                        if visual_acuity_str:
+                            try:
+                                json_array_str = '[' + visual_acuity_str + ']'
+                                parsed_array = json.loads(json_array_str)
+                                
+                                parsed_va = {}
+                                for obj in parsed_array:
+                                    parsed_va.update(obj)
+                                
+                                visual_acuity_data = {}
+                                
+                                if parsed_va.get("distance"):
+                                    visual_acuity_data["distance"] = {
+                                        "right": str(parsed_va.get("distance", {}).get("right", "6/6")),
+                                        "left": str(parsed_va.get("distance", {}).get("left", "6/6"))
+                                    }
+                                
+                                if parsed_va.get("nearVision"):
+                                    visual_acuity_data["near_vision"] = {
+                                        "right": str(parsed_va.get("nearVision", {}).get("right", "N-6")),
+                                        "left": str(parsed_va.get("nearVision", {}).get("left", "N-6"))
+                                    }
+                                
+                                if parsed_va.get("colourVision"):
+                                    visual_acuity_data["color_vision"] = {
+                                        "right": str(parsed_va.get("colourVision", {}).get("right", "Normal")),
+                                        "left": str(parsed_va.get("colourVision", {}).get("left", "Normal"))
+                                    }
+                                
+                                if parsed_va.get("ocularmovement"):
+                                    visual_acuity_data["ocularmovement"] = {
+                                        "right": str(parsed_va.get("ocularmovement", {}).get("right", "Normal")),
+                                        "left": str(parsed_va.get("ocularmovement", {}).get("left", "Normal"))
+                                    }
+                                
+                                if visual_acuity_data:
+                                    ophthalmology_data["visual_acuity"] = visual_acuity_data
+                                    
+                            except (json.JSONDecodeError, KeyError, AttributeError, TypeError) as e:
+                                print(f"Error parsing visual_acuity: {str(e)}")
+                        
+                        remarks = franchise_ophthalmology.get('remarks', '')
+                        if remarks and remarks.strip():
+                            ophthalmology_data["remarks"] = remarks
+                        
+                        patient_complaints = franchise_ophthalmology.get('patient_complaints', '')
+                        if patient_complaints and patient_complaints.strip():
+                            ophthalmology_data["patient_complaints"] = patient_complaints
+                        
+                        right_eye = franchise_ophthalmology.get('right_eye')
+                        if right_eye:
+                            try:
+                                ophthalmology_data["right_eye"] = json.loads(right_eye) if isinstance(right_eye, str) else right_eye
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        left_eye = franchise_ophthalmology.get('left_eye')
+                        if left_eye:
+                            try:
+                                ophthalmology_data["left_eye"] = json.loads(left_eye) if isinstance(left_eye, str) else left_eye
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        color_vision = franchise_ophthalmology.get('color_vision', '')
+                        if color_vision and color_vision.strip():
+                            ophthalmology_data["color_vision_status"] = color_vision
+                        
+                        vision_status = franchise_ophthalmology.get('vision_status', '')
+                        if vision_status and vision_status.strip():
+                            ophthalmology_data["vision_status"] = vision_status
+                        
+                        optometrist_name = franchise_ophthalmology.get('optometrist_name', '')
+                        if optometrist_name and optometrist_name.strip():
+                            ophthalmology_data["optometrist_name"] = optometrist_name
+                        
+                        if not ophthalmology_data:
+                            ophthalmology_data = None
+                            
+                    except Exception as e:
+                        print(f"Error parsing ophthalmology data: {str(e)}")
+                        ophthalmology_data = None
+                
+                # Parse sample testdetails
+                sample_testdetails = []
+                if franchise_sample:
+                    try:
+                        sample_testdetails = json.loads(franchise_sample.get('testdetails', '[]'))
+                    except json.JSONDecodeError:
+                        sample_testdetails = []
+                
+                # Build patient details response
+                patient_details = {
+                    "patient_id": employee_id,
+                    "patientname": franchise_patient.get("employee_name"),
+                    "age": franchise_patient.get("age"),
+                    "gender": franchise_patient.get("gender"),
+                    "date": franchise_billing.get("created_date"),
+                    "barcode": barcode,
+                    "testdetails": []
+                }
+                
+                # Add company_name
+                if company_data and company_data.get("company_name"):
+                    patient_details["company_name"] = company_data.get("company_name")
+                
+                # Add department if exists
+                if franchise_patient.get("department"):
+                    patient_details["department"] = franchise_patient.get("department")
+                
+                # Add dob if exists
+                if franchise_patient.get("dob"):
+                    patient_details["dob"] = franchise_patient.get("dob")
+                
+                # Add vitals if data exists
+                if vitals_data:
+                    patient_details["vitals"] = {}
+                    for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2"]:
+                        if vitals_data.get(key):
+                            display_key = key.replace("_cm", "").replace("_kg", "")
+                            patient_details["vitals"][display_key] = vitals_data.get(key)
+                
+                # Add medical history if data exists
+                if medical_history_data:
+                    patient_details["medical_history"] = medical_history_data
+                
+                # Add clinical examination if data exists
+                if clinical_examination_data:
+                    patient_details["clinical_examination"] = clinical_examination_data
+                
+                # Add ophthalmology if data exists
+                if ophthalmology_data:
+                    patient_details["ophthalmology"] = ophthalmology_data
+                
+                # Add investigation notes (NO file IDs)
+                if investigation_notes:
+                    patient_details["investigation_notes"] = investigation_notes
+                
+                # Add final assessment
+                if franchise_overall_approval:
+                    final_assessment = {}
+                    
+                    impression = franchise_overall_approval.get("impression", "")
+                    if impression and impression.strip():
+                        final_assessment["impression"] = impression
+                    
+                    remarks = franchise_overall_approval.get("remarks", "")
+                    if remarks and remarks.strip():
+                        final_assessment["remarks"] = remarks
+                    
+                    if final_assessment:
+                        patient_details["final_assessment"] = final_assessment
+                
+                # Process lab tests from TestValue model
+                if test_values.exists():
+                    for test_value in test_values:
+                        try:
+                            testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
+                            if not isinstance(testvalue_details, list):
+                                continue
+                            
+                            for test_detail in testvalue_details:
+                                testname = test_detail.get("testname")
+                                if not testname:
+                                    continue
+                                
+                                # Find corresponding sample status
+                                sample_status = None
+                                for sample_test in sample_testdetails:
+                                    if sample_test.get("testname") == testname:
+                                        sample_status = sample_test
+                                        break
+                                
+                                # Build test detail object
+                                test_response = {"testname": testname}
+                                
+                                if test_detail.get("department"):
+                                    test_response["department"] = test_detail.get("department")
+                                
+                                if test_detail.get("verified_by"):
+                                    test_response["verified_by"] = test_detail.get("verified_by")
+                                
+                                if test_detail.get("approve_by"):
+                                    test_response["approve_by"] = test_detail.get("approve_by")
+                                
+                                if test_detail.get("approve_time"):
+                                    test_response["approve_time"] = test_detail.get("approve_time")
+                                
+                                if sample_status:
+                                    if sample_status.get("samplecollected_time"):
+                                        test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
+                                    if sample_status.get("received_time"):
+                                        test_response["received_time"] = sample_status.get("received_time")
+                                
+                                # Check if test has parameters
+                                if test_detail.get("parameters"):
+                                    processed_parameters = []
+                                    for param in test_detail.get("parameters", []):
+                                        processed_param = {}
+                                        
+                                        if param.get("name"):
+                                            processed_param["name"] = param.get("name")
+                                        if param.get("value"):
+                                            processed_param["value"] = param.get("value")
+                                        if param.get("unit"):
+                                            processed_param["unit"] = param.get("unit")
+                                        if param.get("specimen_type"):
+                                            processed_param["specimen_type"] = param.get("specimen_type")
+                                        if param.get("reference_range"):
+                                            processed_param["reference_range"] = param.get("reference_range")
+                                        if param.get("method"):
+                                            processed_param["method"] = param.get("method")
+                                        if param.get("sub_title"):
+                                            processed_param["sub_title"] = param.get("sub_title")
+                                        
+                                        if processed_param:
+                                            processed_parameters.append(processed_param)
+                                    
+                                    if processed_parameters:
+                                        test_response["parameters"] = processed_parameters
+                                else:
+                                    # Add individual test fields
+                                    if test_detail.get("method"):
+                                        test_response["method"] = test_detail.get("method")
+                                    if test_detail.get("specimen_type"):
+                                        test_response["specimen_type"] = test_detail.get("specimen_type")
+                                    if test_detail.get("value"):
+                                        test_response["value"] = test_detail.get("value")
+                                    if test_detail.get("unit"):
+                                        test_response["unit"] = test_detail.get("unit")
+                                    if test_detail.get("reference_range"):
+                                        test_response["reference_range"] = test_detail.get("reference_range")
+                                    if test_detail.get("sub_title"):
+                                        test_response["sub_title"] = test_detail.get("sub_title")
+                                
+                                patient_details["testdetails"].append(test_response)
+                                
+                        except (json.JSONDecodeError, AttributeError) as e:
+                            print(f"Error processing test: {str(e)}")
+                            continue
+                
+                results[barcode] = patient_details
+                
+            except Exception as e:
+                print(f"Error processing barcode {barcode}: {str(e)}")
+                results[barcode] = {'error': str(e)}
+        
+        client.close()
+        
+        return JsonResponse({
+            'success': True,
+            'results': results,
+            'total': len(barcodes),
+            'processed': len(results)
+        })
+        
+    except Exception as e:
+        print(f"Batch processing error: {str(e)}")
+        print(traceback.format_exc())
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)

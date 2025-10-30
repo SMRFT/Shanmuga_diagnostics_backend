@@ -143,6 +143,7 @@ urlpatterns = [
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('get_batch_investigation_status/', corporate.get_batch_investigation_status, name='get_batch_investigation_status'),
+    path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),
     path('hms_sample_status/', hmssamplestatus.hms_sample_status, name='hms_sample_status'),
