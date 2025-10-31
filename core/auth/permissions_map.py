@@ -117,6 +117,9 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
+
+
+    r'^/_b_a_c_k_e_n_d/Diagnostics/generate_barcodes_pdf_bulk/?(\?.*)?$':'SD-P-CHC',
 }
 
 PAGE_ACTION_MAPPING = {

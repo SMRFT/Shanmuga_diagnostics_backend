@@ -6,7 +6,7 @@ from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
-
+from .Views import preetham_hospital_report
 
 urlpatterns = [
     path('create_patient/', patients.create_patient, name='create_patient'),
@@ -29,7 +29,6 @@ urlpatterns = [
     path('check_sample_status/<str:patient_id>/', sample.check_sample_status, name='check_sample_status'),
     path('sample_statusupdate/<str:patient_id>/', sample.patch_sample_status, name='patch_sample_status'),
 
-
     path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
     path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
 
@@ -39,7 +38,6 @@ urlpatterns = [
     path('save-barcodes/', barcode.save_barcodes, name='save_barcodes'),
     path('get-existing-barcode/',barcode.get_existing_barcode, name='get_latest_bill_no'),
 
-    
     #Test Values:
     path('samplestatus-testvalue/', testvalue.get_samplestatus_testvalue, name='sample-status-list'), 
     path('compare_test_details/', testvalue.compare_test_details, name='compare_test_details'),
@@ -52,7 +50,6 @@ urlpatterns = [
     path('patient_test_sorting/', report.patient_test_sorting, name='patient_test_sorting'),
     path('get_patient_test_details/', report.get_patient_test_details, name='get_patient_test_details'),
 
-
     #Invoice URLs
     path("generate-invoice/", generate_invoice, name="generate-invoice"),
     path("get-invoices/", get_invoices, name="get-invoices"),
@@ -62,11 +59,12 @@ urlpatterns = [
     path('all-patients/', get_all_patients, name='get_all_patients'),
     path('patient_report/', patient_report, name='patient_report'),
     path('overall_report/', report.overall_report, name='overall_report'),
-    
+
+    path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
+
     # CHC Test Values
     path('chc_samplestatus_testvalue/', chctestvalue.get_corporate_samplestatus, name='get_chc_samplestatus_testvalue'),
     path('chc_compare_test_details/', chctestvalue.corporate_test_details, name='chc_compare_test_details'),
-
 
     # Refund and Cancellation URLs
     path('search_refund/', search_refund, name='search_refund'),
@@ -92,7 +90,6 @@ urlpatterns = [
     path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
     path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
     path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
-
 
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
@@ -120,10 +117,8 @@ urlpatterns = [
     #HMS Barcode:
     path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
     path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
-
     path('get_hmssamplestatus_testvalue/',hmstestvalue.get_hmssamplestatus_testvalue, name='get_hmssamplestatus_testvalue'),
     path('hmscompare_test_details/',hmstestvalue.hmscompare_test_details, name='hmscompare_test_details'),
-
 
     #Corporate Batch and Sample Status Update:
     path('corporate-batches/', corporate.get_corporate_batch_generation_data, name='get_corporate_batch_generation_data'),
@@ -131,9 +126,7 @@ urlpatterns = [
     path("get_corporate_Transferred/<str:batch_number>/", corporate.get_corporate_sample, name="get_corporate_sample"),
     path("update_corporate_sample/<str:barcode>/", corporate.update_corporate_sample, name="update_corporate_sample"),
 
-
-    #Corporate Reports:
-#Corporate Reports:     
+    #Corporate Reports:    
     path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
     path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),
     path('corporate_approval_report/', corporate.corporate_approval_report, name='corporate_approval_report'),
@@ -143,6 +136,7 @@ urlpatterns = [
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('get_batch_investigation_status/', corporate.get_batch_investigation_status, name='get_batch_investigation_status'),
+    
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),
     path('hms_sample_status/', hmssamplestatus.hms_sample_status, name='hms_sample_status'),
@@ -157,6 +151,7 @@ urlpatterns = [
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
 
+    path('generate_barcodes_pdf_bulk/', corporate.generate_barcodes_pdf_bulk, name='generate_barcodes_pdf_bulk'),
 ]
 
 
