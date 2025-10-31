@@ -1,17 +1,35 @@
-# Ignore Python cache files
-__pycache__/
-*.py[cod]
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# Ignore virtual environment folders
-env/
-venv/
-
-# Ignore environment variable files
+# dependencies
+/node_modules
+/.pnp
+.pnp.js
 .env
-.env.*
+# testing
+/coverage
 
-# Optional: IDE and OS clutter (recommended)
-.vscode/
-.idea/
+# production
+/build
+
+# misc
 .DS_Store
-Thumbs.db
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.development
+.env.test
+
+.env
+
+env
+env/*
+venv
+.venv
+.venv/*
+
+*.pyc
+**/*.pyc
+
+__pycache__/*
+*/__pycache__/*
