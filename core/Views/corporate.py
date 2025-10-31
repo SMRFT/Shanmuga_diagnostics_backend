@@ -212,7 +212,6 @@ def get_corporate_sample(request, batch_number):
         finally:
             if client:
                 client.close()
-                
 @api_view(['PUT'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -1959,179 +1958,31 @@ def save_overall_approval(request):
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-    
-
-
-from io import BytesIO
-import zipfile
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, KeepTogether
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
-from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
-from reportlab.platypus import Image as RLImage
-import os
-from datetime import datetime
-import json
-import logging
-
-from pymongo import MongoClient
-
-logger = logging.getLogger(__name__)
-
-
-class NumberedCanvas(canvas.Canvas):
-    def __init__(self, *args, **kwargs):
-        canvas.Canvas.__init__(self, *args, **kwargs)
-        self._saved_page_states = []
-
-    def showPage(self):
-        self._saved_page_states.append(dict(self.__dict__))
-        self._startPage()
-
-    def save(self):
-        num_pages = len(self._saved_page_states)
-        for state in self._saved_page_states:
-            self.__dict__.update(state)
-            self.draw_page_number(num_pages)
-            canvas.Canvas.showPage(self)
-        canvas.Canvas.save(self)
-
-    def draw_page_number(self, page_count):
-        self.setFont("Helvetica", 8)
-        self.drawCentredString(
-            A4[0] / 2.0,
-            15 * mm,
-            f"Page {self._pageNumber} of {page_count}"
-        )
-
-
-# Image paths configuration
-IMAGES_DIR = os.path.join(os.path.dirname(__file__), 'Images')
-HEADER_IMAGE_PATH = os.path.join(IMAGES_DIR, 'Header.png')
-FOOTER_IMAGE_PATH = os.path.join(IMAGES_DIR, 'Footer.png')
-DR_PRABU_SIGNATURE_PATH = os.path.join(IMAGES_DIR, 'DRPS.png')
-DR_VIJAYAN_SIGNATURE_PATH = os.path.join(IMAGES_DIR, 'Vijayan.png')
-DR_MUHSINA_SIGNATURE_PATH = os.path.join(IMAGES_DIR, 'Muhsina.png')
-
-
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-import os, logging
-
-def add_header_footer(canvas_obj, doc):
-    """Draw header and footer that fill the full A4 page width"""
-    canvas_obj.saveState()
-    try:
-        page_width, page_height = A4   # 595.27 × 841.89 points
-
-        # ---- HEADER (top edge) ----
-        if os.path.exists(HEADER_IMAGE_PATH):
-            canvas_obj.drawImage(
-                HEADER_IMAGE_PATH,
-                x=0,                     # left edge of page
-                y=page_height - 35*mm,   # adjust height as needed
-                width=page_width,        # span full width
-                height=35*mm,            # header height
-                preserveAspectRatio=False,  # stretch to full width
-                mask='auto'
-            )
-
-        # ---- FOOTER (bottom edge) ----
-        if os.path.exists(FOOTER_IMAGE_PATH):
-            canvas_obj.drawImage(
-                FOOTER_IMAGE_PATH,
-                x=0,
-                y=0,
-                width=page_width,
-                height=20*mm,            # footer height
-                preserveAspectRatio=False,
-                mask='auto'
-            )
-
-    except Exception as e:
-        logger.error(f"Error adding header/footer: {e}")
-    finally:
-        canvas_obj.restoreState()
-
 
 @api_view(['POST'])
-@csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def generate_barcodes_pdf_bulk(request):
-    """Generate individual PDF reports for each barcode"""
+def get_batch_corporate_health_reports(request):
+    """
+    Get multiple corporate health reports in one call for batch PDF generation
+    """
+    barcodes = request.data.get('barcodes', [])
+    
+    if not barcodes or not isinstance(barcodes, list):
+        return JsonResponse({'error': 'Barcodes array is required'}, status=400)
+    
+    if len(barcodes) > 100:
+        return JsonResponse({'error': 'Maximum 100 barcodes allowed per batch'}, status=400)
+    
+    # Normalize barcodes to strings
+    barcodes = [str(bc) for bc in barcodes]
+    
+    print(f"Processing batch of {len(barcodes)} barcodes")
+    
     try:
-        barcodes = request.data.get('barcodes', [])
-        
-        if not barcodes or not isinstance(barcodes, list):
-            return JsonResponse({'error': 'Barcodes array is required'}, status=400)
-        
-        barcodes = [str(bc) for bc in barcodes]
-        logger.info(f"Processing {len(barcodes)} barcodes for PDF generation")
-        
-        # MongoDB connection
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
         
-        # Create ZIP file in memory
-        zip_buffer = BytesIO()
-        successful_count = 0
-        
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            
-            for barcode in barcodes:
-                try:
-                    logger.info(f"Processing barcode: {barcode}")
-                    
-                    # Fetch patient data
-                    patient_data = fetch_patient_data_for_pdf(db, barcode)
-                    
-                    if not patient_data:
-                        logger.warning(f"No data found for barcode: {barcode}")
-                        continue
-                    
-                    # Generate PDF for this barcode
-                    pdf_buffer = generate_single_patient_pdf(patient_data)
-                    
-                    if pdf_buffer:
-                        # Add PDF to ZIP
-                        employee_id = patient_data.get('patient_id', 'Unknown')
-                        patient_name = patient_data.get('patientname', 'Unknown').replace(' ', '_')
-                        pdf_filename = f"MedicalReport_{employee_id}_{patient_name}.pdf"
-                        
-                        zip_file.writestr(pdf_filename, pdf_buffer.getvalue())
-                        successful_count += 1
-                        logger.info(f"Successfully generated PDF for barcode: {barcode}")
-                        
-                except Exception as e:
-                    logger.error(f"Error processing barcode {barcode}: {str(e)}")
-                    continue
-        
-        if successful_count == 0:
-            return JsonResponse({'error': 'No PDFs were generated successfully'}, status=400)
-        
-        zip_buffer.seek(0)
-        client.close()
-        
-        logger.info(f"Successfully generated {successful_count} PDFs")
-        
-        # Return ZIP file
-        response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
-        response['Content-Disposition'] = f'attachment; filename="Medical_Reports_{datetime.now().strftime("%Y%m%d_%H%M%S")}.zip"'
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error in generate_barcodes_pdf_bulk: {str(e)}")
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
-def fetch_patient_data_for_pdf(db, barcode):
-    """Fetch all patient data needed for PDF generation"""
-    try:
-        from ..models import TestValue
-        
+        # Collections
         franchise_billing_collection = db.core_billing
         franchise_sample_collection = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
@@ -2140,984 +1991,365 @@ def fetch_patient_data_for_pdf(db, barcode):
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection = db.core_company
         
-        # Get billing data
-        franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
-        if not franchise_billing:
-            return None
+        results = {}
         
-        employee_id = franchise_billing.get('employee_id')
-        if not employee_id:
-            return None
-        
-        # Get patient data
-        franchise_patient = franchise_patient_collection.find_one({"employee_id": employee_id})
-        if not franchise_patient:
-            return None
-        
-        # Get company data
-        company_data = None
-        company_id = franchise_patient.get("company_id")
-        if company_id:
-            company_data = franchise_company_collection.find_one({"company_id": company_id})
-        
-        # Get other data
-        franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
-        franchise_investigation = franchise_investigation_collection.find_one({
-            "barcode": barcode,
-            "status": "approved"
-        })
-        franchise_ophthalmology = franchise_ophthalmology_collection.find_one({
-            "barcode": barcode,
-            "status": "approved"
-        })
-        franchise_overall_approval = franchise_overall_approval_collection.find_one({
-            "barcode": barcode,
-            "status": "approved"
-        })
-        
-        # Get test values
-        test_values = TestValue.objects.filter(barcode=barcode)
-        
-        # Parse vitals
-        vitals_data = {}
-        if franchise_investigation:
+        for barcode in barcodes:
             try:
-                vitals_raw = json.loads(franchise_investigation.get('vitals', '{}'))
-                for key, value in vitals_raw.items():
-                    if value and str(value).strip() and str(value).strip() != "0":
-                        vitals_data[key] = value
-            except json.JSONDecodeError:
-                pass
-        
-        # Parse investigation notes
-        investigation_notes = {}
-        if franchise_investigation:
-            for note_field, key in [
-                ("ecg_notes", "ecg_notes"),
-                ("pft_notes", "pft_notes"),
-                ("audiometry_notes", "audiometry_notes"),
-                ("xray_notes", "xray_notes"),
-                ("xray_report", "xray_report"),
-            ]:
-                note_value = franchise_investigation.get(note_field)
-                if note_value and note_value.strip():
-                    investigation_notes[key] = note_value
-        
-        # Parse medical history
-        medical_history_data = {}
-        if franchise_investigation:
-            patient_history = franchise_investigation.get("patient_history")
-            if patient_history and patient_history.strip():
-                if patient_history.lower() not in ["nil", "nil significant", "no previous history", "none"]:
-                    medical_history_data["patient_history"] = patient_history
-                else:
-                    medical_history_data["patient_history"] = "No Significant medical history"
-        
-        # Parse ophthalmology data
-        ophthalmology_data = None
-        if franchise_ophthalmology:
-            try:
-                ophthalmology_data = {}
-                visual_acuity_str = franchise_ophthalmology.get('visual_acuity', '')
-                
-                if visual_acuity_str:
-                    try:
-                        json_array_str = '[' + visual_acuity_str + ']'
-                        parsed_array = json.loads(json_array_str)
-                        parsed_va = {}
-                        for obj in parsed_array:
-                            parsed_va.update(obj)
-                        
-                        visual_acuity_data = {}
-                        if parsed_va.get("distance"):
-                            visual_acuity_data["distance"] = {
-                                "right": str(parsed_va.get("distance", {}).get("right", "6/6")),
-                                "left": str(parsed_va.get("distance", {}).get("left", "6/6"))
-                            }
-                        if parsed_va.get("nearVision"):
-                            visual_acuity_data["near_vision"] = {
-                                "right": str(parsed_va.get("nearVision", {}).get("right", "N6")),
-                                "left": str(parsed_va.get("nearVision", {}).get("left", "N6"))
-                            }
-                        if parsed_va.get("colourVision"):
-                            visual_acuity_data["color_vision"] = {
-                                "right": str(parsed_va.get("colourVision", {}).get("right", "Normal")),
-                                "left": str(parsed_va.get("colourVision", {}).get("left", "Normal"))
-                            }
-                        if parsed_va.get("ocularmovement"):
-                            visual_acuity_data["ocularmovement"] = {
-                                "right": str(parsed_va.get("ocularmovement", {}).get("right", "Normal")),
-                                "left": str(parsed_va.get("ocularmovement", {}).get("left", "Normal"))
-                            }
-                        
-                        if visual_acuity_data:
-                            ophthalmology_data["visual_acuity"] = visual_acuity_data
-                    except:
-                        pass
-                
-                remarks = franchise_ophthalmology.get('remarks', '')
-                if remarks and remarks.strip():
-                    ophthalmology_data["remarks"] = remarks
-                
-                patient_complaints = franchise_ophthalmology.get('patient_complaints', '')
-                if patient_complaints and patient_complaints.strip():
-                    ophthalmology_data["patient_complaints"] = patient_complaints
-                
-                if not ophthalmology_data:
-                    ophthalmology_data = None
-            except:
-                ophthalmology_data = None
-        
-        # Parse sample testdetails
-        sample_testdetails = []
-        if franchise_sample:
-            try:
-                sample_testdetails = json.loads(franchise_sample.get('testdetails', '[]'))
-            except json.JSONDecodeError:
-                pass
-        
-        # Build patient details
-        patient_details = {
-            "patient_id": employee_id,
-            "patientname": franchise_patient.get("employee_name"),
-            "age": franchise_patient.get("age"),
-            "age_type": franchise_patient.get("age_type", ""),
-            "gender": franchise_patient.get("gender"),
-            "date": franchise_billing.get("created_date"),
-            "barcode": barcode,
-            "testdetails": []
-        }
-        
-        if company_data and company_data.get("company_name"):
-            patient_details["company_name"] = company_data.get("company_name")
-        
-        if franchise_patient.get("department"):
-            patient_details["department"] = franchise_patient.get("department")
-        
-        if vitals_data:
-            patient_details["vitals"] = {}
-            for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2"]:
-                if vitals_data.get(key):
-                    display_key = key.replace("_cm", "").replace("_kg", "")
-                    patient_details["vitals"][display_key] = vitals_data.get(key)
-        
-        if medical_history_data:
-            patient_details["medical_history"] = medical_history_data
-        
-        if ophthalmology_data:
-            patient_details["ophthalmology"] = ophthalmology_data
-        
-        if investigation_notes:
-            patient_details["investigation_notes"] = investigation_notes
-        
-        if franchise_overall_approval:
-            final_assessment = {}
-            impression = franchise_overall_approval.get("impression", "")
-            if impression and impression.strip():
-                final_assessment["impression"] = impression
-            remarks = franchise_overall_approval.get("remarks", "")
-            if remarks and remarks.strip():
-                final_assessment["remarks"] = remarks
-            if final_assessment:
-                patient_details["final_assessment"] = final_assessment
-        
-        # Process lab tests
-        if test_values.exists():
-            for test_value in test_values:
-                try:
-                    testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
-                    if not isinstance(testvalue_details, list):
-                        continue
-                    
-                    for test_detail in testvalue_details:
-                        testname = test_detail.get("testname")
-                        if not testname:
-                            continue
-                        
-                        sample_status = None
-                        for sample_test in sample_testdetails:
-                            if sample_test.get("testname") == testname:
-                                sample_status = sample_test
-                                break
-                        
-                        test_response = {"testname": testname}
-                        
-                        if test_detail.get("department"):
-                            test_response["department"] = test_detail.get("department")
-                        
-                        if sample_status:
-                            if sample_status.get("samplecollected_time"):
-                                test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
-                            if sample_status.get("received_time"):
-                                test_response["received_time"] = sample_status.get("received_time")
-                        
-                        if test_detail.get("parameters"):
-                            processed_parameters = []
-                            for param in test_detail.get("parameters", []):
-                                processed_param = {}
-                                if param.get("name"):
-                                    processed_param["name"] = param.get("name")
-                                if param.get("value"):
-                                    processed_param["value"] = param.get("value")
-                                if param.get("unit"):
-                                    processed_param["unit"] = param.get("unit")
-                                if param.get("specimen_type"):
-                                    processed_param["specimen_type"] = param.get("specimen_type")
-                                if param.get("reference_range"):
-                                    processed_param["reference_range"] = param.get("reference_range")
-                                if param.get("method"):
-                                    processed_param["method"] = param.get("method")
-                                if param.get("sub_title"):
-                                    processed_param["sub_title"] = param.get("sub_title")
-                                if param.get("isHigh"):
-                                    processed_param["isHigh"] = param.get("isHigh")
-                                if param.get("isLow"):
-                                    processed_param["isLow"] = param.get("isLow")
-                                if processed_param:
-                                    processed_parameters.append(processed_param)
-                            if processed_parameters:
-                                test_response["parameters"] = processed_parameters
-                        else:
-                            if test_detail.get("method"):
-                                test_response["method"] = test_detail.get("method")
-                            if test_detail.get("specimen_type"):
-                                test_response["specimen_type"] = test_detail.get("specimen_type")
-                            if test_detail.get("value"):
-                                test_response["value"] = test_detail.get("value")
-                            if test_detail.get("unit"):
-                                test_response["unit"] = test_detail.get("unit")
-                            if test_detail.get("reference_range"):
-                                test_response["reference_range"] = test_detail.get("reference_range")
-                            if test_detail.get("isHigh"):
-                                test_response["isHigh"] = test_detail.get("isHigh")
-                            if test_detail.get("isLow"):
-                                test_response["isLow"] = test_detail.get("isLow")
-                        
-                        patient_details["testdetails"].append(test_response)
-                except Exception as e:
-                    logger.error(f"Error processing test detail: {str(e)}")
+                # Get franchise billing data
+                franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
+                if not franchise_billing:
+                    results[barcode] = {'error': 'Billing record not found'}
                     continue
-        
-        return patient_details
-        
-    except Exception as e:
-        logger.error(f"Error fetching patient data for barcode {barcode}: {str(e)}")
-        return None
-
-
-def generate_single_patient_pdf(patient_data):
-    """Generate PDF matching frontend exactly"""
-    try:
-        pdf_buffer = BytesIO()
-        
-        # Page setup - matching frontend
-        left_margin = 15 * mm
-        right_margin = 15 * mm
-        top_margin = 35 * mm  # Space for header (25mm + 10mm)
-        bottom_margin = 30 * mm  # Space for footer (15mm + 15mm)
-        
-        doc = SimpleDocTemplate(
-            pdf_buffer,
-            pagesize=A4,
-            leftMargin=left_margin,
-            rightMargin=right_margin,
-            topMargin=top_margin,
-            bottomMargin=bottom_margin
-        )
-        
-        elements = []
-        styles = getSampleStyleSheet()
-        
-        # Page 1: Medical Examination Report (without ophthalmology, without final impression)
-        add_patient_header(elements, patient_data, styles)
-        add_medical_report_title(elements, styles)
-        add_employee_details(elements, patient_data, styles)
-        add_vitals_section(elements, patient_data, styles)
-        add_miscellaneous_section(elements, patient_data, styles)
-        
-        # Check if we need page break for ophthalmology
-        if patient_data.get('ophthalmology'):
-            elements.append(PageBreak())
-            add_patient_header(elements, patient_data, styles)
-            add_ophthalmology_section(elements, patient_data, styles)
-        
-        # Add lab reference and final impression on same page as ophthalmology
-        add_lab_reference(elements, patient_data, styles)
-        add_final_impression(elements, patient_data, styles)
-        
-        # X-ray report content page
-        if patient_data.get('investigation_notes', {}).get('xray_report'):
-            add_xray_report_content(elements, patient_data, styles)
-        
-        # Add lab reports if exist
-        if patient_data.get('testdetails'):
-            elements.append(PageBreak())
-            add_laboratory_reports(elements, patient_data, styles)
-        
-        # Build PDF
-        doc.build(elements, onFirstPage=add_header_footer, onLaterPages=add_header_footer, canvasmaker=NumberedCanvas)
-        
-        pdf_buffer.seek(0)
-        return pdf_buffer
-        
-    except Exception as e:
-        logger.error(f"Error generating PDF: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return None
-
-
-def add_patient_header(elements, data, styles):
-    """Add patient header - Barcode on right side"""
-    age = data.get('age', 'N/A')
-    age_type = data.get('age_type', '')
-    age_display = f"{age} {age_type}".strip() if age_type else str(age)
-    
-    patient_info = [
-        [Paragraph("<b>Name</b>", styles['Normal']), 
-         Paragraph(f": {data.get('patientname', 'N/A')}", styles['Normal']),
-         Paragraph("<b>Date</b>", styles['Normal']),
-         Paragraph(f": {datetime.now().strftime('%d/%m/%Y')}", styles['Normal'])],
-        [Paragraph("<b>Age / Sex</b>", styles['Normal']),
-         Paragraph(f": {age_display} / {data.get('gender', 'N/A')}", styles['Normal']),
-         Paragraph("<b>Ref. By</b>", styles['Normal']),
-         Paragraph(f": {data.get('company_name', 'N/A')}", styles['Normal'])],
-        ["", "",
-         Paragraph("<b>Barcode</b>", styles['Normal']),
-         Paragraph(f": {data.get('barcode', 'N/A')}", styles['Normal'])],
-    ]
-    
-    t = Table(patient_info, colWidths=[25*mm, 65*mm, 20*mm, 70*mm])
-    t.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    
-    elements.append(t)
-
-
-def add_medical_report_title(elements, styles):
-    """Add centered title"""
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=14,
-        alignment=TA_CENTER,
-        fontName='Helvetica-Bold',
-        spaceAfter=3*mm
-    )
-    elements.append(Paragraph("MEDICAL EXAMINATION REPORT", title_style))
-
-
-def add_employee_details(elements, data, styles):
-    """Add Employee ID, Department, Medical History"""
-    details = [
-        [Paragraph("<b>Employee ID</b>", styles['Normal']),
-         Paragraph(f": {data.get('patient_id', 'N/A')}", styles['Normal'])],
-    ]
-    
-    if data.get('department'):
-        details.append([
-            Paragraph("<b>Department</b>", styles['Normal']),
-            Paragraph(f": {data.get('department', 'N/A')}", styles['Normal'])
-        ])
-    
-    medical_history = data.get('medical_history', {}).get('patient_history', 'No Significant medical history')
-    details.append([
-        Paragraph("<b>Medical History</b>", styles['Normal']),
-        Paragraph(f": {medical_history}", styles['Normal'])
-    ])
-    
-    t = Table(details, colWidths=[35*mm, 145*mm])
-    t.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    
-    elements.append(t)
-    elements.append(Spacer(1, 3*mm))
-
-
-def add_vitals_section(elements, data, styles):
-    """Add Vitals table"""
-    title_style = ParagraphStyle(
-        'SectionTitle',
-        parent=styles['Heading2'],
-        fontSize=12,
-        fontName='Helvetica-Bold',
-        spaceAfter=2*mm
-    )
-    elements.append(Paragraph("VITALS", title_style))
-    
-    vitals = data.get('vitals', {})
-    
-    vital_data = [
-        [Paragraph("<b>Parameter</b>", styles['Normal']),
-         Paragraph("<b>Reading</b>", styles['Normal']),
-         Paragraph("<b>Normal Range</b>", styles['Normal'])],
-        [f"Height", f"{vitals.get('height', 'N/A')} cms", ""],
-        [f"Weight", f"{vitals.get('weight', 'N/A')} kgs", ""],
-        [f"BMI", f"{vitals.get('bmi', 'N/A')} kg/m²", "18.5 - 24.9"],
-        [f"Blood Pressure", f"{vitals.get('blood_pressure', 'N/A')} mmHg", "120/80"],
-        [f"Pulse Rate", f"{vitals.get('spo2', vitals.get('pulse', 'N/A'))} bpm", "60 - 100"],
-    ]
-    
-    t = Table(vital_data, colWidths=[60*mm, 60*mm, 60*mm])
-    t.setStyle(TableStyle([
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.white),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 2*mm),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 2*mm),
-        ('TOPPADDING', (0, 0), (-1, -1), 2*mm),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    
-    elements.append(t)
-    elements.append(Spacer(1, 3*mm))
-
-
-def add_miscellaneous_section(elements, data, styles):
-    """Add Miscellaneous investigations"""
-    title_style = ParagraphStyle(
-        'SectionTitle',
-        parent=styles['Heading2'],
-        fontSize=12,
-        fontName='Helvetica-Bold',
-        spaceAfter=2*mm
-    )
-    elements.append(Paragraph("MISCELLANEOUS", title_style))
-    
-    notes = data.get('investigation_notes', {})
-    
-    misc_data = [
-        [Paragraph("<b>E.C.G</b>", styles['Normal']),
-         Paragraph(f": {notes.get('ecg_notes', 'Normal')}", styles['Normal'])],
-        [Paragraph("<b>Spirometry</b>", styles['Normal']),
-         Paragraph(f": {notes.get('pft_notes', 'Normal')}", styles['Normal'])],
-        [Paragraph("<b>X-Ray</b>", styles['Normal']),
-         Paragraph(f": {notes.get('xray_notes', 'Normal')}", styles['Normal'])],
-        [Paragraph("<b>Audiometry</b>", styles['Normal']),
-         Paragraph(f": {notes.get('audiometry_notes', 'Normal')}", styles['Normal'])],
-    ]
-    
-    t = Table(misc_data, colWidths=[30*mm, 150*mm])
-    t.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    
-    elements.append(t)
-    elements.append(Spacer(1, 3*mm))
-
-
-def add_ophthalmology_section(elements, data, styles):
-    """Add Ophthalmology report - appears after page break"""
-    ophthal = data.get('ophthalmology')
-    if not ophthal:
-        return
-    
-    title_style = ParagraphStyle(
-        'SectionTitle',
-        parent=styles['Heading2'],
-        fontSize=12,
-        fontName='Helvetica-Bold',
-        spaceAfter=2*mm
-    )
-    elements.append(Paragraph("OPHTHALMOLOGY REPORT", title_style))
-    
-    va = ophthal.get('visual_acuity', {})
-    
-    ophthal_data = [
-        [Paragraph("<b>Test</b>", styles['Normal']),
-         Paragraph("<b>Left Eye</b>", styles['Normal']),
-         Paragraph("<b>Right Eye</b>", styles['Normal'])],
-        [Paragraph("<b>Distant Vision</b>", styles['Normal']),
-         va.get('distance', {}).get('left', 'N/A'),
-         va.get('distance', {}).get('right', 'N/A')],
-        [Paragraph("<b>Near Vision</b>", styles['Normal']),
-         va.get('near_vision', {}).get('left', 'N/A'),
-         va.get('near_vision', {}).get('right', 'N/A')],
-        [Paragraph("<b>Colour Vision</b>", styles['Normal']),
-         va.get('color_vision', {}).get('left', 'N/A'),
-         va.get('color_vision', {}).get('right', 'N/A')],
-        [Paragraph("<b>Ocular Movement</b>", styles['Normal']),
-         va.get('ocularmovement', {}).get('left', 'N/A'),
-         va.get('ocularmovement', {}).get('right', 'N/A')],
-    ]
-    
-    t = Table(ophthal_data, colWidths=[60*mm, 60*mm, 60*mm])
-    t.setStyle(TableStyle([
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 2*mm),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 2*mm),
-        ('TOPPADDING', (0, 0), (-1, -1), 2*mm),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    
-    elements.append(t)
-    elements.append(Spacer(1, 2*mm))
-    
-    # Patient Complaints
-    if ophthal.get('patient_complaints') and ophthal.get('patient_complaints').strip():
-        complaints_para = Paragraph(f"<b>Patient Complaints:</b><br/>{ophthal.get('patient_complaints')}", styles['Normal'])
-        elements.append(complaints_para)
-        elements.append(Spacer(1, 2*mm))
-    
-    # Remarks
-    remarks = ophthal.get('remarks', 'Normal')
-    remarks_para = Paragraph(f"<b>Remarks:</b><br/>{remarks}", styles['Normal'])
-    elements.append(remarks_para)
-    elements.append(Spacer(1, 2*mm))
-    
-    # Validity note
-    validity_style = ParagraphStyle(
-        'Validity',
-        parent=styles['Normal'],
-        fontSize=8,
-        fontName='Helvetica-Oblique'
-    )
-    validity_para = Paragraph("This spectacle prescription is valid for correction, only for three months from the date of consultation.", validity_style)
-    elements.append(validity_para)
-    elements.append(Spacer(1, 3*mm))
-
-
-def add_lab_reference(elements, data, styles):
-    """Add Lab Investigations reference"""
-    if not data.get('testdetails'):
-        return
-    
-    lab_ref = [
-        [Paragraph("<b>Lab Investigations</b>", styles['Normal']),
-         Paragraph(": Enclosed", styles['Normal'])]
-    ]
-    
-    t = Table(lab_ref, colWidths=[40*mm, 140*mm])
-    t.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    
-    elements.append(t)
-    elements.append(Spacer(1, 3*mm))
-
-
-def add_final_impression(elements, data, styles):
-    """Add final impression and signature - right aligned"""
-    final = data.get('final_assessment', {})
-    
-    # Impression
-    if final.get('impression') and final.get('impression').strip():
-        impression_data = [
-            [Paragraph("<b>Impression</b>", styles['Normal']),
-             Paragraph(f": {final.get('impression')}", styles['Normal'])]
-        ]
-        
-        t = Table(impression_data, colWidths=[30*mm, 150*mm])
-        t.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('TOPPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-        ]))
-        
-        elements.append(t)
-        elements.append(Spacer(1, 2*mm))
-    
-    # Remarks (bold, larger)
-    if final.get('remarks') and final.get('remarks').strip():
-        remarks_style = ParagraphStyle(
-            'FinalRemarks',
-            parent=styles['Normal'],
-            fontSize=11,
-            fontName='Helvetica-Bold'
-        )
-        elements.append(Paragraph(final.get('remarks'), remarks_style))
-        elements.append(Spacer(1, 5*mm))
-    
-    # Signature section - everything right aligned
-    right_style = ParagraphStyle(
-        'RightAligned',
-        parent=styles['Normal'],
-        fontSize=10,
-        fontName='Helvetica-Bold',
-        alignment=TA_RIGHT
-    )
-    
-    sig_data = []
-    
-    # Signature image
-    if os.path.exists(DR_PRABU_SIGNATURE_PATH):
-        try:
-            sig_img = RLImage(DR_PRABU_SIGNATURE_PATH, width=35*mm, height=25*mm)
-            sig_data.append([sig_img])
-        except:
-            sig_data.append([""])
-    else:
-        sig_data.append([""])
-    
-    # Doctor details
-    sig_data.append([Paragraph("<b>Dr. P. PRABU SANKAR, MS, MRCS.</b>", right_style)])
-    sig_data.append([Paragraph("<b>GENERAL SURGEON</b>", right_style)])
-    sig_data.append([Paragraph("<b>Reg No. 80709</b>", right_style)])
-    sig_data.append([Paragraph("<b>Shanmuga Hospital Ltd, Salem-7.</b>", right_style)])
-    
-    sig_table = Table(sig_data, colWidths=[180*mm])
-    sig_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (0, 0), 'BOTTOM'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1*mm),
-    ]))
-    
-    elements.append(sig_table)
-
-
-def add_xray_report_content(elements, data, styles):
-    """Add X-ray report content page"""
-    xray_report = data.get('investigation_notes', {}).get('xray_report', '')
-    
-    if not xray_report or not xray_report.strip():
-        logger.info("No X-ray report content found")
-        return
-    
-    logger.info("Adding X-ray report content page")
-    
-    elements.append(PageBreak())
-    add_patient_header(elements, data, styles)
-    elements.append(Spacer(1, 5*mm))
-    
-    # Title
-    title_style = ParagraphStyle(
-        'XrayTitle',
-        parent=styles['Heading1'],
-        fontSize=12,
-        alignment=TA_CENTER,
-        fontName='Helvetica-Bold',
-        spaceAfter=5*mm
-    )
-    elements.append(Paragraph("X-RAY CHEST PA VIEW", title_style))
-    
-    # Report content
-    content_style = ParagraphStyle(
-        'XrayContent',
-        parent=styles['Normal'],
-        fontSize=10,
-        leading=14,
-        spaceAfter=4*mm
-    )
-    
-    # Normalize line breaks
-    normalized_report = xray_report.replace('\\r\\n', '\n').replace('\r\n', '\n')
-    sentences = [line.strip() for line in normalized_report.split('\n') if line.strip()]
-    
-    for sentence in sentences:
-        elements.append(Paragraph(sentence, content_style))
-    
-    elements.append(Spacer(1, 8*mm))
-    
-    # Impression section
-    impression_title_style = ParagraphStyle(
-        'ImpressionTitle',
-        parent=styles['Normal'],
-        fontSize=10,
-        fontName='Helvetica-Bold',
-        spaceAfter=2*mm
-    )
-    elements.append(Paragraph("IMPRESSION:", impression_title_style))
-    
-    impression_text = data.get('investigation_notes', {}).get('xray_notes', 'No significant finding in the lungs or mediastinum.')
-    impression_para = Paragraph(impression_text, content_style)
-    elements.append(impression_para)
-    
-    elements.append(Spacer(1, 20*mm))
-    
-    # Signature section (right-aligned)
-    sig_style = ParagraphStyle(
-        'XraySig',
-        parent=styles['Normal'],
-        fontSize=9,
-        fontName='Helvetica-Bold',
-        alignment=TA_RIGHT
-    )
-    
-    sig_data = []
-    
-    if os.path.exists(DR_MUHSINA_SIGNATURE_PATH):
-        try:
-            sig_img = RLImage(DR_MUHSINA_SIGNATURE_PATH, width=35*mm, height=15*mm)
-            sig_data.append([sig_img])
-        except:
-            sig_data.append([""])
-    else:
-        sig_data.append([""])
-    
-    sig_data.append([Paragraph("<b>DR. MUHSINA ABOOBAKER, MBBS, MDRD</b>", sig_style)])
-    
-    normal_sig_style = ParagraphStyle(
-        'XraySigNormal',
-        parent=styles['Normal'],
-        fontSize=9,
-        alignment=TA_RIGHT
-    )
-    sig_data.append([Paragraph("CONSULTANT RADIOLOGIST", normal_sig_style)])
-    sig_data.append([Paragraph("REG NO: 143512 (TNMC)", normal_sig_style)])
-    
-    sig_table = Table(sig_data, colWidths=[180*mm])
-    sig_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (0, 0), 'BOTTOM'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1*mm),
-    ]))
-    
-    elements.append(sig_table)
-
-
-def add_laboratory_reports(elements, data, styles):
-    """Add detailed laboratory reports with repeating headers and HIGH/LOW indicators"""
-    first_test = data.get('testdetails', [{}])[0] if data.get('testdetails') else {}
-    
-    collected_on = first_test.get('samplecollected_time', '')
-    received_on = first_test.get('received_time', '')
-    
-    if collected_on:
-        try:
-            collected_dt = datetime.fromisoformat(collected_on.replace('Z', '+00:00'))
-            collected_on = collected_dt.strftime("%d %b %y / %H:%M")
-        except:
-            collected_on = ''
-    
-    if received_on:
-        try:
-            received_dt = datetime.fromisoformat(received_on.replace('Z', '+00:00'))
-            received_on = received_dt.strftime("%d %b %y / %H:%M")
-        except:
-            received_on = ''
-    
-    reported_date = datetime.now().strftime("%d %b %y / %H:%M")
-    
-    age = data.get('age', 'N/A')
-    age_type = data.get('age_type', '')
-    age_display = f"{age} {age_type}".strip() if age_type else str(age)
-    
-    # Lab report header
-    header_data = [
-        [Paragraph("<b>Reg.ID</b>", styles['Normal']),
-         Paragraph(f": {data.get('patient_id', 'N/A')}", styles['Normal']),
-         Paragraph("<b>Collected On</b>", styles['Normal']),
-         Paragraph(f": {collected_on}", styles['Normal'])],
-        [Paragraph("<b>Name</b>", styles['Normal']),
-         Paragraph(f": {data.get('patientname', 'N/A')}", styles['Normal']),
-         Paragraph("<b>Received On</b>", styles['Normal']),
-         Paragraph(f": {received_on}", styles['Normal'])],
-        [Paragraph("<b>Age/Gender</b>", styles['Normal']),
-         Paragraph(f": {age_display} / {data.get('gender', 'N/A')}", styles['Normal']),
-         Paragraph("<b>Reported Date</b>", styles['Normal']),
-         Paragraph(f": {reported_date}", styles['Normal'])],
-        [Paragraph("<b>Referral</b>", styles['Normal']),
-         Paragraph(f": {data.get('company_name', 'SELF')}", styles['Normal']),
-         "", ""],
-    ]
-    
-    header_table = Table(header_data, colWidths=[25*mm, 65*mm, 30*mm, 60*mm])
-    header_table.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2*mm),
-    ]))
-    
-    elements.append(header_table)
-    elements.append(Spacer(1, 3*mm))
-    
-    # Column widths
-    col_widths = [50*mm, 22*mm, 9*mm, 23*mm, 18*mm, 31*mm, 27*mm]
-    
-    # Group tests by department
-    tests_by_dept = {}
-    for test in data.get('testdetails', []):
-        if test.get('testname') in ["Audiometry", "Pulmonary Function Test", "Chest - XRay", "ECG", "Eye examination"]:
-            continue
-        dept = test.get('department', 'LABORATORY')
-        if dept not in tests_by_dept:
-            tests_by_dept[dept] = []
-        tests_by_dept[dept].append(test)
-    
-    # Build all lab data rows with HIGH/LOW indicators
-    all_lab_rows = []
-    
-    # HEADER ROW - will be repeated on each page
-    header_row = [
-        Paragraph("<b>Test</b>", styles['Normal']),
-        Paragraph("<b>Specimen</b>", styles['Normal']),
-        "",
-        Paragraph("<b>Result</b>", styles['Normal']),
-        Paragraph("<b>Units</b>", styles['Normal']),
-        Paragraph("<b>Reference Value</b>", styles['Normal']),
-        Paragraph("<b>Method</b>", styles['Normal'])
-    ]
-    all_lab_rows.append(header_row)
-    
-    for dept_index, (dept, tests) in enumerate(tests_by_dept.items()):
-        # Department header row
-        dept_style = ParagraphStyle(
-            'DeptTitle',
-            parent=styles['Normal'],
-            fontSize=10,
-            fontName='Helvetica-Bold',
-            alignment=TA_CENTER
-        )
-        dept_cell = Paragraph(dept.upper(), dept_style)
-        all_lab_rows.append([dept_cell, "", "", "", "", "", ""])
-        
-        for test in tests:
-            # Test name row with HIGH/LOW indicators
-            test_name = Paragraph(f"<b>{test.get('testname', 'N/A')}</b>", styles['Normal'])
-            specimen = Paragraph(test.get('specimen_type', ''), styles['Normal'])
-            
-            # HIGH/LOW indicators for test values
-            value_text = str(test.get('value', ''))
-            if test.get('isHigh'):
-                value_para = Paragraph(f"<b><font color='red'>{value_text} ↑</font></b>", styles['Normal'])
-            elif test.get('isLow'):
-                value_para = Paragraph(f"<b><font color='blue'>{value_text} ↓</font></b>", styles['Normal'])
-            else:
-                value_para = Paragraph(value_text, styles['Normal'])
-            
-            unit = Paragraph(test.get('unit', '').replace('\\u00b5', 'µ').replace('μ', 'µ'), styles['Normal'])
-            ref_range = Paragraph(test.get('reference_range', ''), styles['Normal'])
-            method = Paragraph(test.get('method', '').replace('Method', '').strip(), styles['Normal'])
-            
-            all_lab_rows.append([test_name, specimen, "", value_para, unit, ref_range, method])
-            
-            # Parameters if exist
-            if test.get('parameters'):
-                params_by_subtitle = {}
-                for param in test.get('parameters', []):
-                    subtitle = param.get('sub_title', '')
-                    if subtitle not in params_by_subtitle:
-                        params_by_subtitle[subtitle] = []
-                    params_by_subtitle[subtitle].append(param)
                 
-                for subtitle, params in params_by_subtitle.items():
-                    # Subtitle row
-                    if subtitle and subtitle.strip():
-                        subtitle_cell = Paragraph(f"<b>{subtitle}</b>", styles['Normal'])
-                        all_lab_rows.append([subtitle_cell, "", "", "", "", "", ""])
+                employee_id = franchise_billing.get('employee_id')
+                if not employee_id:
+                    results[barcode] = {'error': 'Employee ID not found'}
+                    continue
+                
+                # Get patient data
+                franchise_patient = franchise_patient_collection.find_one({"employee_id": employee_id})
+                if not franchise_patient:
+                    results[barcode] = {'error': 'Patient not found'}
+                    continue
+                
+                # Get company data
+                company_data = None
+                company_id = franchise_patient.get("company_id")
+                if company_id:
+                    company_data = franchise_company_collection.find_one({"company_id": company_id})
+                
+                # Get sample data
+                franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
+                
+                # Get investigation data (only if status is approved)
+                franchise_investigation = franchise_investigation_collection.find_one({
+                    "barcode": barcode,
+                    "status": "approved"
+                })
+                
+                # Get ophthalmology data (only if status is approved)
+                franchise_ophthalmology = franchise_ophthalmology_collection.find_one({
+                    "barcode": barcode,
+                    "status": "approved"
+                })
+                
+                # Get overall approval data
+                franchise_overall_approval = franchise_overall_approval_collection.find_one({
+                    "barcode": barcode,
+                    "status": "approved"
+                })
+                
+                # Get test values from Django model
+                test_values = TestValue.objects.filter(barcode=barcode)
+                
+                # Parse vitals from investigation
+                vitals_data = {}
+                if franchise_investigation:
+                    try:
+                        vitals_raw = json.loads(franchise_investigation.get('vitals', '{}'))
+                        for key, value in vitals_raw.items():
+                            if value and str(value).strip() and str(value).strip() != "0":
+                                vitals_data[key] = value
+                    except json.JSONDecodeError:
+                        vitals_data = {}
+                
+                # Store investigation notes (WITHOUT file IDs for simple PDF)
+                investigation_notes = {}
+                
+                if franchise_investigation:
+                    # Notes only - no file IDs
+                    for note_field, key in [
+                        ("ecg_notes", "ecg_notes"),
+                        ("pft_notes", "pft_notes"),
+                        ("audiometry_notes", "audiometry_notes"),
+                        ("xray_notes", "xray_notes"),
+                        ("xray_report", "xray_report")
+                    ]:
+                        note_value = franchise_investigation.get(note_field)
+                        if note_value and note_value.strip():
+                            investigation_notes[key] = note_value
+                
+                # Parse medical history
+                medical_history_data = {}
+                if franchise_investigation:
+                    patient_history = franchise_investigation.get("patient_history")
+                    if patient_history and patient_history.strip():
+                        if patient_history.lower() not in ["nil", "nil significant", "no previous history", "none"]:
+                            medical_history_data["patient_history"] = patient_history
+                
+                # Parse clinical examination
+                clinical_examination_data = {}
+                if franchise_investigation:
+                    for field in ["cardiovascular_system", "respiratory_system", "central_nervous_system", 
+                                 "locomotor_system", "skin"]:
+                        value = franchise_investigation.get(field)
+                        if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
+                            clinical_examination_data[field] = value
+                
+                # Parse ophthalmology data (same as original)
+                ophthalmology_data = None
+                if franchise_ophthalmology:
+                    try:
+                        ophthalmology_data = {}
+                        
+                        visual_acuity_str = franchise_ophthalmology.get('visual_acuity', '')
+                        
+                        if visual_acuity_str:
+                            try:
+                                json_array_str = '[' + visual_acuity_str + ']'
+                                parsed_array = json.loads(json_array_str)
+                                
+                                parsed_va = {}
+                                for obj in parsed_array:
+                                    parsed_va.update(obj)
+                                
+                                visual_acuity_data = {}
+                                
+                                if parsed_va.get("distance"):
+                                    visual_acuity_data["distance"] = {
+                                        "right": str(parsed_va.get("distance", {}).get("right", "6/6")),
+                                        "left": str(parsed_va.get("distance", {}).get("left", "6/6"))
+                                    }
+                                
+                                if parsed_va.get("nearVision"):
+                                    visual_acuity_data["near_vision"] = {
+                                        "right": str(parsed_va.get("nearVision", {}).get("right", "N-6")),
+                                        "left": str(parsed_va.get("nearVision", {}).get("left", "N-6"))
+                                    }
+                                
+                                if parsed_va.get("colourVision"):
+                                    visual_acuity_data["color_vision"] = {
+                                        "right": str(parsed_va.get("colourVision", {}).get("right", "Normal")),
+                                        "left": str(parsed_va.get("colourVision", {}).get("left", "Normal"))
+                                    }
+                                
+                                if parsed_va.get("ocularmovement"):
+                                    visual_acuity_data["ocularmovement"] = {
+                                        "right": str(parsed_va.get("ocularmovement", {}).get("right", "Normal")),
+                                        "left": str(parsed_va.get("ocularmovement", {}).get("left", "Normal"))
+                                    }
+                                
+                                if visual_acuity_data:
+                                    ophthalmology_data["visual_acuity"] = visual_acuity_data
+                                    
+                            except (json.JSONDecodeError, KeyError, AttributeError, TypeError) as e:
+                                print(f"Error parsing visual_acuity: {str(e)}")
+                        
+                        remarks = franchise_ophthalmology.get('remarks', '')
+                        if remarks and remarks.strip():
+                            ophthalmology_data["remarks"] = remarks
+                        
+                        patient_complaints = franchise_ophthalmology.get('patient_complaints', '')
+                        if patient_complaints and patient_complaints.strip():
+                            ophthalmology_data["patient_complaints"] = patient_complaints
+                        
+                        right_eye = franchise_ophthalmology.get('right_eye')
+                        if right_eye:
+                            try:
+                                ophthalmology_data["right_eye"] = json.loads(right_eye) if isinstance(right_eye, str) else right_eye
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        left_eye = franchise_ophthalmology.get('left_eye')
+                        if left_eye:
+                            try:
+                                ophthalmology_data["left_eye"] = json.loads(left_eye) if isinstance(left_eye, str) else left_eye
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        color_vision = franchise_ophthalmology.get('color_vision', '')
+                        if color_vision and color_vision.strip():
+                            ophthalmology_data["color_vision_status"] = color_vision
+                        
+                        vision_status = franchise_ophthalmology.get('vision_status', '')
+                        if vision_status and vision_status.strip():
+                            ophthalmology_data["vision_status"] = vision_status
+                        
+                        optometrist_name = franchise_ophthalmology.get('optometrist_name', '')
+                        if optometrist_name and optometrist_name.strip():
+                            ophthalmology_data["optometrist_name"] = optometrist_name
+                        
+                        if not ophthalmology_data:
+                            ophthalmology_data = None
+                            
+                    except Exception as e:
+                        print(f"Error parsing ophthalmology data: {str(e)}")
+                        ophthalmology_data = None
+                
+                # Parse sample testdetails
+                sample_testdetails = []
+                if franchise_sample:
+                    try:
+                        sample_testdetails = json.loads(franchise_sample.get('testdetails', '[]'))
+                    except json.JSONDecodeError:
+                        sample_testdetails = []
+                
+                # Build patient details response
+                patient_details = {
+                    "patient_id": employee_id,
+                    "patientname": franchise_patient.get("employee_name"),
+                    "age": franchise_patient.get("age"),
+                    "gender": franchise_patient.get("gender"),
+                    "date": franchise_billing.get("created_date"),
+                    "barcode": barcode,
+                    "testdetails": []
+                }
+                
+                # Add company_name
+                if company_data and company_data.get("company_name"):
+                    patient_details["company_name"] = company_data.get("company_name")
+                
+                # Add department if exists
+                if franchise_patient.get("department"):
+                    patient_details["department"] = franchise_patient.get("department")
+                
+                # Add dob if exists
+                if franchise_patient.get("dob"):
+                    patient_details["dob"] = franchise_patient.get("dob")
+                
+                # Add vitals if data exists
+                if vitals_data:
+                    patient_details["vitals"] = {}
+                    for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2"]:
+                        if vitals_data.get(key):
+                            display_key = key.replace("_cm", "").replace("_kg", "")
+                            patient_details["vitals"][display_key] = vitals_data.get(key)
+                
+                # Add medical history if data exists
+                if medical_history_data:
+                    patient_details["medical_history"] = medical_history_data
+                
+                # Add clinical examination if data exists
+                if clinical_examination_data:
+                    patient_details["clinical_examination"] = clinical_examination_data
+                
+                # Add ophthalmology if data exists
+                if ophthalmology_data:
+                    patient_details["ophthalmology"] = ophthalmology_data
+                
+                # Add investigation notes (NO file IDs)
+                if investigation_notes:
+                    patient_details["investigation_notes"] = investigation_notes
+                
+                # Add final assessment
+                if franchise_overall_approval:
+                    final_assessment = {}
                     
-                    # Parameter rows with HIGH/LOW indicators
-                    for param in params:
-                        param_value_text = str(param.get('value', ''))
-                        if param.get('isHigh'):
-                            param_value_para = Paragraph(f"<b><font color='red'>{param_value_text} ↑</font></b>", styles['Normal'])
-                        elif param.get('isLow'):
-                            param_value_para = Paragraph(f"<b><font color='blue'>{param_value_text} ↓</font></b>", styles['Normal'])
-                        else:
-                            param_value_para = Paragraph(param_value_text, styles['Normal'])
-                        
-                        param_unit = Paragraph(param.get('unit', '').replace('\\u00b5', 'µ').replace('μ', 'µ'), styles['Normal'])
-                        param_method = Paragraph(param.get('method', '').replace('Method', '').strip(), styles['Normal'])
-                        
-                        param_row = [
-                            Paragraph(param.get('name', ''), styles['Normal']),
-                            Paragraph(param.get('specimen_type', ''), styles['Normal']),
-                            "",
-                            param_value_para,
-                            param_unit,
-                            Paragraph(param.get('reference_range', ''), styles['Normal']),
-                            param_method
-                        ]
-                        all_lab_rows.append(param_row)
-    
-    # Create table with repeatRows=1 to repeat header on every page
-    lab_table = Table(all_lab_rows, colWidths=col_widths, repeatRows=1)
-    lab_table.setStyle(TableStyle([
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 1*mm),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 1*mm),
-        ('TOPPADDING', (0, 0), (-1, -1), 1*mm),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1*mm),
-        # Header row styling
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('LINEABOVE', (0, 0), (-1, 0), 1, colors.black),
-        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.black),
-    ]))
-    
-    elements.append(lab_table)
-    
-    # Add consultant signatures
-    elements.append(Spacer(1, 10*mm))
-    add_consultant_signatures(elements, styles)
-
-
-def add_consultant_signatures(elements, styles):
-    """Add consultant signatures at bottom - FIXED alignment for Dr. Vijayan"""
-    sig_data = []
-    
-    # First row - signatures (all aligned to their respective columns)
-    sig_row1 = ["", "", ""]
-    
-    # Dr. Vijayan signature in RIGHT column (index 2)
-    if os.path.exists(DR_VIJAYAN_SIGNATURE_PATH):
-        try:
-            sig_img = RLImage(DR_VIJAYAN_SIGNATURE_PATH, width=35*mm, height=15*mm)
-            sig_row1[2] = sig_img  # Right column
-        except:
-            pass
-    
-    sig_data.append(sig_row1)
-    
-    # Doctor names
-    sig_data.append([
-        Paragraph("<b>Dr. S. Brindha M.D.</b>", styles['Normal']),
-        Paragraph("<b>Dr. Rajesh Sengodan M.D.</b>", styles['Normal']),
-        Paragraph("<b>Dr. R. Vijayan Ph.D.</b>", styles['Normal'])
-    ])
-    
-    # Titles
-    sig_data.append([
-        Paragraph("Consultant Pathologist", styles['Normal']),
-        Paragraph("Consultant Microbiologist", styles['Normal']),
-        Paragraph("Consultant Biochemist", styles['Normal'])
-    ])
-    
-    col_width = 60*mm
-    sig_table = Table(sig_data, colWidths=[col_width, col_width, col_width])
-    sig_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, 0), 'BOTTOM'),
-        ('FONTSIZE', (0, 1), (-1, -1), 10),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 1*mm),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1*mm),
-    ]))
-    
-    elements.append(sig_table)
+                    impression = franchise_overall_approval.get("impression", "")
+                    if impression and impression.strip():
+                        final_assessment["impression"] = impression
+                    
+                    remarks = franchise_overall_approval.get("remarks", "")
+                    if remarks and remarks.strip():
+                        final_assessment["remarks"] = remarks
+                    
+                    if final_assessment:
+                        patient_details["final_assessment"] = final_assessment
+                
+                # Process lab tests from TestValue model
+                if test_values.exists():
+                    for test_value in test_values:
+                        try:
+                            testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
+                            if not isinstance(testvalue_details, list):
+                                continue
+                            
+                            for test_detail in testvalue_details:
+                                testname = test_detail.get("testname")
+                                if not testname:
+                                    continue
+                                
+                                # Find corresponding sample status
+                                sample_status = None
+                                for sample_test in sample_testdetails:
+                                    if sample_test.get("testname") == testname:
+                                        sample_status = sample_test
+                                        break
+                                
+                                # Build test detail object
+                                test_response = {"testname": testname}
+                                
+                                if test_detail.get("department"):
+                                    test_response["department"] = test_detail.get("department")
+                                
+                                if test_detail.get("verified_by"):
+                                    test_response["verified_by"] = test_detail.get("verified_by")
+                                
+                                if test_detail.get("approve_by"):
+                                    test_response["approve_by"] = test_detail.get("approve_by")
+                                
+                                if test_detail.get("approve_time"):
+                                    test_response["approve_time"] = test_detail.get("approve_time")
+                                
+                                if sample_status:
+                                    if sample_status.get("samplecollected_time"):
+                                        test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
+                                    if sample_status.get("received_time"):
+                                        test_response["received_time"] = sample_status.get("received_time")
+                                
+                                # Check if test has parameters
+                                if test_detail.get("parameters"):
+                                    processed_parameters = []
+                                    for param in test_detail.get("parameters", []):
+                                        processed_param = {}
+                                        
+                                        if param.get("name"):
+                                            processed_param["name"] = param.get("name")
+                                        if param.get("value"):
+                                            processed_param["value"] = param.get("value")
+                                        if param.get("unit"):
+                                            processed_param["unit"] = param.get("unit")
+                                        if param.get("specimen_type"):
+                                            processed_param["specimen_type"] = param.get("specimen_type")
+                                        if param.get("reference_range"):
+                                            processed_param["reference_range"] = param.get("reference_range")
+                                        if param.get("method"):
+                                            processed_param["method"] = param.get("method")
+                                        if param.get("sub_title"):
+                                            processed_param["sub_title"] = param.get("sub_title")
+                                        
+                                        if processed_param:
+                                            processed_parameters.append(processed_param)
+                                    
+                                    if processed_parameters:
+                                        test_response["parameters"] = processed_parameters
+                                else:
+                                    # Add individual test fields
+                                    if test_detail.get("method"):
+                                        test_response["method"] = test_detail.get("method")
+                                    if test_detail.get("specimen_type"):
+                                        test_response["specimen_type"] = test_detail.get("specimen_type")
+                                    if test_detail.get("value"):
+                                        test_response["value"] = test_detail.get("value")
+                                    if test_detail.get("unit"):
+                                        test_response["unit"] = test_detail.get("unit")
+                                    if test_detail.get("reference_range"):
+                                        test_response["reference_range"] = test_detail.get("reference_range")
+                                    if test_detail.get("sub_title"):
+                                        test_response["sub_title"] = test_detail.get("sub_title")
+                                
+                                patient_details["testdetails"].append(test_response)
+                                
+                        except (json.JSONDecodeError, AttributeError) as e:
+                            print(f"Error processing test: {str(e)}")
+                            continue
+                
+                results[barcode] = patient_details
+                
+            except Exception as e:
+                print(f"Error processing barcode {barcode}: {str(e)}")
+                results[barcode] = {'error': str(e)}
+        
+        client.close()
+        
+        return JsonResponse({
+            'success': True,
+            'results': results,
+            'total': len(barcodes),
+            'processed': len(results)
+        })
+        
+    except Exception as e:
+        print(f"Batch processing error: {str(e)}")
+        print(traceback.format_exc())
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
