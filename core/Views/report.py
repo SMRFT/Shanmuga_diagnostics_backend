@@ -25,7 +25,6 @@ from ..models import Patient
 from ..models import SampleStatus,Billing
 from ..models import TestValue
 from ..models import BarcodeTestDetails
-from django.http import JsonResponse
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 import os, json, traceback
@@ -33,7 +32,6 @@ from django.utils.timezone import make_aware
 from ..models import SampleStatus, TestValue
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
-from django.core.mail import EmailMessage
 from django.core.mail import EmailMessage
 import os
 from dotenv import load_dotenv

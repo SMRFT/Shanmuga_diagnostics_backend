@@ -14,6 +14,8 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/LIS/clinical_name/':'SD-API-CN',
 
+    '/_b_a_c_k_e_n_d/Diagnostics/test_details_test/':'SD-P-TE',
+
     #barcode:
     r'^/_b_a_c_k_e_n_d/LIS/patients_get_barcode/?(\?.*)?$': 'SD-P-BG',
     '/_b_a_c_k_e_n_d/LIS/get-max-barcode/': 'SD-P-BTD',
@@ -117,6 +119,9 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
+
+
+    r'^/_b_a_c_k_e_n_d/Diagnostics/generate_barcodes_pdf_bulk/?(\?.*)?$':'SD-P-CHC',
 }
 
 PAGE_ACTION_MAPPING = {
