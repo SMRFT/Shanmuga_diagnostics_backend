@@ -26,8 +26,8 @@ urlpatterns = [
     path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
     path('sample_status/', sample.sample_status, name='sample_status'),
     path('test_details/', views.get_test_details, name='get_test_details'),   
-    path('check_sample_status/<str:patient_id>/', sample.check_sample_status, name='check_sample_status'),
-    path('sample_statusupdate/<str:patient_id>/', sample.patch_sample_status, name='patch_sample_status'),
+    path('check_sample_status/<str:barcode>/', sample.check_sample_status, name='check_sample_status'),
+    path('sample_statusupdate/<str:barcode>/', sample.patch_sample_status, name='patch_sample_status'),
 
     path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
     path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
