@@ -14,7 +14,9 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/LIS/clinical_name/':'SD-API-CN',
 
-    '/_b_a_c_k_e_n_d/Diagnostics/test_details_test/':'SD-P-TE',
+    '/_b_a_c_k_e_n_d/LIS/test_details_test/':'SD-P-TE',
+    '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-P-GD',
+    
 
     #barcode:
     r'^/_b_a_c_k_e_n_d/LIS/patients_get_barcode/?(\?.*)?$': 'SD-P-BG',
@@ -113,7 +115,7 @@ PAGE_MAPPING = {
 
     r'^/_b_a_c_k_e_n_d/LIS/hms_get_sample_collected/?(\?.*)?$':'SD-P-HMSGC',
     r'^/_b_a_c_k_e_n_d/LIS/hms_update_sample_collected(?:/[^/]+)+/$':'SD-P-HMSUC',
-
+    r'^/_b_a_c_k_e_n_d/LIS/get_batch_corporate_health_reports/?(\?.*)?$':'SD-P-CHC',
 
     #MIS
     r'^/_b_a_c_k_e_n_d/LIS/consolidated-data/?(\?.*)?$':'SD-P-MIS',
@@ -137,4 +139,3 @@ GEN_ACTION_MAPPING = {
     'GET': 'R',
     'PATCH': 'RW',
 }
-

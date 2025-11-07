@@ -85,7 +85,6 @@ urlpatterns = [
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
     path('send-email/', whatsapp.send_email, name='send_email'),
 
-
     path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
     path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
     path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
@@ -151,7 +150,9 @@ urlpatterns = [
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
 
-    path('generate_barcodes_pdf_bulk/', corporate.generate_barcodes_pdf_bulk, name='generate_barcodes_pdf_bulk'),
-]
+    path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
+    path('get_devices/', testdetails.get_devices, name='get_devices'),
 
+    path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
+]
 
