@@ -179,18 +179,16 @@ def get_test_details(request):
 
         elif request.method == 'POST':
             try:
-                data = json.loads(request.body.decode('utf-8'))
+                data = request.data
 
                 # Normalize device_id to array
                 data['device_id'] = normalize_device_ids(data.get('device_id'))
 
-                # Shape parameters based on device count instead of forcing a list/empty
                 if 'parameters' in data and data.get('parameters') not in ("", None):
                     data['parameters'] = shape_parameters_for_storage(data.get('parameters'), data['device_id'])
                 else:
                     data.pop('parameters', None)
 
-                # Generate incremental test_id = max(test_id) + 1
                 max_doc = collection.find_one(
                     {"test_id": {"$exists": True}},
                     sort=[("test_id", -1)],
@@ -199,15 +197,14 @@ def get_test_details(request):
                 next_id = (max_doc.get('test_id', 0) if max_doc else 0) + 1
                 data['test_id'] = next_id
 
-                # Defaults
                 if 'is_active' not in data:
                     data['is_active'] = True
                 if 'status' not in data:
                     data['status'] = 'Pending'
 
-                # Insert
                 collection.insert_one(data)
                 return JsonResponse({'success': True, 'message': 'Test details added successfully', 'test_id': next_id}, status=201)
+
 
             except json.JSONDecodeError:
                 return JsonResponse({'success': False, 'error': 'Invalid JSON data'}, status=400)
@@ -288,7 +285,13 @@ def send_approval_email(request):
             except Exception as mongo_err:
                 return JsonResponse({'error': f'Database error: {str(mongo_err)}'}, status=500)
 
-            base_url = 'http://127.0.0.1:1071/'
+            # For local development, override the URL if needed
+            if '127.0.0.1' in base_url or 'localhost' in base_url:
+                base_url = 'http://127.0.0.1:8000'
+            else:
+                base_url = 'https://shinova.in'
+            
+
             approval_url = f"{base_url}_b_a_c_k_e_n_d/LIS/approve_test/?test_name={test_name}"
 
             test_details_str = ""
@@ -374,7 +377,7 @@ def send_approval_email(request):
             if 'recipient_email' in locals() and recipient_email:
                 recipient_list.append(recipient_email)
 
-            default_emails = ['sivasundarismrft@gmail.com', 'sivasundari1024@gmail.com']
+            default_emails = ['drprabusankar@smrft.org', 'drpriya@smrft.org']
             for email in default_emails:
                 if email not in recipient_list:
                     recipient_list.append(email)
