@@ -954,6 +954,7 @@ from rest_framework.decorators import api_view, permission_classes
 from django.http import JsonResponse
 from bson import json_util
 import json
+from django.core.exceptions import FieldError
 
 @api_view(['GET'])
 def get_test_value_for_franchise(request):
