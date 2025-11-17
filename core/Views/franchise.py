@@ -956,7 +956,7 @@ from bson import json_util
 import json
 
 @api_view(['GET'])
-@permission_classes([ HasRoleAndDataPermission])
+# @permission_classes([ HasRoleAndDataPermission])
 def get_test_value_for_franchise(request):
     date = request.GET.get('date')
     franchise_id = request.GET.get('franchise_id')
