@@ -132,3 +132,209 @@ GEN_ACTION_MAPPING = {
     'GET': 'R',
     'PATCH': 'RW',
 }
+
+
+
+
+# {
+#   "_id": {
+#     "$oid": "67dd1816e0630bf9c06b0fc3"
+#   },
+#   "role_code": "SD-R-DOC",
+#   "role_name": "Doctor",
+#   "role_description": "Doctor",
+#   "permissions": {
+#     "allowed": [
+#       "SD-P-RA-RW",
+#       "SD-P-RD-RW",
+#       "SD-API-TV-R",
+#       "SD-P-DF-R",
+#       "SD-P-DF-RW",
+#       "SD-API-OAR-R",
+#       "SD-P-POV-R",
+#       "SD-P-POV-RW",
+#       "SD-P-MIS-R",
+#       "SD-R-DOC",
+#       "SD-P-PF-RW",
+#       "SD-P-PG-RW",
+#       "SD-API-CN-R",
+#       "SD-API-RB-R",
+#       "SD-P-RB-RW",
+#       "SD-P-SC-R",
+#       "SD-P-LPI-R",
+#       "SD-P-LBN-R",
+#       "SD-P-TM-R",
+#       "SD-P-SP-R",
+#       "SD-P-PB-RW",
+#       "SD-P-GPD-R",
+#       "SD-P-UPB-RW",
+#       "SD-P-BG-RW",
+#       "SD-P-SS-R",
+#       "SD-P-SS-RW",
+#       "SD-P-GPB-R",
+#       "SD-API-BTD-RW",
+#       "SD-API-SS-RW",
+#       "SD-API-TD-R",
+#             "SD-P-SA-RW",
+#       "SD-P-RG-RW",
+#       "SD-P-TDE-RW",
+#       "SD-P-RD-RW",
+#       "SD-P-HMSPB-RW",
+#       "SD-P-HMSTD-R",
+#       "SD-P-HMSBD-RW",
+#       "SD-P-HMSGP-R",
+#       "SD-P-HMSLD-R",
+#       "SD-P-HMSSP-R",
+#       "SD-P-HMSSS-RW",
+#       "SD-P-HMSCS-R",
+#       "SD-P-HMSSD-R",
+#       "SD-P-HMSPS-RW",
+#       "SD-P-HMSGC-R",
+#       "SD-P-HMSUC-RW",
+#       "SD-P-TE-RW",
+#             "SD-P-LBN-R",
+#       "SD-P-TM-R",
+#       "SD-P-GPB-R",
+#       "SD-P-GPD-R",
+#       "SD-P-UPB-RW",
+#       "SD-P-HMSPB-RW",
+#       "SD-API-HMSTD-R",
+#       "SD-P-HMSLD-R",
+#       "SD-P-HMSGP-R",
+#       "SD-P-HMSSP-R",
+#       "SD-P-HMSSS-RW",
+#       "SD-P-HMSCS-R",
+#       "SD-P-HMSSD-R",
+#       "SD-P-HMSPS-RW",
+#     "SD-P-BG-R",
+#       "SD-P-BTD-R",
+#       "SD-P-BTD-RW",
+#       "SD-API-TD-R",
+#       "SD-P-SSU-R",
+#       "SD-P-SSU-RW",
+#       "SD-P-SS-R",
+#       "SD-P-SS-RW",
+#       "SD-P-PD-R",
+#       "SD-API-TV-R",
+#       "SD-P-TD-R",
+#       "SD-P-TD-RW",
+#       "SD-P-DF-R",
+#       "SD-P-DF-RW",
+#       "SD-P-PL-R",
+#       "SD-API-RB-R",
+#       "SD-API-CN-R",
+#       "SD-P-POV-R",
+#       "SD-P-POV-RW",
+#       "SD-P-GPD-R",
+#       "SD-P-MIS-R",
+#       "SD-P-CHC-R",
+#       "SD-P-CHC-RW",
+#     ]
+#   },
+#   "is_active": true,
+#   "created_by": "system",
+#   "created_date": {
+#     "$date": "2025-11-02T18:30:00.000Z"
+#   },
+#   "last_modified_by": "system",
+#   "last_modified_date": {
+#     "$date": "2025-11-02T18:30:00.000Z"
+#   }
+# }
+
+
+
+
+# {
+#   "_id": {
+#     "$oid": "67dd1816e0630bf9c06b0fc3"
+#   },
+#   "role_code": "SD-R-DOC",
+#   "role_name": "Doctor",
+#   "role_description": "Doctor",
+#   "permissions": {
+#     "allowed": [
+#       "SD-P-BG-R",
+#       "SD-P-BTD-R",
+#       "SD-P-BTD-RW",
+#       "SD-API-TD-R",
+#       "SD-P-SSU-R",
+#       "SD-P-SSU-RW",
+#       "SD-P-SS-R",
+#       "SD-P-SS-RW",
+#       "SD-P-PD-R",
+#       "SD-API-TV-R",
+#       "SD-P-TD-R",
+#       "SD-P-TD-RW",
+#       "SD-P-DF-R",
+#       "SD-P-DF-RW",
+#       "SD-P-PL-R",
+#       "SD-API-RB-R",
+#       "SD-API-CN-R",
+#       "SD-P-POV-R",
+#       "SD-P-POV-RW",
+#       "SD-P-GPD-R",
+#       "SD-P-MIS-R",
+#       "SD-P-CHC-R",
+#       "SD-P-CHC-RW",
+#       "SD-R-CEO"
+#     ]
+#   },
+#   "is_active": true,
+#   "created_by": "system",
+#   "created_date": {
+#     "$date": "2025-11-02T18:30:00.000Z"
+#   },
+#   "last_modified_by": "system",
+#   "last_modified_date": {
+#     "$date": "2025-11-02T18:30:00.000Z"
+#   }
+# }
+
+
+
+# {
+#   "_id": {
+#     "$oid": "68ef133dce6c5346ade4e8da"
+#   },
+#   "role_code": "SD-R-CEO",
+#   "role_name": "CEO",
+#   "role_description": "CEO",
+#   "permissions": {
+#     "allowed": [
+#       "SD-P-BG-R",
+#       "SD-P-BTD-R",
+#       "SD-P-BTD-RW",
+#       "SD-API-TD-R",
+#       "SD-P-SSU-R",
+#       "SD-P-SSU-RW",
+#       "SD-P-SS-R",
+#       "SD-P-SS-RW",
+#       "SD-P-PD-R",
+#       "SD-API-TV-R",
+#       "SD-P-TD-R",
+#       "SD-P-TD-RW",
+#       "SD-P-DF-R",
+#       "SD-P-DF-RW",
+#       "SD-P-PL-R",
+#       "SD-API-RB-R",
+#       "SD-API-CN-R",
+#       "SD-P-POV-R",
+#       "SD-P-POV-RW",
+#       "SD-P-GPD-R",
+#       "SD-P-MIS-R",
+#       "SD-P-CHC-R",
+#       "SD-P-CHC-RW",
+#       "SD-R-CEO"
+#     ]
+#   },
+#   "is_active": true,
+#   "created_by": "system",
+#   "created_date": {
+#     "$date": "2025-11-02T18:30:00.000Z"
+#   },
+#   "last_modified_by": "system",
+#   "last_modified_date": {
+#     "$date": "2025-11-02T18:30:00.000Z"
+#   }
+# }
