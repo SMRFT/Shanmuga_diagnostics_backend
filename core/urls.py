@@ -29,6 +29,7 @@ urlpatterns = [
     path('check_sample_status/<str:barcode>/', sample.check_sample_status, name='check_sample_status'),
     path('sample_statusupdate/<str:barcode>/', sample.patch_sample_status, name='patch_sample_status'),
 
+
     path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
     path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
 
@@ -135,7 +136,7 @@ urlpatterns = [
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('get_batch_investigation_status/', corporate.get_batch_investigation_status, name='get_batch_investigation_status'),
-    
+    path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),
     path('hms_sample_status/', hmssamplestatus.hms_sample_status, name='hms_sample_status'),

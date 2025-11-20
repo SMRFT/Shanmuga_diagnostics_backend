@@ -296,6 +296,8 @@ def get_samplestatus_testvalue(request):
                     patient_id = barcode_details.patient_id
                     age = barcode_details.age
                     gender = barcode_details.gender
+                    is_emergency = barcode_details.is_emergency
+                    patient_history = barcode_details.patient_history
                 else:
                     patient_name = "Unknown Patient"
                     patient_id = sample_status.patient_id if hasattr(sample_status, 'patient_id') else "Unknown ID"
@@ -318,6 +320,8 @@ def get_samplestatus_testvalue(request):
                     'patientname': patient_name,
                     'age': age,
                     'gender': gender,
+                    'is_emergency': is_emergency,
+                    'patient_history': patient_history,
                     'barcode': barcode,
                     'date': safe_datetime_to_string(sample_status.date),
                     'testdetails': updated_tests,

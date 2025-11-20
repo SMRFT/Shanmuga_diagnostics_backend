@@ -14,10 +14,6 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/LIS/clinical_name/':'SD-API-CN',
 
-    '/_b_a_c_k_e_n_d/LIS/test_details_test/':'SD-P-TE',
-    '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-P-GD',
-    
-
     #barcode:
     r'^/_b_a_c_k_e_n_d/LIS/patients_get_barcode/?(\?.*)?$': 'SD-P-BG',
     '/_b_a_c_k_e_n_d/LIS/get-max-barcode/': 'SD-P-BTD',
@@ -111,19 +107,18 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/corporate_health_report/?(\?.*)?$':'SD-P-CHC',
     r'^/_b_a_c_k_e_n_d/LIS/get_investigation_file/?(\?.*)?$':'SD-P-CHC',
     r'^/_b_a_c_k_e_n_d/LIS/get_investigation_status/?(\?.*)?$':'SD-P-CHC',
+    r'^/_b_a_c_k_e_n_d/LIS/get_batch_investigation_status/?(\?.*)?$':'SD-P-CHC',
+    r'^/_b_a_c_k_e_n_d/LIS/get_batch_corporate_health_reports/?(\?.*)?$':'SD-P-CHC',
     r'^/_b_a_c_k_e_n_d/LIS/save_overall_approval/?(\?.*)?$':'SD-P-CHC',
 
     r'^/_b_a_c_k_e_n_d/LIS/hms_get_sample_collected/?(\?.*)?$':'SD-P-HMSGC',
     r'^/_b_a_c_k_e_n_d/LIS/hms_update_sample_collected(?:/[^/]+)+/$':'SD-P-HMSUC',
-    r'^/_b_a_c_k_e_n_d/LIS/get_batch_corporate_health_reports/?(\?.*)?$':'SD-P-CHC',
+
 
     #MIS
     r'^/_b_a_c_k_e_n_d/LIS/consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
-
-
-    r'^/_b_a_c_k_e_n_d/Diagnostics/generate_barcodes_pdf_bulk/?(\?.*)?$':'SD-P-CHC',
 }
 
 PAGE_ACTION_MAPPING = {
@@ -138,4 +133,5 @@ GEN_ACTION_MAPPING = {
     'DELETE': 'RW',
     'GET': 'R',
     'PATCH': 'RW',
+    'OPTIONS': 'RW',
 }
