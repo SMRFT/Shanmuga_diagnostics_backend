@@ -131,9 +131,7 @@ urlpatterns = [
     path("get_corporate_Transferred/<str:batch_number>/", corporate.get_corporate_sample, name="get_corporate_sample"),
     path("update_corporate_sample/<str:barcode>/", corporate.update_corporate_sample, name="update_corporate_sample"),
 
-
-    #Corporate Reports:
-#Corporate Reports:     
+    #Corporate Reports:     
     path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
     path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),
     path('corporate_approval_report/', corporate.corporate_approval_report, name='corporate_approval_report'),
