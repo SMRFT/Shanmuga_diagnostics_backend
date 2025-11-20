@@ -135,4 +135,3 @@ GEN_ACTION_MAPPING = {
     'PATCH': 'RW',
     'OPTIONS': 'RW',
 }
-

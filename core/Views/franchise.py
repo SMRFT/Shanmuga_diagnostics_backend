@@ -971,53 +971,66 @@ from rest_framework.decorators import api_view, permission_classes
 from django.http import JsonResponse
 from bson import json_util
 import json
+from django.core.exceptions import FieldError
 
 @api_view(['GET'])
-@permission_classes([ HasRoleAndDataPermission])
 def get_test_value_for_franchise(request):
-    date = request.GET.get('date')
-    franchise_id = request.GET.get('franchise_id')
+    date_str = request.GET.get('date')
+    franchise_id = request.GET.get('franchise_id')  # incoming param name
 
-    # print(f"Received date: {date}, franchise_id: {franchise_id}")
-
-    if not franchise_id or not date:
+    if not franchise_id or not date_str:
         return JsonResponse({'error': 'franchise_id and date are required'}, status=400)
 
+    # normalize date: accept "YYYY-MM-DD" or full ISO "YYYY-MM-DDTHH:MM:SS" etc.
     try:
-        test_values = TestValue.objects.filter(
-            franchise_id=franchise_id,
-            date__startswith=date  # ✅ fix: only match date part
-        )
+        # take date part only
+        date_only_str = date_str.split('T')[0]
+        parsed_date = datetime.strptime(date_only_str, '%Y-%m-%d').date()
+    except Exception:
+        return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD or ISO date.'}, status=400)
 
-        if not test_values:
+    try:
+        # Prefer to filter using date__date (clean), but fallback to startswith if not supported.
+        try:
+            test_values_qs = TestValue.objects.filter(locationId=franchise_id, date__date=parsed_date)
+        except FieldError:
+            # some ORMs/fields may not support __date; use startswith on string representation
+            test_values_qs = TestValue.objects.filter(locationId=franchise_id, date__startswith=date_only_str)
+
+        if not test_values_qs.exists():
             return JsonResponse({'message': 'No test values found'}, status=404)
 
         result = []
-        for test_value in test_values:
-            try:
-                testdetails = (
-                    json.loads(test_value.testdetails)
-                    if isinstance(test_value.testdetails, str)
-                    else test_value.testdetails
-                )
-            except Exception as e:
-                print(f"Error parsing testdetails: {e}")
-                testdetails = test_value.testdetails
+        for tv in test_values_qs:
+            # testdetails may be stored as JSON string or already as list/dict
+            raw_testdetails = tv.testdetails
+            parsed_testdetails = None
+            if isinstance(raw_testdetails, str):
+                try:
+                    parsed_testdetails = json.loads(raw_testdetails)
+                except Exception as e:
+                    # fallback: keep the raw string if parsing fails
+                    parsed_testdetails = raw_testdetails
+                    # log parse error
+                    print(f"[WARN] Failed to json.loads testdetails for id {getattr(tv, '_id', 'n/a')}: {e}")
+            else:
+                parsed_testdetails = raw_testdetails
 
+            # Use the same field names as your stored doc
             result.append({
-                'franchise_id': test_value.franchise_id,
-                'barcode':test_value.barcode,
-                'date': str(test_value.date),
-                'testdetails': testdetails,
+                'franchise_id': getattr(tv, 'locationId', None),
+                'barcode': getattr(tv, 'barcode', None),
+                'date': str(getattr(tv, 'date', None)),
+                'testdetails': parsed_testdetails,
             })
 
         return JsonResponse(
             {'status': 'success', 'data': result},
-            safe=False,
             status=200,
-            json_dumps_params={'default': json_util.default}
+            json_dumps_params={'default': getattr(json, 'default', None)}
         )
 
     except Exception as e:
-        print(f"[ERROR] While processing test values: {str(e)}")
+        print(f"[ERROR] While processing test values: {e}")
+        print(traceback.format_exc())
         return JsonResponse({'error': 'Internal server error', 'details': str(e)}, status=500)

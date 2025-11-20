@@ -24,9 +24,14 @@ load_dotenv()
 from urllib.parse import unquote_plus
 import re
 
+# 🟢 3️⃣ Process testname filter once
+def normalize_testname(name):
+    if not name:
+        return ""
+    normalized = re.sub(r'\s+', ' ', name.strip().lower())
+    normalized = normalized.replace('&', 'and').replace('/', ' ')
+    return normalized
 
-@api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
 def get_test_values(request):
     client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
     db = client.franchise
