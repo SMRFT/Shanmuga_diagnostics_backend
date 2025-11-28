@@ -6,6 +6,15 @@ class ObjectIdField(serializers.Field):
         return str(value)
     def to_internal_value(self, data):
         return ObjectId(data)
+
+
+from .models import Appointment
+class AppointmentSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = Appointment
+        fields = '__all__'
+
     
 from .models import Patient
 class PatientSerializer(serializers.ModelSerializer):
@@ -34,7 +43,6 @@ class BillingSerializer(serializers.ModelSerializer):
             return None
 
 
-
 from .models import ClinicalName
 class ClinicalNameSerializer(serializers.ModelSerializer):
     id = ObjectIdField(read_only=True)
@@ -50,6 +58,7 @@ class RefBySerializer(serializers.ModelSerializer):
         model = RefBy
         fields = '__all__'
 
+
 from .models import SampleStatus, TestValue
 class SampleStatusSerializer(serializers.ModelSerializer):
     class Meta:
@@ -62,15 +71,13 @@ class TestValueSerializer(serializers.ModelSerializer):
         model = TestValue  # Replace with your model name
         fields = ['patient_id', 'patientname', 'age', 'date', 'testdetails']
 
+
 from .models import SampleCollector
 class SampleCollectorSerializer(serializers.ModelSerializer):
     id = ObjectIdField(read_only=True)
     class Meta:
         model = SampleCollector
         fields = '__all__'
-
-
-
 
 
 #HMS PART
@@ -104,9 +111,26 @@ class HospitalLabSerializer(serializers.ModelSerializer):
         model = HospitalLab
         fields = '__all__'
 
+
 from .models import SalesVisitLog
 class SalesVisitLogSerializer(serializers.ModelSerializer):
     id = ObjectIdField(read_only=True)
     class Meta:
         model = SalesVisitLog
+        fields = "__all__"
+
+
+from .models import LogisticData
+class LogisticDataSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = LogisticData
+        fields = "__all__"
+
+        
+from .models import LogisticTask
+class LogisticTaskSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = LogisticTask
         fields = "__all__"

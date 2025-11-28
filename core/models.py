@@ -1,13 +1,6 @@
 from django.db import models
 from bson import ObjectId  # Import ObjectId from bson
-class AuditModel(models.Model):
-    created_by = models.CharField(max_length=100, blank=True, null=True)
-    created_date = models.DateTimeField(auto_now_add=True)
-    lastmodified_by = models.CharField(max_length=100, blank=True, null=True)
-    lastmodified_date = models.DateTimeField(blank=True, null=True)
-
-    class Meta:
-        abstract = True
+from django.utils import timezone
 
 
 class AuditModel(models.Model):
@@ -17,6 +10,25 @@ class AuditModel(models.Model):
     lastmodified_date = models.DateTimeField(blank=True, null=True)
     class Meta:
         abstract = True
+
+
+class Appointment(AuditModel):
+    GENDER_CHOICES = [
+        ("Male", "Male"),
+        ("Female", "Female"),
+        ("Other", "Other")
+    ]
+
+    appointment_date = models.DateField()
+    patient_name = models.CharField(max_length=150)
+    gender = models.CharField(max_length=10, choices=GENDER_CHOICES)
+    age = models.PositiveIntegerField()
+    mobile_number = models.CharField(max_length=10)
+
+    def __str__(self):
+        return f"{self.patient_name} - {self.appointment_date}"    
+    
+
 class Patient(AuditModel):
     patient_id = models.CharField(max_length=20, primary_key=True, blank=True)
     patientname = models.CharField(max_length=100)
@@ -28,6 +40,8 @@ class Patient(AuditModel):
     address = models.JSONField(blank=True, null=True)
     def __str__(self):
         return self.patient_id
+    
+
 class Billing(AuditModel):
     patient_id = models.CharField(max_length=20)
     date = models.DateTimeField(null=True, blank=True)
@@ -46,6 +60,9 @@ class Billing(AuditModel):
     discount = models.CharField(max_length=50, blank=True)
     payment_method = models.JSONField(blank=True, null=True)
     MultiplePayment = models.JSONField(blank=True, null=True)
+    is_emergency = models.BooleanField(default=False)
+    patient_history = models.CharField(max_length=100, blank=True, null=True)
+    prescription_file_id = models.CharField(max_length=255, blank=True, null=True)
     credit_amount = models.CharField(max_length=100, blank=True)
     status = models.CharField(max_length=20, default="Registered")
     def __str__(self):
@@ -57,6 +74,7 @@ class Billing(AuditModel):
             return patient.patientname
         except Patient.DoesNotExist:
             return None
+        
 
 class ClinicalName(AuditModel):
     referrerCode = models.CharField(max_length=10, primary_key=True)
@@ -108,7 +126,6 @@ class RefBy(AuditModel):
         return f"{self.name}"
     
 
-
 class BarcodeTestDetails(AuditModel):
     patient_id = models.CharField(max_length=50)
     patientname = models.CharField(max_length=255)   
@@ -122,13 +139,14 @@ class BarcodeTestDetails(AuditModel):
     def __str__(self):
         return f"{self.patientname} - {self.patient_id}"
     
+    
 class SampleStatus(AuditModel):
     patient_id = models.CharField(max_length=100)    
     barcode= models.CharField(max_length=50)   
     date = models.DateTimeField(null=True, blank=True)  # Use DateTimeField to store both date and time
     testdetails = models.JSONField()  # Assuming you're using Django 3.1+ for JSONField
     def __str__(self):
-        return self.patientname
+        return self.patient_id
     
 
 class TestValue(AuditModel):
@@ -151,6 +169,7 @@ class SampleCollector(AuditModel):
     def __str__(self):
         return f"{self.name}"
     
+
 class SalesVisitLog(models.Model):
     date = models.DateField()
     time = models.CharField(max_length=255)
@@ -168,7 +187,7 @@ class SalesVisitLog(models.Model):
     lastmodified_by = models.CharField(max_length=100, blank=True, null=True)
     lastmodified_date = models.DateTimeField(blank=True, null=True)
 
-from django.db import models
+
 class HospitalLab(models.Model):
     TYPE_CHOICES = [
         ('StandAlone', 'StandAlone'),
@@ -185,6 +204,48 @@ class HospitalLab(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     def __str__(self):
         return self.clinicalname
+    
+
+class LogisticData(AuditModel):
+    date = models.DateField()
+    sampleordertime = models.CharField(max_length=255)
+    labName= models.CharField(max_length=255)
+    salesMapping = models.CharField(max_length=255, blank=True, null=True)
+    sampleCollector = models.CharField(max_length=255)
+    def __str__(self):
+        return f"{self.labName} - {self.date}"
+    
+
+class LogisticTask(AuditModel):
+    sampleCollector = models.CharField(max_length=255)
+    date = models.DateField()
+    sampleordertime = models.CharField(max_length=255)
+    sampleacceptedtime = models.CharField(max_length=255)
+    lab_name = models.CharField(max_length=255)
+    salesMapping = models.CharField(max_length=255)
+    task = models.CharField(max_length=50, choices=[("Accepted", "Accepted"), ("Not Accepted", "Not Accepted")], blank=True, null=True)
+    status = models.CharField(max_length=255, blank=True, null=True)
+    samplepickeduptime = models.CharField(max_length=255, blank=True, null=True)
+    remarks = models.TextField(blank=True, null=True)
+    def __str__(self):
+        return f"{self.date} - {self.lab_name} - {self.salesMapping}"
+    
+
+class SampleCollectorLocation(models.Model):
+    sampleCollector = models.CharField(max_length=255)
+    date = models.DateField()
+    latitudeStart = models.CharField(max_length=255, null=True, blank=True)
+    longitudeStart = models.CharField(max_length=255, null=True, blank=True)
+    startTime = models.DateTimeField(null=True, blank=True)
+    latitudeEnd = models.CharField(max_length=255, null=True, blank=True)
+    longitudeEnd = models.CharField(max_length=255, null=True, blank=True)
+    endTime = models.DateTimeField(null=True, blank=True)
+    location_history = models.JSONField(default=list, blank=True)  # To store multiple points as a list
+    distance_travelled = models.CharField(max_length=255, null=True, blank=True)
+    def __str__(self):
+        return f"{self.sampleCollector} - {self.date}"
+    class Meta:
+        unique_together = ('sampleCollector', 'date')
 
 
 #HMS PART

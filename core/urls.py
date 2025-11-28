@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestvalue
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue,logistic,location
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
@@ -17,11 +17,12 @@ urlpatterns = [
     path('update_bill/', patients.update_bill, name='update_bill'),
     path('latest-bill-no/', patients.get_latest_bill_no, name='get_latest_bill_no'),
     path('patients_by_date/', patients.get_patients_by_date, name='get_patients_by_date'),
+    # path('prescription/<str:file_id>/', patients.get_prescription_file, name='get_prescription_file'),
     path('testdetails/', testdetails.get_test_details, name='create_sample_collector'),
     path('clinical_name/', clinicalname.clinical_name, name='create_organisation'),
     path('sample-collector/', form.sample_collector, name='create_sample_collector'),
     path('refby/', form.refby, name='refby'),
-
+    path("appointments/", patients.appointment_booking, name="appointment_booking"),
 
     path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
     path('sample_status/', sample.sample_status, name='sample_status'),
@@ -32,6 +33,26 @@ urlpatterns = [
     path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
     path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
 
+    #sales
+    path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
+    path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
+    path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
+    path('get_sales_executives/', sales.get_sales_executives, name='get_sales_executives'),
+    path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
+    path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
+    path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
+    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
+    path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
+
+    #Logistics
+    path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),
+    path('get_logistic_data/', logistic.get_logistic_data, name='get_logistic_data/'),
+    path('save_logistic_data/',logistic.save_logistic_data, name='save_logistic_data/'),
+    path('sample_collector_location/', location.sample_collector_location, name='save_collector_location'),
+    path('savesamplecollector/', logistic.savesamplecollectordetails, name='savesamplecollector'),
+    path('updatesamplecollectordetails/', logistic.update_sample_collector_details, name='updatesamplecollectordetails'),
+    path('get_logistic_task/', logistic.get_logistic_task, name='get_logistic_task'),
+    
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
@@ -84,11 +105,6 @@ urlpatterns = [
     path('get_patientsbyb2b/', patients.get_patientsbyb2b, name='get_patients'),
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
     path('send-email/', whatsapp.send_email, name='send_email'),
-
-    path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
-    path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
-    path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
-    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
 
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
