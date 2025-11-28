@@ -137,9 +137,15 @@ class ConsolidatedDataView(APIView):
                 # Create a dictionary to store the consolidated test data
                 consolidated_test_data = {}
                 
-                # First, populate with sample status data
+                # First, populate with sample status data (excluding Outsource tests)
                 for test in sample_tests:
                     testname = test.get('testname', 'N/A')
+                    sample_status_value = test.get('samplestatus', '')
+                    
+                    # Skip if sample status is "Outsource"
+                    if sample_status_value == 'Outsource':
+                        continue
+                    
                     consolidated_test_data[testname] = {
                         'testname': testname,
                         'department': test.get('department', 'N/A'),
@@ -156,6 +162,15 @@ class ConsolidatedDataView(APIView):
                         test_data['approval_time'] = tv.get('approve_time', 'pending')
                         test_data['dispatch_time'] = tv.get('dispatch_time', 'pending')
                 
+                # Format bill_date for calculations
+                if billing.bill_date:
+                    if hasattr(billing.bill_date, 'strftime'):
+                        registered_time = billing.bill_date.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        registered_time = str(billing.bill_date)
+                else:
+                    registered_time = 'N/A'
+                
                 # Process each unique test
                 for testname, test_data in consolidated_test_data.items():
                     collected_time = test_data['collected_time']
@@ -163,7 +178,20 @@ class ConsolidatedDataView(APIView):
                     approval_time = test_data['approval_time']
                     dispatch_time = test_data['dispatch_time']
                     
-                    # Calculate total processing time
+                    # Calculate TAT time (approval_time - registered_time)
+                    tat_time = 'pending'
+                    if registered_time != 'N/A' and approval_time != 'pending' and approval_time != 'null':
+                        try:
+                            registered_dt = datetime.strptime(registered_time, '%Y-%m-%d %H:%M:%S')
+                            approval_dt = datetime.strptime(approval_time, '%Y-%m-%d %H:%M:%S')
+                            
+                            time_diff = approval_dt - registered_dt
+                            total_seconds = int(time_diff.total_seconds())
+                            tat_time = str(timedelta(seconds=total_seconds))
+                        except (ValueError, TypeError):
+                            tat_time = 'pending'
+                    
+                    # Calculate total processing time (dispatch_time - collected_time)
                     total_processing_time = 'pending'
                     if collected_time != 'pending' and dispatch_time != 'pending' and dispatch_time != 'null':
                         try:
@@ -176,20 +204,11 @@ class ConsolidatedDataView(APIView):
                         except (ValueError, TypeError):
                             total_processing_time = 'pending'
                     
-                    # Format bill_date for response
-                    if billing.bill_date:
-                        if hasattr(billing.bill_date, 'strftime'):
-                            formatted_date = billing.bill_date.strftime('%Y-%m-%d %H:%M:%S')
-                        else:
-                            formatted_date = str(billing.bill_date)
-                    else:
-                        formatted_date = 'N/A'
-                    
                     response_data.append({
                         "patient_id": patient_id,
                         "patient_name": patient.patientname,
                         "age": patient.age,
-                        "date": formatted_date,
+                        "date": registered_time,
                         "barcode": barcode,
                         "test_name": testname,
                         "department": test_data['department'],
@@ -197,6 +216,7 @@ class ConsolidatedDataView(APIView):
                         "received_time": received_time,
                         "approval_time": approval_time,
                         "dispatch_time": dispatch_time,
+                        "tat_time": tat_time,
                         "total_processing_time": total_processing_time
                     })
                 
@@ -327,9 +347,15 @@ class HMSConsolidatedDataView(APIView):
                 # Create a dictionary to store the consolidated test data
                 consolidated_test_data = {}
                 
-                # First, populate with sample status data
+                # First, populate with sample status data (excluding Outsource tests)
                 for test in sample_tests:
                     testname = test.get('testname', 'N/A')
+                    sample_status_value = test.get('samplestatus', '')
+                    
+                    # Skip if sample status is "Outsource"
+                    if sample_status_value == 'Outsource':
+                        continue
+                    
                     consolidated_test_data[testname] = {
                         'testname': testname,
                         'department': test.get('department', 'N/A'),
@@ -346,6 +372,15 @@ class HMSConsolidatedDataView(APIView):
                         test_data['approval_time'] = tv.get('approve_time', 'pending')
                         test_data['dispatch_time'] = tv.get('dispatch_time', 'pending')
                 
+                # Format bill_date for calculations
+                if billing.date:
+                    if hasattr(billing.date, 'strftime'):
+                        registered_time = billing.date.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        registered_time = str(billing.date)
+                else:
+                    registered_time = 'N/A'
+                
                 # Process each unique test
                 for testname, test_data in consolidated_test_data.items():
                     collected_time = test_data['collected_time']
@@ -353,7 +388,20 @@ class HMSConsolidatedDataView(APIView):
                     approval_time = test_data['approval_time']
                     dispatch_time = test_data['dispatch_time']
                     
-                    # Calculate total processing time
+                    # Calculate TAT time (approval_time - registered_time)
+                    tat_time = 'pending'
+                    if registered_time != 'N/A' and approval_time != 'pending' and approval_time != 'null':
+                        try:
+                            registered_dt = datetime.strptime(registered_time, '%Y-%m-%d %H:%M:%S')
+                            approval_dt = datetime.strptime(approval_time, '%Y-%m-%d %H:%M:%S')
+                            
+                            time_diff = approval_dt - registered_dt
+                            total_seconds = int(time_diff.total_seconds())
+                            tat_time = str(timedelta(seconds=total_seconds))
+                        except (ValueError, TypeError):
+                            tat_time = 'pending'
+                    
+                    # Calculate total processing time (dispatch_time - collected_time)
                     total_processing_time = 'pending'
                     if collected_time != 'pending' and dispatch_time != 'pending' and dispatch_time != 'null':
                         try:
@@ -366,15 +414,6 @@ class HMSConsolidatedDataView(APIView):
                         except (ValueError, TypeError):
                             total_processing_time = 'pending'
                     
-                    # Format bill_date for response
-                    if billing.date:
-                        if hasattr(billing.date, 'strftime'):
-                            formatted_date = billing.date.strftime('%Y-%m-%d %H:%M:%S')
-                        else:
-                            formatted_date = str(billing.date)
-                    else:
-                        formatted_date = 'N/A'
-                    
                     response_data.append({
                         "patient_id": patient_id,
                         "patient_name": billing.patientname,  # Get from HmspatientBilling
@@ -382,7 +421,7 @@ class HMSConsolidatedDataView(APIView):
                         "gender": billing.gender,  # Get from HmspatientBilling
                         "phone": billing.phone,  # Get from HmspatientBilling
                         "ref_doctor": billing.ref_doctor,  # Get from HmspatientBilling
-                        "date": formatted_date,
+                        "date": registered_time,
                         "barcode": barcode,
                         "test_name": testname,
                         "department": test_data['department'],
@@ -390,6 +429,7 @@ class HMSConsolidatedDataView(APIView):
                         "received_time": received_time,
                         "approval_time": approval_time,
                         "dispatch_time": dispatch_time,
+                        "tat_time": tat_time,
                         "total_processing_time": total_processing_time
                     })
                 
@@ -547,6 +587,16 @@ class FranchiseConsolidatedDataView(APIView):
                         test_data['dispatch_time'] = tv.get('dispatch_time', 'pending')
                         test_data['department'] = tv.get('department', 'N/A')  # Get department from TestValue
                 
+                # Format registrationDate for calculations
+                if billing.get('registrationDate'):
+                    registration_date = billing['registrationDate']
+                    if hasattr(registration_date, 'strftime'):
+                        registered_time = registration_date.strftime('%Y-%m-%d %H:%M:%S')
+                    else:
+                        registered_time = str(registration_date)
+                else:
+                    registered_time = 'N/A'
+                
                 # Process each unique test
                 for testname, test_data in consolidated_test_data.items():
                     collected_time = test_data['collected_time']
@@ -554,7 +604,29 @@ class FranchiseConsolidatedDataView(APIView):
                     approval_time = test_data['approval_time']
                     dispatch_time = test_data['dispatch_time']
                     
-                    # Calculate total processing time
+                    # Calculate TAT time (approval_time - registered_time)
+                    tat_time = 'pending'
+                    if registered_time != 'N/A' and approval_time != 'pending' and approval_time != 'null':
+                        try:
+                            # Handle different datetime formats for registered_time
+                            if 'T' in str(registered_time) and 'Z' in str(registered_time):
+                                registered_dt = datetime.fromisoformat(str(registered_time).replace('Z', '+00:00'))
+                            else:
+                                registered_dt = datetime.strptime(str(registered_time), '%Y-%m-%d %H:%M:%S')
+                            
+                            # Handle different datetime formats for approval_time
+                            if 'T' in str(approval_time) and 'Z' in str(approval_time):
+                                approval_dt = datetime.fromisoformat(str(approval_time).replace('Z', '+00:00'))
+                            else:
+                                approval_dt = datetime.strptime(str(approval_time), '%Y-%m-%d %H:%M:%S')
+                            
+                            time_diff = approval_dt - registered_dt
+                            total_seconds = int(time_diff.total_seconds())
+                            tat_time = str(timedelta(seconds=total_seconds))
+                        except (ValueError, TypeError):
+                            tat_time = 'pending'
+                    
+                    # Calculate total processing time (dispatch_time - collected_time)
                     total_processing_time = 'pending'
                     if collected_time != 'pending' and dispatch_time != 'pending' and dispatch_time != 'null':
                         try:
@@ -579,21 +651,11 @@ class FranchiseConsolidatedDataView(APIView):
                         except (ValueError, TypeError) as e:
                             total_processing_time = 'pending'
                     
-                    # Format registrationDate for response
-                    if billing.get('registrationDate'):
-                        registration_date = billing['registrationDate']
-                        if hasattr(registration_date, 'strftime'):
-                            formatted_date = registration_date.strftime('%Y-%m-%d %H:%M:%S')
-                        else:
-                            formatted_date = str(registration_date)
-                    else:
-                        formatted_date = 'N/A'
-                    
                     response_data.append({
                         "patient_id": patient_id,
                         "patient_name": patient.get('patientname', 'N/A'),
                         "age": patient.get('age', 'N/A'),
-                        "date": formatted_date,
+                        "date": registered_time,
                         "barcode": barcode,
                         "test_name": testname,
                         "department": test_data['department'],
@@ -601,6 +663,7 @@ class FranchiseConsolidatedDataView(APIView):
                         "received_time": received_time,
                         "approval_time": approval_time,
                         "dispatch_time": dispatch_time,
+                        "tat_time": tat_time,
                         "total_processing_time": total_processing_time
                     })
                 
