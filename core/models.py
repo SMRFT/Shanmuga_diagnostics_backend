@@ -132,10 +132,13 @@ class BarcodeTestDetails(AuditModel):
     age = models.CharField(max_length=255)
     gender = models.CharField(max_length=50)
     segment= models.CharField(max_length=100, blank=True)
+    sample_collector = models.CharField(max_length=50, blank=True)
     date = models.DateField()
     bill_no= models.CharField(max_length=50, primary_key=True,unique=True)
     barcode= models.CharField(max_length=50)
     testdetails = models.JSONField()  # Store tests as a list of dictionaries
+    is_emergency = models.BooleanField(default=False)
+    patient_history = models.CharField(max_length=100, blank=True)
     def __str__(self):
         return f"{self.patientname} - {self.patient_id}"
     

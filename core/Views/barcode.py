@@ -119,6 +119,9 @@ def save_barcodes(request):
             barcode = data.get('barcode')
             date = data.get('date')  # Date as a string
             testdetails = data.get('testdetails')
+            is_emergency = data.get('is_emergency')
+            patient_history = data.get('patient_history')
+            sample_collector = data.get('sample_collector')
 
             # Convert string to date object if needed
             if date:
@@ -137,8 +140,12 @@ def save_barcodes(request):
                 date=date,                
                 barcode=barcode,
                 bill_no=bill_no,
+                patient_history=patient_history,
+                sample_collector=sample_collector,
+                is_emergency=is_emergency,
                 testdetails=testdetails,
-                created_by=employee_id,  # Add the created_by field
+                created_by=employee_id,
+                  # Add the created_by field
             )
             return JsonResponse({'message': 'Barcodes saved successfully!'}, status=201)
 
@@ -248,6 +255,8 @@ def get_barcode_by_date(request):
                     'payment_method': billing.payment_method,
                     'credit_amount': billing.credit_amount,
                     'testdetails': valid_tests,
+                    'is_emergency': billing.is_emergency,
+                    'patient_history': billing.patient_history,
                 }
                 
                 # Recalculate total amount based on valid tests only

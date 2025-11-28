@@ -152,9 +152,9 @@ def get_franchise_sample(request, batch_number):
 @api_view(['PUT'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def update_franchise_sample(request, barcode):
+def update_franchise_sample(request,barcode):
     """
-    Update sample status for a specific barcode in a batch context
+    Bulk update sample status for multiple samples/tests
     """
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.franchise
@@ -162,119 +162,136 @@ def update_franchise_sample(request, barcode):
     
     if request.method == "PUT":
         try:
-            # Handle different data formats
             if hasattr(request, 'data'):
                 body = request.data
             else:
                 body = json.loads(request.body)
             
-            updates = body.get("updates", [])
-            batch_number = body.get("batch_number")  # Optional batch context
+            bulk_updates = body.get("bulk_updates", [])
             
-            if not updates:
-                return JsonResponse({"error": "Updates are required"}, status=400)
-            
-            # Find the patient sample record
-            patient_sample = collection.find_one({"barcode": barcode})
-            if not patient_sample:
-                return JsonResponse({"error": "Sample not found"}, status=404)
-            
-            # Parse testdetails as a Python list
-            testdetails = json.loads(patient_sample.get('testdetails', '[]'))
+            if not bulk_updates:
+                return JsonResponse({"error": "bulk_updates are required"}, status=400)
             
             # Configure IST timezone
             from django.utils import timezone
             import pytz
             ist_timezone = pytz.timezone('Asia/Kolkata')
+            current_time = timezone.now().astimezone(ist_timezone)
+            formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
             
-            for update in updates:
-                test_id = update.get("test_id")
-                testname = update.get("testname")
-                new_status = update.get("samplestatus")
-                received_by = update.get("received_by")
-                rejected_by = update.get("rejected_by")
-                outsourced_by = update.get("outsourced_by")
-                remarks = update.get("remarks")
-                update_batch_number = update.get("batch_number", batch_number)
-                
-                if new_status is None:
-                    return JsonResponse({"error": "samplestatus is required"}, status=400)
-                
-                if testname is None and test_id is None:
-                    return JsonResponse({"error": "Either testname or test_id is required"}, status=400)
-                
-                # Find the specific test entry
-                test_entry = None
-                for entry in testdetails:
-                    # Match by test criteria and optionally by batch number
-                    test_match = (
-                        (testname and entry.get("testname") == testname) or 
-                        (test_id and entry.get("test_id") == test_id)
+            success_count = 0
+            error_count = 0
+            errors = []
+            
+            for update_data in bulk_updates:
+                try:
+                    barcode = update_data.get("barcode")
+                    updates = update_data.get("updates", [])
+                    
+                    if not barcode or not updates:
+                        error_count += 1
+                        errors.append(f"Missing barcode or updates for one item")
+                        continue
+                    
+                    # Find the patient sample record
+                    patient_sample = collection.find_one({"barcode": barcode})
+                    if not patient_sample:
+                        error_count += 1
+                        errors.append(f"Sample not found for barcode: {barcode}")
+                        continue
+                    
+                    # Parse testdetails
+                    testdetails = json.loads(patient_sample.get('testdetails', '[]'))
+                    
+                    for update in updates:
+                        test_id = update.get("test_id")
+                        testname = update.get("testname")
+                        new_status = update.get("samplestatus")
+                        received_by = update.get("received_by")
+                        rejected_by = update.get("rejected_by")
+                        outsourced_by = update.get("outsourced_by")
+                        remarks = update.get("remarks")
+                        batch_number = update.get("batch_number")
+                        
+                        if new_status is None:
+                            error_count += 1
+                            errors.append(f"samplestatus is required for barcode: {barcode}")
+                            continue
+                        
+                        # Find the specific test entry
+                        test_entry = None
+                        for entry in testdetails:
+                            test_match = (
+                                (testname and entry.get("testname") == testname) or 
+                                (test_id and entry.get("test_id") == test_id)
+                            )
+                            batch_match = (
+                                batch_number is None or 
+                                entry.get("batch_number") == batch_number
+                            )
+                            
+                            if test_match and batch_match:
+                                test_entry = entry
+                                break
+                        
+                        if test_entry is None:
+                            error_count += 1
+                            errors.append(f"Test not found for barcode: {barcode}, test_id: {test_id}")
+                            continue
+                        
+                        # Update the sample status and associated fields
+                        test_entry['samplestatus'] = new_status
+                        
+                        if new_status == "Received":
+                            test_entry['received_time'] = formatted_time
+                            test_entry['received_by'] = received_by
+                            # Clear rejection fields
+                            test_entry.pop('rejected_time', None)
+                            test_entry.pop('rejected_by', None)
+                            test_entry.pop('remarks', None)
+                            
+                        elif new_status == "Rejected":
+                            test_entry['rejected_time'] = formatted_time
+                            test_entry['rejected_by'] = rejected_by
+                            test_entry['remarks'] = remarks
+                            # Clear other status fields
+                            test_entry.pop('received_time', None)
+                            test_entry.pop('received_by', None)
+                            test_entry.pop('outsourced_time', None)
+                            test_entry.pop('outsourced_by', None)
+                            
+                        elif new_status == "Outsource":
+                            test_entry['outsourced_time'] = formatted_time
+                            test_entry['outsourced_by'] = outsourced_by
+                            # Clear other status fields
+                            test_entry.pop('received_time', None)
+                            test_entry.pop('received_by', None)
+                            test_entry.pop('rejected_time', None)
+                            test_entry.pop('rejected_by', None)
+                            test_entry.pop('remarks', None)
+                    
+                    # Save changes back to the database
+                    collection.update_one(
+                        {"barcode": barcode},
+                        {"$set": {"testdetails": json.dumps(testdetails)}}
                     )
                     
-                    batch_match = (
-                        update_batch_number is None or 
-                        entry.get("batch_number") == update_batch_number
-                    )
+                    success_count += 1
                     
-                    if test_match and batch_match:
-                        test_entry = entry
-                        break
-                
-                if test_entry is None:
-                    error_msg = f"Test not found with testname: {testname} or test_id: {test_id}"
-                    if update_batch_number:
-                        error_msg += f" in batch: {update_batch_number}"
-                    return JsonResponse({"error": error_msg}, status=404)
-                
-                # Update the sample status and associated fields
-                test_entry['samplestatus'] = new_status
-                
-                # Get current time in IST timezone
-                current_time = timezone.now().astimezone(ist_timezone)
-                formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
-                
-                if new_status == "Received":
-                    test_entry['received_time'] = formatted_time
-                    test_entry['received_by'] = received_by
-                    # Clear rejection fields
-                    test_entry.pop('rejected_time', None)
-                    test_entry.pop('rejected_by', None)
-                    test_entry.pop('remarks', None)
-                    
-                elif new_status == "Rejected":
-                    test_entry['rejected_time'] = formatted_time
-                    test_entry['rejected_by'] = rejected_by
-                    test_entry['remarks'] = remarks
-                    # Clear other status fields
-                    test_entry.pop('received_time', None)
-                    test_entry.pop('received_by', None)
-                    test_entry.pop('outsourced_time', None)
-                    test_entry.pop('outsourced_by', None)
-                    
-                elif new_status == "Outsource":
-                    test_entry['outsourced_time'] = formatted_time
-                    test_entry['outsourced_by'] = outsourced_by
-                    # Clear other status fields
-                    test_entry.pop('received_time', None)
-                    test_entry.pop('received_by', None)
-                    test_entry.pop('rejected_time', None)
-                    test_entry.pop('rejected_by', None)
-                    test_entry.pop('remarks', None)
-            
-            # Save changes back to the database
-            collection.update_one(
-                {"barcode": barcode},
-                {"$set": {"testdetails": json.dumps(testdetails)}}
-            )
+                except Exception as e:
+                    error_count += 1
+                    errors.append(f"Error updating barcode {barcode}: {str(e)}")
             
             return JsonResponse({
-                "status": "success",
-                "message": "Sample status updated successfully"
+                "status": "success" if error_count == 0 else "partial_success",
+                "message": f"Successfully updated {success_count} samples. {error_count} errors occurred.",
+                "success_count": success_count,
+                "error_count": error_count,
+                "errors": errors
             }, status=200)
             
         except Exception as e:
-            logger.error(f"Error updating sample status for barcode {barcode}: {str(e)}")
+            logger.error(f"Error in bulk update: {str(e)}")
             return JsonResponse({"error": str(e)}, status=500)
         
         finally:
@@ -954,53 +971,66 @@ from rest_framework.decorators import api_view, permission_classes
 from django.http import JsonResponse
 from bson import json_util
 import json
+from django.core.exceptions import FieldError
 
 @api_view(['GET'])
-@permission_classes([ HasRoleAndDataPermission])
 def get_test_value_for_franchise(request):
-    date = request.GET.get('date')
-    franchise_id = request.GET.get('franchise_id')
+    date_str = request.GET.get('date')
+    franchise_id = request.GET.get('franchise_id')  # incoming param name
 
-    # print(f"Received date: {date}, franchise_id: {franchise_id}")
-
-    if not franchise_id or not date:
+    if not franchise_id or not date_str:
         return JsonResponse({'error': 'franchise_id and date are required'}, status=400)
 
+    # normalize date: accept "YYYY-MM-DD" or full ISO "YYYY-MM-DDTHH:MM:SS" etc.
     try:
-        test_values = TestValue.objects.filter(
-            franchise_id=franchise_id,
-            date__startswith=date  # ✅ fix: only match date part
-        )
+        # take date part only
+        date_only_str = date_str.split('T')[0]
+        parsed_date = datetime.strptime(date_only_str, '%Y-%m-%d').date()
+    except Exception:
+        return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD or ISO date.'}, status=400)
 
-        if not test_values:
+    try:
+        # Prefer to filter using date__date (clean), but fallback to startswith if not supported.
+        try:
+            test_values_qs = TestValue.objects.filter(locationId=franchise_id, date__date=parsed_date)
+        except FieldError:
+            # some ORMs/fields may not support __date; use startswith on string representation
+            test_values_qs = TestValue.objects.filter(locationId=franchise_id, date__startswith=date_only_str)
+
+        if not test_values_qs.exists():
             return JsonResponse({'message': 'No test values found'}, status=404)
 
         result = []
-        for test_value in test_values:
-            try:
-                testdetails = (
-                    json.loads(test_value.testdetails)
-                    if isinstance(test_value.testdetails, str)
-                    else test_value.testdetails
-                )
-            except Exception as e:
-                print(f"Error parsing testdetails: {e}")
-                testdetails = test_value.testdetails
+        for tv in test_values_qs:
+            # testdetails may be stored as JSON string or already as list/dict
+            raw_testdetails = tv.testdetails
+            parsed_testdetails = None
+            if isinstance(raw_testdetails, str):
+                try:
+                    parsed_testdetails = json.loads(raw_testdetails)
+                except Exception as e:
+                    # fallback: keep the raw string if parsing fails
+                    parsed_testdetails = raw_testdetails
+                    # log parse error
+                    print(f"[WARN] Failed to json.loads testdetails for id {getattr(tv, '_id', 'n/a')}: {e}")
+            else:
+                parsed_testdetails = raw_testdetails
 
+            # Use the same field names as your stored doc
             result.append({
-                'franchise_id': test_value.franchise_id,
-                'barcode':test_value.barcode,
-                'date': str(test_value.date),
-                'testdetails': testdetails,
+                'franchise_id': getattr(tv, 'locationId', None),
+                'barcode': getattr(tv, 'barcode', None),
+                'date': str(getattr(tv, 'date', None)),
+                'testdetails': parsed_testdetails,
             })
 
         return JsonResponse(
             {'status': 'success', 'data': result},
-            safe=False,
             status=200,
-            json_dumps_params={'default': json_util.default}
+            json_dumps_params={'default': getattr(json, 'default', None)}
         )
 
     except Exception as e:
-        print(f"[ERROR] While processing test values: {str(e)}")
+        print(f"[ERROR] While processing test values: {e}")
+        print(traceback.format_exc())
         return JsonResponse({'error': 'Internal server error', 'details': str(e)}, status=500)
