@@ -114,7 +114,7 @@ AUTH_PASSWORD_VALIDATORS = [
 CORS_ALLOW_HEADERS = [
     "Authorization",
     "Content-Type",
-    "Branch-Code"
+    "Branch-Code",
 ]
 
 # Internationalization

@@ -10,17 +10,70 @@ from django.forms.models import model_to_dict
 from django.db import transaction
 import json
 import re
+from django.utils import timezone
 from pymongo import MongoClient
 from bson import ObjectId
+from gridfs import GridFS
 import os
 import traceback
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
+import gridfs
 
 # auth
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 
-from ..serializers import PatientSerializer, BillingSerializer
-from ..models import Patient, Billing,ClinicalName,RefBy
+from ..serializers import PatientSerializer, BillingSerializer, AppointmentSerializer
+from ..models import Patient, Billing, ClinicalName, RefBy, Appointment
+
+# MongoDB and GridFS setup
+MONGO_CLIENT = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+MONGO_DB = MONGO_CLIENT.Diagnostics
+FS = gridfs.GridFS(MONGO_DB)
+
+
+@api_view(["GET", "POST"])
+@permission_classes([HasRoleAndDataPermission])
+def appointment_booking(request):
+
+    # Extract employee_id from header/body
+    employee_id = (
+        request.data.get('auth-user-id') or
+        request.headers.get('auth-user-id') or
+        "system"
+    )
+
+    if request.method == "GET":
+        appointments = Appointment.objects.all().order_by("appointment_date")
+        serializer = AppointmentSerializer(appointments, many=True)
+        return Response({
+            "success": True,
+            "appointments": serializer.data
+        })
+
+    if request.method == "POST":
+        # Inject created_by & modified_by into request data
+        request.data._mutable = True
+        request.data["created_by"] = employee_id
+        request.data["lastmodified_by"] = employee_id
+
+        serializer = AppointmentSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "success": True,
+                "message": "Appointment booked successfully!",
+                "appointment": serializer.data
+            }, status=status.HTTP_201_CREATED)
+
+        return Response({
+            "success": False,
+            "message": "Validation failed",
+            "errors": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
+
 
 @csrf_exempt
 @api_view(['POST'])
@@ -30,67 +83,76 @@ def create_patient(request):
         data = request.data.copy()
         patient_id = data.get("patient_id")
         if not patient_id:
-            return Response({"error": "patient_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "patient_id is required"}, status=400)
 
         if Patient.objects.filter(patient_id=patient_id).exists():
-            return Response({"error": "Patient already exists"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Patient already exists"}, status=400)
 
-        # Extract employee_id from request header/body
+        # Extract employee ID
         employee_id = (
             request.data.get('auth-user-id') or
             request.headers.get('auth-user-id') or
             "system"
         )
 
-        # create_patient
+        # Create patient object
         patient_data = {
             "patient_id": patient_id,
             "patientname": data.get("patientname"),
             "age": data.get("age"),
-            "age_type": data.get("age_type", "Year"),
+            "age_type": data.get("age_type", "Years"),
             "gender": data.get("gender"),
             "phone": data.get("phone", ""),
             "email": data.get("email", ""),
-            # ✅ ensure JSONField always gets dict or None, not ""
             "address": data.get("address") if isinstance(data.get("address"), dict) else {},
-            "created_by": employee_id,  # Use auth-user-id
-            "lastmodified_by": employee_id,  # Use auth-user-id
+            "created_by": employee_id,
+            "lastmodified_by": employee_id,
             "lastmodified_date": timezone.now(),
         }
 
         serializer = PatientSerializer(data=patient_data)
         if serializer.is_valid():
-            patient = serializer.save()
+            serializer.save()
             return Response({
                 "success": True,
                 "message": "Patient created successfully",
                 "patient_id": patient_id,
                 "data": serializer.data
-            }, status=status.HTTP_201_CREATED)
-        else:
-            return Response({
-                "success": False,
-                "error": "Patient creation failed",
-                "details": serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+            }, status=201)
+
+        return Response({
+            "success": False,
+            "error": "Patient creation failed",
+            "details": serializer.errors
+        }, status=400)
+
     except Exception as e:
         return Response({
             "success": False,
             "error": "Internal server error",
             "details": str(e)
-        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        }, status=500)
     
+
+# MongoDB Connection Setup
+def get_mongodb_connection():
+    # MongoDB connection with TLS certificate
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    db = client["Diagnostics"]
+    return db, GridFS(db)
 
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
 def create_bill(request):
     """
-    Create billing record ONLY. Do not set bill_no or bill_date here
-    (they are generated at update time).
+    Create a bill and upload prescription file to GridFS if provided.
     """
     try:
         data = request.data.copy()
+        prescription_file = request.FILES.get('prescription_file')
+
+        # Validate patient
         patient_id = data.get("patient_id")
         if not patient_id:
             return Response({"error": "patient_id is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -98,40 +160,71 @@ def create_bill(request):
         try:
             patient = Patient.objects.get(patient_id=patient_id)
         except Patient.DoesNotExist:
-            return Response({"success": False, "error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Extract employee_id from request header/body
+        # employee_id
         employee_id = (
             request.data.get('auth-user-id') or
             request.headers.get('auth-user-id') or
             "system"
         )
 
+        # Handle date
         raw_date = data.get("date")
         billing_date = timezone.now()
+
         if raw_date:
             try:
-                if 'T' in raw_date:
-                    # ISO format
-                    billing_date = datetime.fromisoformat(raw_date.replace('Z', '+00:00'))
+                if "T" in raw_date:
+                    billing_date = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
                     if timezone.is_naive(billing_date):
-                        billing_date = timezone.make_aware(billing_date, timezone.get_current_timezone())
+                        billing_date = timezone.make_aware(billing_date)
                 else:
-                    # "YYYY-MM-DD HH:mm:ss"
                     dt = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S")
-                    billing_date = timezone.make_aware(dt, timezone.get_current_timezone())
-            except Exception:
+                    billing_date = timezone.make_aware(dt)
+            except:
                 billing_date = timezone.now()
 
+        # Convert blank fields
         def s(val, default="0"):
-            if val is None or val == "":
-                return str(default)
-            try:
-                return str(val)
-            except Exception:
-                return str(default)
+            return str(default) if val in [None, ""] else str(val)
 
-        # create_bill
+        # History
+        patient_history = data.get("patient_history", "")
+        patient_history = patient_history.strip() if patient_history.strip() else None
+
+        # Emergency boolean
+        emergency = data.get("emergency", False)
+        if isinstance(emergency, str):
+            emergency = emergency.lower() in ["true", "1", "yes"]
+
+        # Default prescription file id
+        # Upload prescription file if exists
+        prescription_file_id = None
+
+        if prescription_file:
+            try:
+                db, fs = get_mongodb_connection()
+
+                file_content = prescription_file.read()
+
+                file_id = fs.put(
+                    file_content,
+                    filename=prescription_file.name,
+                    content_type=prescription_file.content_type,
+                    patient_id=patient_id,
+                    uploaded_date=datetime.now()
+                )
+
+                prescription_file_id = str(file_id)
+
+            except Exception as e:
+                return Response({
+                    "error": "File upload failed",
+                    "details": str(e)
+                }, status=500)
+
+        # Create billing record
         billing_data = {
             "patient_id": patient_id,
             "date": billing_date,
@@ -143,34 +236,41 @@ def create_bill(request):
             "refby": data.get("refby", ""),
             "branch": data.get("branch", ""),
             "testdetails": data.get("testdetails") if isinstance(data.get("testdetails"), (list, dict)) else [],
-            "totalAmount": s(data.get("totalAmount"), "0"),
-            "discount": s(data.get("discount"), "0"),
+            "totalAmount": s(data.get("totalAmount")),
+            "discount": s(data.get("discount")),
             "payment_method": data.get("payment_method") if isinstance(data.get("payment_method"), dict) else {},
             "MultiplePayment": data.get("MultiplePayment") if isinstance(data.get("MultiplePayment"), list) else [],
-            "credit_amount": s(data.get("credit_amount"), "0"),
+            "credit_amount": s(data.get("credit_amount")),
             "status": data.get("status", "Registered"),
-            "created_by": employee_id,  # Use auth-user-id
-            "lastmodified_by": employee_id,  # Use auth-user-id
+            "is_emergency": emergency,
+            "patient_history": patient_history,
+
+            # ✅ Store GridFS ID
+            "prescription_file_id": prescription_file_id,
+
+            "created_by": employee_id,
+            "lastmodified_by": employee_id,
             "lastmodified_date": timezone.now(),
         }
 
         serializer = BillingSerializer(data=billing_data)
+
         if serializer.is_valid():
             billing = serializer.save()
             return Response({
                 "success": True,
                 "message": "Bill created successfully",
-                "patient_id": patient_id,
                 "bill_id": str(billing.id),
+                "patient_id": patient_id,
+                "prescription_file_id": prescription_file_id,
                 "data": serializer.data
             }, status=status.HTTP_201_CREATED)
 
-        else:
-            return Response({
-                "success": False,
-                "error": "Bill creation failed",
-                "details": serializer.errors
-            }, status=status.HTTP_400_BAD_REQUEST)
+        return Response({
+            "success": False,
+            "error": "Validation failed",
+            "details": serializer.errors
+        }, status=status.HTTP_400_BAD_REQUEST)
 
     except Exception as e:
         return Response({
@@ -212,13 +312,7 @@ def get_latest_bill_no(request):
 @permission_classes([HasRoleAndDataPermission])
 def update_bill(request):
     """
-    Updated bill update function to handle MongoDB collection updates ONLY:
-    - Updates existing MongoDB document only
-    - Does NOT create new documents
-    - Does NOT sync with Django model
-    - All fields stored as JSON strings: testdetails, payment_method, MultiplePayment
-    - Properly calculates and stores netAmount and credit_amount
-    - If multiple records exist for patient_id + date, prefer updating 'Registered' record
+    Updated bill update function to handle MongoDB collection updates
     """
     try:
         # Extract employee_id from request header/body
@@ -227,15 +321,15 @@ def update_bill(request):
             request.headers.get('auth-user-id') or
             "system"
         )
+        
         # MongoDB connection
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-        db = client.Diagnostics
-        collection = db.core_billing
+        collection = MONGO_DB.core_billing
         bill_id = request.data.get("bill_id")
         patient_id = request.data.get("patient_id")
         bill_date_str = request.data.get("date")
-        print(f"Received update request - bill_id: {bill_id}, patient_id: {patient_id}")
+        
         query = {}
+        
         # Build query to find the EXISTING record
         if bill_id:
             try:
@@ -245,9 +339,7 @@ def update_bill(request):
                     query = {"_id": ObjectId(bill_id["$oid"])}
                 else:
                     query = {"_id": ObjectId(str(bill_id))}
-                print(f"Using bill_id query: {query}")
             except Exception as e:
-                print(f"Error creating ObjectId from bill_id {bill_id}: {e}")
                 return Response({"error": f"Invalid bill_id format: {bill_id}"}, status=400)
         else:
             if not patient_id:
@@ -264,12 +356,10 @@ def update_bill(request):
                     start_date = dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     end_date = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
                     query["date"] = {"$gte": start_date, "$lte": end_date}
-                    print(f"Using patient_id + date query: {query}")
                 except Exception as e:
-                    print(f"Date parsing error: {e}")
-                    print(f"Using patient_id only query: {query}")
-        print(f"Final MongoDB Query: {query}")
-        # ====== Find the existing record(s) ======
+                    pass
+        
+        # Find the existing record(s)
         billing_record = None
         if bill_id:
             billing_record = collection.find_one(query)
@@ -277,14 +367,18 @@ def update_bill(request):
             matching_records = list(collection.find(query).sort("date", -1))
             if not matching_records:
                 return Response({"error": "Billing record not found. Cannot update non-existing record."}, status=404)
+            
             # Prefer Registered record if exists
             registered_record = next((rec for rec in matching_records if rec.get("status") == "Registered"), None)
             billing_record = registered_record if registered_record else matching_records[0]
+        
         if not billing_record:
             return Response({"error": "Billing record not found"}, status=404)
+        
         record_id = billing_record["_id"]
         bill_no = billing_record.get('bill_no')
         bill_date = billing_record.get('bill_date')
+        
         # Keep existing bill_no and bill_date if missing
         if not bill_no:
             today = datetime.now().strftime('%Y%m%d')
@@ -295,9 +389,11 @@ def update_bill(request):
             last_bill_list = list(last_bill_cursor)
             next_id = (int(last_bill_list[0]['bill_no'][-4:]) + 1) if last_bill_list else 1
             bill_no = f"{today}{next_id:04d}"
+        
         if not bill_date:
             bill_date = datetime.now()
-        # ====== Process testdetails ======
+        
+        # Process testdetails
         testdetails = request.data.get("testdetails", [])
         if isinstance(testdetails, list):
             testdetails_json = json.dumps(testdetails)
@@ -305,16 +401,31 @@ def update_bill(request):
             testdetails_json = testdetails
         else:
             testdetails_json = json.dumps([])
-        # ====== Amount Calculations ======
+        
+        # Amount Calculations
         total_amount = float(request.data.get("totalAmount", "0"))
         discount = float(request.data.get("discount", "0"))
         net_amount = total_amount - discount
         if net_amount < 0:
             net_amount = 0
-        # ====== Payment Method Handling ======
+        
+        # Handle emergency field
+        emergency = request.data.get("emergency", billing_record.get("is_emergency", False))
+        if isinstance(emergency, str):
+            emergency = emergency.lower() in ['true', '1', 'yes']
+        else:
+            emergency = bool(emergency)
+        
+        # Handle patient_history
+        patient_history = request.data.get("patient_history", billing_record.get("patient_history"))
+        if patient_history == "":
+            patient_history = None
+        
+        # Payment Method Handling
         payment_method_data = request.data.get("payment_method", {})
         multiple_payment_data = request.data.get("MultiplePayment")
         credit_amount = 0
+        
         update_data = {
             "bill_no": bill_no,
             "bill_date": bill_date,
@@ -323,10 +434,13 @@ def update_bill(request):
             "netAmount": str(net_amount),
             "discount": str(discount),
             "credit_amount": str(credit_amount),
-            "status": "Billed",   # Always update to billed
+            "status": "Billed",
+            "is_emergency": emergency,
+            "patient_history": patient_history,
             "lastmodified_by": employee_id,
             "lastmodified_date": datetime.now(),
         }
+        
         if isinstance(payment_method_data, dict):
             payment_method = payment_method_data.get("paymentmethod", "")
             if payment_method == "Multiple Payment":
@@ -346,11 +460,13 @@ def update_bill(request):
                         processed_multiple_payments.append(processed_payment)
                 else:
                     processed_multiple_payments = []
+                
                 update_data["MultiplePayment"] = json.dumps(processed_multiple_payments)
                 update_data["payment_method"] = json.dumps({"paymentmethod": "Multiple Payment"})
             else:
                 if payment_method == "Credit":
                     credit_amount = net_amount
+                
                 payment_method_obj = {
                     "paymentmethod": payment_method,
                     "paymentDetails": payment_method_data.get("paymentDetails", "")
@@ -358,23 +474,29 @@ def update_bill(request):
                 update_data["payment_method"] = json.dumps(payment_method_obj)
                 update_data["MultiplePayment"] = json.dumps([])
                 update_data["credit_amount"] = str(credit_amount)
-        # ====== Update MongoDB Document ======
+        
+        # Update MongoDB Document
         result = collection.update_one({"_id": record_id}, {"$set": update_data})
+        
         if result.matched_count == 0:
             return Response({"error": "Failed to find billing record for update"}, status=500)
-        # ====== Prepare Response ======
+        
+        # Prepare Response
         try:
             response_multiple_payment = json.loads(update_data.get("MultiplePayment", "[]"))
         except:
             response_multiple_payment = []
+        
         try:
             response_payment_method = json.loads(update_data.get("payment_method", "{}"))
         except:
             response_payment_method = {}
+        
         try:
             response_testdetails = json.loads(update_data.get("testdetails", "[]"))
         except:
             response_testdetails = []
+        
         return Response({
             "success": True,
             "message": "Bill updated successfully",
@@ -389,7 +511,9 @@ def update_bill(request):
                 "credit_amount": update_data["credit_amount"],
                 "payment_method": response_payment_method,
                 "MultiplePayment": response_multiple_payment,
-                "testdetails": response_testdetails
+                "testdetails": response_testdetails,
+                "is_emergency": emergency,
+                "patient_history": patient_history
             }
         }, status=200)
     except Exception as e:
@@ -405,34 +529,159 @@ def update_bill(request):
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def patient_get(request):
+    """
+    Get patient details by patient_id or phone.
+    If searching by phone and multiple patients exist, return all of them.
+    Handles both Django ORM and MongoDB data formats.
+    """
     try:
         patient_id = request.GET.get('patient_id')
         phone = request.GET.get('phone')
-        patientname = request.GET.get('patientname')
-        
-        patient = None
         
         if patient_id:
+            # Single patient lookup by ID
             patient = Patient.objects.filter(patient_id=patient_id).first()
+            if patient:
+                serializer = PatientSerializer(patient)
+                patient_data = serializer.data
+                
+                # Parse address if it's a string
+                if isinstance(patient_data.get('address'), str):
+                    try:
+                        patient_data['address'] = json.loads(patient_data['address'])
+                    except:
+                        patient_data['address'] = {"area": "", "pincode": ""}
+                
+                return Response({
+                    'success': True, 
+                    'data': patient_data, 
+                    'patient_id': patient.patient_id,
+                    'multiple': False
+                }, status=200)
         elif phone:
-            patient = Patient.objects.filter(phone=phone).first()
-        elif patientname:
-            patient = Patient.objects.filter(patientname__icontains=patientname).first()
+            # Remove any non-numeric characters
+            phone_clean = re.sub(r'\D', '', phone)
+            
+            # Search in both Django ORM (exact match and contains)
+            patients = Patient.objects.filter(phone=phone_clean) | Patient.objects.filter(phone__icontains=phone_clean)
+            
+            # Also search in MongoDB directly for better coverage
+            try:
+                from pymongo import MongoClient
+                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+                db = client.Diagnostics
+                mongo_patients = list(db.core_patient.find({"phone": {"$regex": phone_clean}}))
+                
+                # Convert MongoDB results to match serializer format
+                combined_results = []
+                seen_ids = set()
+                
+                # Add Django ORM results
+                if patients.exists():
+                    for patient in patients:
+                        serializer = PatientSerializer(patient)
+                        patient_data = serializer.data
+                        
+                        # Parse address if it's a string
+                        if isinstance(patient_data.get('address'), str):
+                            try:
+                                patient_data['address'] = json.loads(patient_data['address'])
+                            except:
+                                patient_data['address'] = {"area": "", "pincode": ""}
+                        
+                        combined_results.append(patient_data)
+                        seen_ids.add(patient.patient_id)
+                
+                # Add MongoDB results not already in Django results
+                for mongo_patient in mongo_patients:
+                    if mongo_patient.get('patient_id') not in seen_ids:
+                        # Parse address if string
+                        address = mongo_patient.get('address', {})
+                        if isinstance(address, str):
+                            try:
+                                address = json.loads(address)
+                            except:
+                                address = {"area": "", "pincode": ""}
+                        
+                        # Format MongoDB data to match serializer output
+                        patient_data = {
+                            'patient_id': mongo_patient.get('patient_id'),
+                            'patientname': mongo_patient.get('patientname'),
+                            'age': mongo_patient.get('age'),
+                            'age_type': mongo_patient.get('age_type', 'Years'),
+                            'gender': mongo_patient.get('gender'),
+                            'phone': mongo_patient.get('phone', ''),
+                            'email': mongo_patient.get('email', ''),
+                            'address': address,
+                            'emergency': mongo_patient.get('emergency', False),
+                            'patient_history': mongo_patient.get('patient_history', ''),
+                            'prescription_file_id': mongo_patient.get('prescription_file_id', ''),
+                            'created_by': mongo_patient.get('created_by', 'system'),
+                            'created_date': mongo_patient.get('created_date'),
+                            'lastmodified_by': mongo_patient.get('lastmodified_by', 'system'),
+                            'lastmodified_date': mongo_patient.get('lastmodified_date')
+                        }
+                        combined_results.append(patient_data)
+                        seen_ids.add(mongo_patient.get('patient_id'))
+                
+                if len(combined_results) > 0:
+                    if len(combined_results) > 1:
+                        # Multiple patients found
+                        return Response({
+                            'success': True,
+                            'data': combined_results,
+                            'multiple': True,
+                            'count': len(combined_results)
+                        }, status=200)
+                    else:
+                        # Single patient found
+                        return Response({
+                            'success': True,
+                            'data': combined_results[0],
+                            'patient_id': combined_results[0]['patient_id'],
+                            'multiple': False
+                        }, status=200)
+                
+            except Exception as mongo_error:
+                print(f"MongoDB search error: {mongo_error}")
+                # Fall back to Django ORM only
+                if patients.exists():
+                    if patients.count() > 1:
+                        serializer = PatientSerializer(patients, many=True)
+                        return Response({
+                            'success': True,
+                            'data': serializer.data,
+                            'multiple': True,
+                            'count': patients.count()
+                        }, status=200)
+                    else:
+                        serializer = PatientSerializer(patients.first())
+                        return Response({
+                            'success': True,
+                            'data': serializer.data,
+                            'patient_id': patients.first().patient_id,
+                            'multiple': False
+                        }, status=200)
         else:
-            return Response({'success': False, 'error': 'Please provide patient_id, phone, or patientname'}, status=400)
+            return Response({
+                'success': False, 
+                'error': 'Please provide patient_id or phone'
+            }, status=400)
         
-        if patient:
-            serializer = PatientSerializer(patient)
-            data = serializer.data
-            return Response({'success': True, 'data': data, 'patient_id': patient.patient_id}, status=200)
-        else:
-            return Response({'success': False, 'error': 'Patient not found'}, status=404)
+        # If no patient found
+        return Response({
+            'success': False, 
+            'error': 'Patient not found'
+        }, status=404)
+        
     except Exception as e:
-        return Response({'success': False, 'error': 'Internal server error', 'details': str(e)}, status=500)
-
-from django.utils.timezone import make_aware
-from datetime import datetime, timedelta
-from django.forms.models import model_to_dict
+        print(f"Error in patient_get: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return Response({
+            'success': False, 
+            'error': 'Internal server error', 
+            'details': str(e)
+        }, status=500)
 
 
 @api_view(['GET'])
@@ -448,6 +697,8 @@ def get_patients_by_date(request):
 
     if start_date and end_date:
         try:
+            from django.utils.timezone import make_aware
+            
             # Convert to timezone-aware datetimes
             start_date_parsed = make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
             end_date_parsed = make_aware(
@@ -466,19 +717,18 @@ def get_patients_by_date(request):
                 try:
                     patient_dict = model_to_dict(patient)
 
-                    # --- Match with Patient model ---
+                    # Match with Patient model
                     try:
                         patient_info = Patient.objects.get(patient_id=patient.patient_id)
                         patient_dict['patientname'] = patient_info.patientname
                         patient_dict['gender'] = patient_info.gender
                         patient_dict['age'] = patient_info.age
                     except Patient.DoesNotExist:
-                        # fallback values if patient not found
                         patient_dict.setdefault('patientname', 'Unknown')
                         patient_dict.setdefault('gender', 'N/A')
                         patient_dict.setdefault('age', 'N/A')
 
-                    # --- Handle testdetails ---
+                    # Handle testdetails
                     tests = getattr(patient, 'testdetails', [])
                     if isinstance(tests, str):
                         try:
@@ -491,8 +741,6 @@ def get_patients_by_date(request):
                         if not test.get('refund', False) and not test.get('cancellation', False)
                     ]
                     patient_dict['testdetails'] = valid_tests
-
-                    # --- Ensure required fields ---
                     patient_dict.setdefault('phone', 'N/A')
                     patient_dict.setdefault('segment', 'N/A')
 
@@ -502,14 +750,11 @@ def get_patients_by_date(request):
                     print(f"Error processing patient {getattr(patient, 'patient_id', 'unknown')}: {patient_error}")
                     continue
 
-            print(f"Found {len(patient_data)} patients for date range {start_date} to {end_date}")
             return JsonResponse({'success': True, 'data': patient_data}, safe=False)
 
         except ValueError as e:
-            print(f"Date parsing error: {e}")
             return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
         except Exception as e:
-            print(f"Unexpected error: {e}")
             return JsonResponse({'error': 'An error occurred while fetching patients.'}, status=500)
 
     return JsonResponse({
@@ -517,67 +762,22 @@ def get_patients_by_date(request):
     }, status=400)
 
 
-
-
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
-def patient_get(request):
-    patient_id = request.GET.get('patient_id')
-    phone = request.GET.get('phone')
-    patientname = request.GET.get('patientname')
-
-    try:
-        patient = None
-
-        # Check for patient_id
-        if patient_id:
-            patient = Patient.objects.filter(patient_id=patient_id).first()
-        # Check for phone
-        elif phone:
-            patient = Patient.objects.filter(phone=phone).first()
-        # Check for patientname (case-insensitive, partial match)
-        elif patientname:
-            patient = Patient.objects.filter(patientname__icontains=patientname).first()
-        else:
-            return JsonResponse({'error': 'Please provide either patient_id, phone, or patientname'}, status=400)
-
-        # If patient is found, return patient data
-        if patient:
-            patient_data = {
-                'patient_id': patient.patient_id,
-                'patientname': patient.patientname,
-                'age': patient.age,
-                'gender': patient.gender,
-                'phone': patient.phone,
-                'address': patient.address,
-                'email': patient.email,
-   
-            }
-            return JsonResponse(patient_data)
-        else:
-            return JsonResponse({'error': 'Patient not found'}, status=404)
-   
-    except Exception as e:
-        return JsonResponse({'error': f'Error fetching patient details: {str(e)}'}, status=500)
-
-@api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
 def patient_overview(request):
     patients = Billing.objects.all()
-    serializer = BillingSerializer(patients, many=True)  # Serialize the queryset
+    serializer = BillingSerializer(patients, many=True)
     return Response(serializer.data)
-
 
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def get_patientsbyb2b(request):
     """Fetch patients registered on a given date with payment mode options based on segment"""
-    date_str = request.GET.get('date', None)  # Get date from request parameters
+    date_str = request.GET.get('date', None)
     if not date_str:
         return Response({"error": "Date parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
     try:
-        selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()  # Convert to date object
+        selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         next_day = selected_date + timedelta(days=1)
         patients = Billing.objects.filter(date__gte=selected_date, date__lt=next_day)
         result = []
@@ -595,13 +795,12 @@ def get_patientsbyb2b(request):
                 try:
                     clinical_info = ClinicalName.objects.get(referrerCode=patient.lab_id)
                     if clinical_info.b2bType == 'Cash':
-                        payment_options['credit'] = False  # Disable credit
-                        payment_options['partialpayment'] = False  # Disable partial payment
+                        payment_options['credit'] = False
+                        payment_options['partialpayment'] = False
                 except ClinicalName.DoesNotExist:
-                    pass  # Keep default payment options if no matching clinical info
+                    pass
             patient_data['payment_options'] = payment_options
             result.append(patient_data)
         return Response(result, status=status.HTTP_200_OK)
     except ValueError:
-
         return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)

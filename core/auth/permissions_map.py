@@ -14,6 +14,11 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/LIS/clinical_name/':'SD-API-CN',
 
+    '/_b_a_c_k_e_n_d/LIS/test_details_test/':'SD-P-TE',
+    '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-P-GD',
+
+    '/_b_a_c_k_e_n_d/LIS/appointments/':'SD-P-BA',
+
     #barcode:
     r'^/_b_a_c_k_e_n_d/LIS/patients_get_barcode/?(\?.*)?$': 'SD-P-BG',
     '/_b_a_c_k_e_n_d/LIS/get-max-barcode/': 'SD-P-BTD',
@@ -21,6 +26,22 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/get-existing-barcode/.*$': 'SD-P-BTD',
     r'^/_b_a_c_k_e_n_d/LIS/patients_get_barcode/?(\?.*)?$':'SD-P-BG',
     r'^/_b_a_c_k_e_n_d/LIS/get_patientsbyb2b/?(\?.*)?$': 'SD-P-GPB',
+
+    #sales
+    '/_b_a_c_k_e_n_d/LIS/SalesVisitLog/':'SD-P-SVF',
+    '/_b_a_c_k_e_n_d/LIS/hospitallabform/':'SD-P-SHF',
+    '/_b_a_c_k_e_n_d/LIS/get_all_clinicalnames/':'SD-P-SGAC',
+    '/_b_a_c_k_e_n_d/LIS/get_sales_individual_report/':'SD-P-SIR',
+    '/_b_a_c_k_e_n_d/LIS/clinicalname_update/':'SD-P-SCU',
+
+    #Logistics
+    '/_b_a_c_k_e_n_d/LIS/get_sample_collectors/':'SD-P-LGSC',
+    '/_b_a_c_k_e_n_d/LIS/get_logistic_data/':'SD-P-LGLD',
+    '/_b_a_c_k_e_n_d/LIS/save_logistic_data/':'SD-P-LSD',
+    '/_b_a_c_k_e_n_d/LIS/sample_collector_location/':'SD-P-LSCL',
+    '/_b_a_c_k_e_n_d/LIS/savesamplecollector/':'SD-P-LSC',
+    '/_b_a_c_k_e_n_d/LIS/updatesamplecollectordetails/':'SD-P-LUSCD',
+    '/_b_a_c_k_e_n_d/LIS/get_logistic_task/':'SD-P-LGLT',
 
 
     #Sample Status: 
