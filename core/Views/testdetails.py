@@ -199,6 +199,8 @@ def get_test_details(request):
 
                 if 'is_active' not in data:
                     data['is_active'] = True
+                if 'NABL' not in data:
+                    data['NABL'] = False
                 if 'status' not in data:
                     data['status'] = 'Pending'
 
@@ -258,267 +260,281 @@ def get_test_details(request):
 # --------------------------
 # Approval Email
 # --------------------------
+# Fixed send_approval_email view
 @csrf_exempt
+@api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
 def send_approval_email(request):
-    if request.method == 'POST':
+    if request.method != 'POST':
+        return JsonResponse({'success': False, 'error': 'Invalid request method'}, status=405)
+
+    try:
+        # ✅ Handle both JSON body and form data
+        if request.content_type == 'application/json':
+            data = json.loads(request.body.decode('utf-8'))
+        else:
+            data = request.data
+        
+        test_id = data.get('test_id')
+        recipient_email = data.get('recipient_email')
+
+        # ✅ Validate test_id
+        if not test_id:
+            return JsonResponse({'success': False, 'error': 'test_id is required'}, status=400)
+
+        # ✅ Convert test_id to integer
         try:
-            print("Received approval email request")
-            try:
-                data = json.loads(request.body.decode('utf-8'))
-                test_name = data.get('test_name')
-                recipient_email = data.get('recipient_email')
-                if not test_name:
-                    return JsonResponse({'error': 'Test name is required'}, status=400)
-            except json.JSONDecodeError as e:
-                return JsonResponse({'error': 'Invalid JSON'}, status=400)
+            test_id = int(test_id)
+        except (ValueError, TypeError):
+            return JsonResponse({'success': False, 'error': 'test_id must be a valid integer'}, status=400)
 
-            try:
-                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-                db = client.Diagnostics
-                collection = db.core_testdetails
-                test = collection.find_one({'test_name': test_name})
-                if not test:
-                    return JsonResponse({'error': 'Test not found'}, status=404)
-                if '_id' in test:
-                    test['_id'] = str(test['_id'])
-            except Exception as mongo_err:
-                return JsonResponse({'error': f'Database error: {str(mongo_err)}'}, status=500)
+        # MongoDB connection
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        collection = db.core_testdetails
 
-            # For local development, override the URL if needed
-            if '127.0.0.1' in base_url or 'localhost' in base_url:
-                base_url = 'http://127.0.0.1:8000'
-            else:
-                base_url = 'https://shinova.in'
-            
+        # ✅ Find test by integer test_id
+        test = collection.find_one({'test_id': test_id})
+        if not test:
+            return JsonResponse({'success': False, 'error': f'Test not found with test_id: {test_id}'}, status=404)
 
-            approval_url = f"{base_url}_b_a_c_k_e_n_d/LIS/approve_test/?test_name={test_name}"
+        test_name = test.get('test_name', 'Unknown Test')
 
-            test_details_str = ""
-            for key, value in test.items():
-                if key != '_id' and key != 'parameters':
-                    test_details_str += f"{key.replace('_', ' ').title()}: {value}\n"
+        # ✅ Build proper base URL
+        base_url = request.build_absolute_uri('/').rstrip('/')
 
-            if 'parameters' in test:
-                try:
-                    params = normalize_parameters(test['parameters'])
-                    if isinstance(params, list) and params:
-                        test_details_str += "\nParameters:\n"
-                        for i, p in enumerate(params, 1):
-                            test_details_str += f"  Parameter {i}:\n"
-                            for kk, vv in p.items():
-                                if kk == 'value_option' and isinstance(vv, list):
-                                    vv = ", ".join(vv)
-                                test_details_str += f"    {kk.replace('_', ' ').title()}: {vv}\n"
-                    elif isinstance(params, dict) and params:
-                        test_details_str += "\nParameters (by device):\n"
-                        for dev, arr in params.items():
-                            test_details_str += f"  Device {dev}:\n"
-                            if isinstance(arr, list):
-                                for i, p in enumerate(arr, 1):
-                                    test_details_str += f"    Parameter {i}:\n"
-                                    for kk, vv in p.items():
-                                        if kk == 'value_option' and isinstance(vv, list):
-                                            vv = ", ".join(vv)
-                                        test_details_str += f"      {kk.replace('_', ' ').title()}: {vv}\n"
-                except Exception:
-                    test_details_str += f"\nParameters: Not available\n"
+        approval_url = (
+            f"{base_url}/_b_a_c_k_e_n_d/LIS/approve_test/?test_id={test_id}"
+        )
 
-            subject = f'Approval Request: Test {test_name}'
-            html_message = f"""
-            <!DOCTYPE html>
+
+        # Build test details (exclude _id and parameters for cleaner email)
+        test_details_list = []
+        for key, value in test.items():
+            if key not in ['_id', 'parameters']:
+                label = key.replace('_', ' ').title()
+                test_details_list.append(f"{label}: {value}")
+        
+        test_details_str = "\n".join(test_details_list)
+
+        subject = f"Approval Request: Test {test_name} (ID: {test_id})"
+
+        html_message = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; padding: 20px; }}
+                .container {{ max-width: 600px; margin: 0 auto; background: #f9f9f9; padding: 20px; border-radius: 8px; }}
+                .header {{ background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 20px; border-radius: 8px; text-align: center; }}
+                .content {{ background: white; padding: 20px; margin-top: 20px; border-radius: 8px; }}
+                .details {{ background: #f5f5f5; padding: 15px; border-radius: 4px; font-family: monospace; white-space: pre-wrap; }}
+                .button {{ display: inline-block; padding: 12px 24px; background: #22c55e; color: white; text-decoration: none; border-radius: 6px; margin-top: 20px; font-weight: bold; }}
+                .button:hover {{ background: #16a34a; }}
+                .footer {{ text-align: center; margin-top: 20px; color: #666; font-size: 12px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>🔬 Diagnostics Test Approval Request</h2>
+                </div>
+                <div class="content">
+                    <h3>Test Details:</h3>
+                    <div class="details">{test_details_str}</div>
+                    <p style="margin-top: 20px;">Please review and approve this test to make it active in the system.</p>
+                    <div style="text-align: center;">
+                        <a href="{approval_url}" class="button">✓ Approve Test</a>
+                    </div>
+                </div>
+                <div class="footer">
+                    <p>This is an automated email from the Diagnostics LIS system.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+        plain_message = f"""
+Diagnostics Test Approval Request
+
+Test ID: {test_id}
+Test Name: {test_name}
+
+Test Details:
+{test_details_str}
+
+Please approve this test by clicking the link below:
+{approval_url}
+
+---
+This is an automated email from the Diagnostics LIS system.
+        """
+
+        # Build recipient list
+        recipient_list = []
+        if recipient_email:
+            recipient_list.append(recipient_email)
+        
+        # Add default admin email
+        recipient_list.append('drprabusankar@smrft.org')
+        
+        # Remove duplicates
+        recipient_list = list(set(recipient_list))
+
+        # Send email using SMTP
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        import smtplib
+
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = settings.EMAIL_HOST_USER
+        msg['To'] = ", ".join(recipient_list)
+
+        msg.attach(MIMEText(plain_message, 'plain'))
+        msg.attach(MIMEText(html_message, 'html'))
+
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(settings.EMAIL_HOST_USER, settings.EMAIL_HOST_PASSWORD)
+        server.sendmail(settings.EMAIL_HOST_USER, recipient_list, msg.as_string())
+        server.quit()
+
+        return JsonResponse({
+            'success': True, 
+            'message': 'Approval email sent successfully',
+            'test_id': test_id,
+            'recipients': recipient_list
+        }, status=200)
+
+    except Exception as e:
+        print(f"❌ Error in send_approval_email: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+# ✅ Fixed approve_test view
+@csrf_exempt
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+def approve_test(request):
+    try:
+        test_id = request.GET.get('test_id')
+
+        if not test_id:
+            return HttpResponse("❌ Error: test_id is required", status=400)
+
+        # Convert to integer
+        try:
+            test_id = int(test_id)
+        except (ValueError, TypeError):
+            return HttpResponse("❌ Error: test_id must be a valid integer", status=400)
+
+        # MongoDB connection
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        collection = db.core_testdetails
+
+        # Update test status
+        result = collection.update_one(
+            {'test_id': test_id},
+            {'$set': {'status': 'Approved'}}
+        )
+
+        if result.matched_count == 0:
+            return HttpResponse("""
             <html>
+                <body style="text-align:center;font-family:Arial;padding:50px">
+                    <h2 style="color:#dc2626">❌ Test Not Found</h2>
+                    <p>Test ID: {}</p>
+                    <p>The test could not be found in the database.</p>
+                </body>
+            </html>
+            """.format(test_id), content_type="text/html", status=404)
+
+        if result.modified_count == 0:
+            return HttpResponse("""
+            <html>
+                <body style="text-align:center;font-family:Arial;padding:50px">
+                    <div style="max-width:600px;margin:0 auto">
+                        <h2 style="color:#f59e0b">⚠️ Already Approved</h2>
+                        <p>Test ID: {}</p>
+                        <p>This test has already been approved.</p>
+                        <button onclick="window.close()" 
+                                style="margin-top:20px;padding:10px 20px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer">
+                            Close Window
+                        </button>
+                    </div>
+                </body>
+            </html>
+            """.format(test_id), content_type="text/html")
+
+        # Success response
+        return HttpResponse("""
+        <html>
             <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Test Approval Request</title>
                 <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px; color: #333333; }}
-                    .container {{ max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
-                    .header {{ background-color: #F5F5F5; padding: 10px; border-radius: 5px; margin-bottom: 20px; }}
-                    .test-details {{ white-space: pre-line; margin-bottom: 20px; }}
-                    .button {{ display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white;
-                               text-decoration: none; border-radius: 5px; font-weight: bold; }}
-                    .footer {{ font-size: 12px; color: #666; margin-top: 30px; border-top: 1px solid #ddd; padding-top: 10px; }}
+                    body {{
+                        text-align: center;
+                        font-family: Arial, sans-serif;
+                        padding: 50px;
+                        background: linear-gradient(135deg, #667eea, #764ba2);
+                    }}
+                    .container {{
+                        background: white;
+                        max-width: 600px;
+                        margin: 0 auto;
+                        padding: 40px;
+                        border-radius: 12px;
+                        box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                    }}
+                    .success-icon {{
+                        font-size: 64px;
+                        color: #22c55e;
+                        margin-bottom: 20px;
+                    }}
+                    h2 {{
+                        color: #22c55e;
+                        margin-bottom: 10px;
+                    }}
+                    .test-id {{
+                        color: #666;
+                        font-size: 14px;
+                        margin-bottom: 20px;
+                    }}
+                    .button {{
+                        margin-top: 20px;
+                        padding: 12px 24px;
+                        background: #667eea;
+                        color: white;
+                        border: none;
+                        border-radius: 6px;
+                        cursor: pointer;
+                        font-size: 16px;
+                    }}
+                    .button:hover {{
+                        background: #5568d3;
+                    }}
                 </style>
             </head>
             <body>
                 <div class="container">
-                    <div class="header">
-                        <h2>Diagnostics Test Approval Request</h2>
-                    </div>
-                    <p>Hello,</p>
-                    <p>A new Diagnostics test has been submitted and requires your approval. Here are the details:</p>
-                    <div class="test-details">
-                        {test_details_str}
-                    </div>
-                    <p>To approve this test, please click the button below:</p>
-                    <p><a href="{approval_url}" class="button">Approve Test</a></p>
-                    <div class="footer">
-                        <p>This is an automated message from Shanmuga Diagnostics Laboratory System. If you did not request this approval, please ignore this email.</p>
-                        <p>© 2025 Shanmuga Diagnostics. All rights reserved.</p>
-                    </div>
+                    <div class="success-icon">✓</div>
+                    <h2>Test Approved Successfully!</h2>
+                    <p class="test-id">Test ID: {}</p>
+                    <p>The test has been approved and is now active in the system.</p>
+                    <button class="button" onclick="window.close()">Close Window</button>
                 </div>
             </body>
-            </html>
-            """
-            plain_message = f"""
-            Diagnostics Test Approval Request
-            Hello,
-            A new Diagnostics test has been submitted and requires your approval. Here are the details:
-            {test_details_str}
-            To approve this test, please click on the following link:
-            {approval_url}
-            This is an automated message from Shanmuga Diagnostics System. If you did not request this approval, please ignore this email.
-            © 2025 Shanmuga Diagnostics. All rights reserved.
-            """
+        </html>
+        """.format(test_id), content_type="text/html")
 
-            recipient_list = []
-            if 'recipient_email' in locals() and recipient_email:
-                recipient_list.append(recipient_email)
-
-            default_emails = ['drprabusankar@smrft.org', 'drpriya@smrft.org']
-            for email in default_emails:
-                if email not in recipient_list:
-                    recipient_list.append(email)
-
-            try:
-                import smtplib
-                from email.mime.multipart import MIMEMultipart
-                from email.mime.text import MIMEText
-                from email.utils import formatdate, make_msgid
-
-                smtp_server = "smtp.gmail.com"
-                smtp_port = 587
-                smtp_username = settings.EMAIL_HOST_USER
-                smtp_password = settings.EMAIL_HOST_PASSWORD
-
-                msg = MIMEMultipart('alternative')
-                msg['Subject'] = subject
-                msg['From'] = f"Shanmuga Diagnostics<{smtp_username}>"
-                msg['To'] = ", ".join(recipient_list)
-                msg['Date'] = formatdate(localtime=True)
-                msg['Message-ID'] = make_msgid(domain='shinovadatabase.in')
-
-                part1 = MIMEText(plain_message, 'plain')
-                part2 = MIMEText(html_message, 'html')
-                msg.attach(part1)
-                msg.attach(part2)
-
-                server = smtplib.SMTP(smtp_server, smtp_port)
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-                server.login(smtp_username, smtp_password)
-                server.sendmail(smtp_username, recipient_list, msg.as_string())
-                server.quit()
-                return JsonResponse({'message': 'Approval email sent successfully'}, status=200)
-            except Exception as email_err:
-                return JsonResponse({'error': f'Email sending failed: {str(email_err)}'}, status=500)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
-
-# -----------------------
-# Approval endpoint kept
-# -----------------------
-
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def approve_test(request):
-    if request.method == 'PATCH':
-        try:
-            data = json.loads(request.body.decode('utf-8'))
-            test_name = data.get('test_name')
-            if not test_name:
-                return JsonResponse({'error': 'Test name is required'}, status=400)
-
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-            db = client.Diagnostics
-            collection = db.core_testdetails
-
-            result = collection.update_one(
-                {'test_name': test_name},
-                {'$set': {'status': 'Approved'}}
-            )
-            if result.modified_count > 0:
-                return JsonResponse({'message': 'Test approved successfully'}, status=200)
-            else:
-                return JsonResponse({'error': 'Test not found or already approved'}, status=404)
-
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-
-    elif request.method == 'GET':
-        try:
-            test_name = request.GET.get('test_name')
-            if not test_name:
-                return JsonResponse({'error': 'Test name is required'}, status=400)
-
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-            db = client.Diagnostics
-            collection = db.core_testdetails
-
-            result = collection.update_one(
-                {'test_name': test_name},
-                {'$set': {'status': 'Approved'}}
-            )
-            if result.modified_count > 0:
-                html_response = """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Test Approval Confirmation</title>
-                    <style>
-                        body { font-family: Arial, sans-serif; margin: 40px; text-align: center; background-color: #f5f5f5; }
-                        .container { max-width: 600px; margin: 0 auto; padding: 30px; background-color: white;
-                                      border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-                        .success { color: #4caf50; font-size: 28px; margin-bottom: 20px; }
-                        .icon { font-size: 50px; color: #4caf50; margin-bottom: 20px; }
-                        .button { display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white;
-                                  text-decoration: none; border-radius: 5px; font-weight: bold; }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="icon">✓</div>
-                        <div class="success">Test Approved Successfully</div>
-                        <p>The test has been approved and is now active in the system.</p>
-                        <p>You can close this window.</p>
-                    </div>
-                </body>
-                </html>
-                """
-                return HttpResponse(html_response, content_type='text/html')
-            else:
-                html_error = """
-                <!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Test Approval Error</title>
-                    <style>
-                        body { font-family: Arial, sans-serif; margin: 40px; text-align: center; background-color: #f5f5f5; }
-                        .container { max-width: 600px; margin: 0 auto; padding: 30px; background-color: white;
-                                      border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-                        .error { color: #f44336; font-size: 28px; margin-bottom: 20px; }
-                        .icon { font-size: 50px; color: #f44336; margin-bottom: 20px; }
-                    </style>
-                </head>
-                <body>
-                    <div class="container">
-                        <div class="icon">✗</div>
-                        <div class="error">Approval Failed</div>
-                        <p>The test was not found or has already been approved.</p>
-                        <p>Please contact the administrator for assistance.</p>
-                    </div>
-                </body>
-                </html>
-                """
-                return HttpResponse(html_error, content_type='text/html', status=404)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
+    except Exception as e:
+        print(f"❌ Error in approve_test: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return HttpResponse(f"❌ Error: {str(e)}", status=500)
 
 # ---------------------------------------------
 # Generic field update (add normalization)

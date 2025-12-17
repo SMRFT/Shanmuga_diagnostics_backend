@@ -1,5 +1,6 @@
 PAGE_MAPPING = {
 
+    #Registration, Billing and Forms
     '/_b_a_c_k_e_n_d/LIS/create_patient/': 'SD-P-PF',
     r'^/_b_a_c_k_e_n_d/LIS/create_patient/?(\?.*)?$': 'SD-P-PG',
     '/_b_a_c_k_e_n_d/LIS/latest-patient-id/': 'SD-P-LPI',
@@ -8,16 +9,27 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/create_bill/': 'SD-P-PB',
     '/_b_a_c_k_e_n_d/LIS/update_bill/': 'SD-P-UPB',
     r'^/_b_a_c_k_e_n_d/LIS/patients_by_date/?(\?.*)?$': 'SD-P-GPD',
-    '/_b_a_c_k_e_n_d/LIS/testdetails/':'SD-P-TM',
+    '/_b_a_c_k_e_n_d/LIS/testdetails/':'SD-API-TM',
     '/_b_a_c_k_e_n_d/LIS/sample-collector/': 'SD-P-SC',
-
+    '/_b_a_c_k_e_n_d/LIS/sales_person/': 'SD-P-GSP',
+    '/_b_a_c_k_e_n_d/LIS/clinical_name/last/': 'SD-P-LRC',
+    '/_b_a_c_k_e_n_d/LIS/dashboard-data/': 'SD-P-BD',
     '/_b_a_c_k_e_n_d/LIS/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/LIS/clinical_name/':'SD-API-CN',
-
     '/_b_a_c_k_e_n_d/LIS/test_details_test/':'SD-P-TE',
-    '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-P-GD',
-
+    '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-API-GD',
     '/_b_a_c_k_e_n_d/LIS/appointments/':'SD-P-BA',
+    r'^/_b_a_c_k_e_n_d/LIS/patient_report/?(\?.*)?$': 'SD-API-PR',
+
+
+    #Refund and Cancellation
+    r'^/_b_a_c_k_e_n_d/LIS/search_refund/?(\?.*)?$': 'SD-API-GR',
+    '/_b_a_c_k_e_n_d/LIS/verify_and_process_refund/': 'SD-API-VP',
+    '/_b_a_c_k_e_n_d/LIS/generate_otp_refund/': 'SD-API-GOR',
+    r'^/_b_a_c_k_e_n_d/LIS/search_cancellation/?(\?.*)?$': 'SD-API-GC',
+    '/_b_a_c_k_e_n_d/LIS/generate_otp_cancellation/': 'SD-API-GOC',
+    '/_b_a_c_k_e_n_d/LIS/verify_and_process_cancellation/': 'SD-API-VC',
+    '/_b_a_c_k_e_n_d/LIS/refund_cancellation_logs/': 'SD-API-RCL',
 
     #barcode:
     r'^/_b_a_c_k_e_n_d/LIS/patients_get_barcode/?(\?.*)?$': 'SD-P-BG',
@@ -80,7 +92,6 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/test-rerun(?:/[^/]+)+/$':'SD-P-DF',
 
     #Reports:
-
     r'^/_b_a_c_k_e_n_d/LIS/overall_report/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/patient_test_sorting/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/get_patient_test_details/?(\?.*)?$':'SD-P-POV',
@@ -97,7 +108,6 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/get-invoices/?(\?.*)?$': 'SD-API-IVM',
     r'^/_b_a_c_k_e_n_d/LIS/generate-invoice/?(\?.*)?$': 'SD-API-IVM',
     r'^/_b_a_c_k_e_n_d/LIS/all-patients/?(\?.*)?$': 'SD-API-IVM',
-    r'^/_b_a_c_k_e_n_d/LIS/patient_report/?(\?.*)?$': 'SD-API-IVM',
 
     #Hms Billing
     '/_b_a_c_k_e_n_d/LIS/hms_patient_billing/':'SD-P-HMSPB',

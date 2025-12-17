@@ -38,6 +38,34 @@ def get_mongodb_connection():
     db = client["Diagnostics"]
     return db, GridFS(db)
 
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def sales_person(request):
+    try:
+        # Connect to global DB
+        mongo_url = os.getenv("GLOBAL_DB_HOST")
+        client = MongoClient(mongo_url)
+        db = client["Global"]
+        collection = db["backend_diagnostics_profile"]  # <-- Same here
+        # Query: employees with primaryRole == "SD-R-SMC" OR additionalRoles contains "SD-R-SMC"
+        query = {
+            "$or": [
+                {"primaryRole": "SD-R-SP"},
+                {"additionalRoles": "SD-R-SP"}
+            ]
+        }
+
+        docs = collection.find(query, {"employeeName": 1, "_id": 0})
+        employee_names = [doc.get("employeeName") for doc in docs if doc.get("employeeName")]
+
+        return Response(employee_names, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+
 # View for handling referrer code generation
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])

@@ -5,7 +5,7 @@ from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestva
 from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue,logistic,location
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
-from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api,dashboard_data
+from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
 from .Views import preetham_hospital_report
 
 urlpatterns = [
@@ -18,15 +18,20 @@ urlpatterns = [
     path('latest-bill-no/', patients.get_latest_bill_no, name='get_latest_bill_no'),
     path('patients_by_date/', patients.get_patients_by_date, name='get_patients_by_date'),
     # path('prescription/<str:file_id>/', patients.get_prescription_file, name='get_prescription_file'),
-    path('testdetails/', testdetails.get_test_details, name='create_sample_collector'),
+    path('testdetails/', testdetails.get_test_details, name='get_test_details'),
+    path('send_approval_email/', testdetails.send_approval_email, name='send_approval_email'),
+    path('approve_test/', testdetails.approve_test, name='approve_test'),
+    path('test_details_test/', testdetails.handle_patch_request, name='get_test_details'),
+    path('clinical_name/last/', clinicalname.get_last_referrer_code, name='get_last_referrer_code'),
     path('clinical_name/', clinicalname.clinical_name, name='create_organisation'),
     path('sample-collector/', form.sample_collector, name='create_sample_collector'),
+    path('sales_person/', clinicalname.sales_person, name='sales_person'),
+    path('dashboard-data/', patients.dashboard_data, name='sales_person'),
     path('refby/', form.refby, name='refby'),
     path("appointments/", patients.appointment_booking, name="appointment_booking"),
 
     path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
-    path('sample_status/', sample.sample_status, name='sample_status'),
-    path('test_details/', views.get_test_details, name='get_test_details'),   
+    path('sample_status/', sample.sample_status, name='sample_status'), 
     path('check_sample_status/<str:barcode>/', sample.check_sample_status, name='check_sample_status'),
     path('sample_statusupdate/<str:barcode>/', sample.patch_sample_status, name='patch_sample_status'),
 
@@ -91,11 +96,8 @@ urlpatterns = [
     path('search_refund/', search_refund, name='search_refund'),
     path('verify_and_process_refund/', verify_and_process_refund, name='verify_and_process_refund'),
     path('search_cancellation/', search_cancellation, name='search_cancellation'),
-    path('search_refund/', search_refund, name='search_refund'),
-    path('verify_and_process_refund/', verify_and_process_refund, name='verify_and_process_refund'),
     path('generate_otp_refund/', generate_otp_refund, name='generate_otp_refund'),
     path('generate_otp_cancellation/', generate_otp_cancellation, name='generate_otp_cancellation'),
-    path('search_cancellation/', search_cancellation, name='search_cancellation'),
     path('verify_and_process_cancellation/',verify_and_process_cancellation, name='verify_and_process_cancellation'),
     path('refund_cancellation_logs/', logs_api, name='refund_cancellation_logs'),
     path('patient-get/', patients.patient_get, name='patient_get'),

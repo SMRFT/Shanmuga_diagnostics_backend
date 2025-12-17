@@ -23,6 +23,9 @@ import gridfs
 # auth
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from ..serializers import PatientSerializer, BillingSerializer, AppointmentSerializer
 from ..models import Patient, Billing, ClinicalName, RefBy, Appointment
@@ -37,7 +40,6 @@ FS = gridfs.GridFS(MONGO_DB)
 @permission_classes([HasRoleAndDataPermission])
 def appointment_booking(request):
 
-    # Extract employee_id from header/body
     employee_id = (
         request.data.get('auth-user-id') or
         request.headers.get('auth-user-id') or
@@ -53,12 +55,13 @@ def appointment_booking(request):
         })
 
     if request.method == "POST":
-        # Inject created_by & modified_by into request data
-        request.data._mutable = True
-        request.data["created_by"] = employee_id
-        request.data["lastmodified_by"] = employee_id
+        # ✅ COPY request.data instead of mutating it
+        data = request.data.copy()
 
-        serializer = AppointmentSerializer(data=request.data)
+        data["created_by"] = employee_id
+        data["lastmodified_by"] = employee_id
+
+        serializer = AppointmentSerializer(data=data)
 
         if serializer.is_valid():
             serializer.save()
@@ -106,8 +109,7 @@ def create_patient(request):
             "email": data.get("email", ""),
             "address": data.get("address") if isinstance(data.get("address"), dict) else {},
             "created_by": employee_id,
-            "lastmodified_by": employee_id,
-            "lastmodified_date": timezone.now(),
+            "created_date": timezone.now(),
         }
 
         serializer = PatientSerializer(data=patient_data)
@@ -249,8 +251,7 @@ def create_bill(request):
             "prescription_file_id": prescription_file_id,
 
             "created_by": employee_id,
-            "lastmodified_by": employee_id,
-            "lastmodified_date": timezone.now(),
+            "created_date": timezone.now(),
         }
 
         serializer = BillingSerializer(data=billing_data)
@@ -804,3 +805,193 @@ def get_patientsbyb2b(request):
         return Response(result, status=status.HTTP_200_OK)
     except ValueError:
         return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=status.HTTP_400_BAD_REQUEST)
+    
+
+
+from datetime import date, datetime
+from urllib.parse import quote_plus
+from pymongo import MongoClient
+from django.http import JsonResponse
+from rest_framework.decorators import api_view, permission_classes
+import json
+import os
+
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+def dashboard_data(request):
+    try:
+        # -------------------------
+        # Request params
+        # -------------------------
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
+        payment_method = request.GET.get('payment_method')
+
+        # Default → today
+        if not from_date and not to_date:
+            today = date.today()
+            from_date = today.strftime('%Y-%m-%d')
+            to_date = today.strftime('%Y-%m-%d')
+
+        if from_date:
+            from_date = datetime.strptime(from_date, '%Y-%m-%d')
+
+        if to_date:
+            to_date = datetime.strptime(to_date, '%Y-%m-%d').replace(
+                hour=23, minute=59, second=59
+            )
+
+        # -------------------------
+        # MongoDB
+        # -------------------------
+        mongo_url = os.getenv("GLOBAL_DB_HOST")
+        client = MongoClient(mongo_url)
+        db = client["Diagnostics"]
+        billing_col = db.core_billing   # ✅ NEW COLLECTION
+
+        # -------------------------
+        # Query
+        # -------------------------
+        query = {}
+
+        if from_date and to_date:
+            query['date'] = {'$gte': from_date, '$lte': to_date}
+
+        if payment_method:
+            if payment_method == "PartialPayment":
+                query['payment_method'] = {'$regex': 'PartialPayment', '$options': 'i'}
+            else:
+                query['$or'] = [
+                    {'payment_method': {'$regex': f'"paymentmethod":"{payment_method}"', '$options': 'i'}},
+                    {'PartialPayment': {'$regex': f'"method":"{payment_method}"', '$options': 'i'}}
+                ]
+
+        bills = list(billing_col.find(query))
+
+        # -------------------------
+        # Helpers
+        # -------------------------
+        def safe_float(val):
+            try:
+                return float(val)
+            except:
+                return 0.0
+
+        def parse_json(val, default):
+            if isinstance(val, dict):
+                return val
+            if not val:
+                return default
+            try:
+                return json.loads(val)
+            except:
+                return default
+
+        # -------------------------
+        # Dashboard variables
+        # -------------------------
+        total_patients = len(bills)
+        total_revenue = 0.0
+
+        payment_methods = {
+            'Cash': 0,
+            'Card': 0,
+            'UPI': 0,
+            'Credit': 0,
+            'PartialPayment': 0
+        }
+
+        payment_method_amounts = {
+            'Cash': 0.0,
+            'Card': 0.0,
+            'UPI': 0.0,
+            'Credit': 0.0,
+            'PartialPayment': 0.0
+        }
+
+        segments = {
+            'B2B': 0,
+            'Walk-in': 0,
+            'Home Collection': 0
+        }
+
+        b2b_clients = {}
+
+        total_credit = 0.0
+        credit_paid = 0.0
+
+        # -------------------------
+        # Process bills
+        # -------------------------
+        for bill in bills:
+            amount = safe_float(bill.get('totalAmount'))
+            total_revenue += amount
+
+            # Segment
+            segment = bill.get('segment')
+            if segment in segments:
+                segments[segment] += 1
+
+            if segment == 'B2B':
+                name = bill.get('B2B')
+                if name:
+                    b2b_clients[name] = b2b_clients.get(name, 0) + 1
+
+            # Payment
+            payment_info = parse_json(bill.get('payment_method'), {})
+            method = payment_info.get('paymentmethod')
+
+            if method == 'PartialPayment':
+                payment_methods['PartialPayment'] += 1
+
+                partial = parse_json(bill.get('PartialPayment'), {})
+                actual_method = partial.get('method')
+                credit_amt = safe_float(partial.get('credit'))
+
+                if actual_method in payment_method_amounts:
+                    payment_method_amounts[actual_method] += (amount - credit_amt)
+
+                payment_method_amounts['Credit'] += credit_amt
+                payment_method_amounts['PartialPayment'] += amount
+                total_credit += credit_amt
+
+            elif method in payment_methods:
+                payment_methods[method] += 1
+                payment_method_amounts[method] += amount
+
+            # Direct credit
+            total_credit += safe_float(bill.get('credit_amount'))
+
+            # Credit paid
+            credit_details = parse_json(bill.get('credit_details'), [])
+            if isinstance(credit_details, list):
+                for c in credit_details:
+                    credit_paid += safe_float(c.get('amount_paid'))
+
+        credit_pending = total_credit - credit_paid
+
+        # -------------------------
+        # Response
+        # -------------------------
+        response = {
+            'total_patients': total_patients,
+            'total_revenue': round(total_revenue, 2),
+            'payment_methods': payment_methods,
+            'payment_method_amounts': {
+                k: round(v, 2) for k, v in payment_method_amounts.items()
+            },
+            'segments': segments,
+            'b2b_clients': dict(
+                sorted(b2b_clients.items(), key=lambda x: x[1], reverse=True)
+            ),
+            'credit_statistics': {
+                'total_credit': round(total_credit, 2),
+                'credit_paid': round(credit_paid, 2),
+                'credit_pending': round(credit_pending, 2)
+            }
+        }
+
+        return JsonResponse({'success': True, 'data': response})
+
+    except Exception as e:
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
