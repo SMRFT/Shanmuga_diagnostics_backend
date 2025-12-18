@@ -53,7 +53,8 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/sample_collector_location/':'SD-P-LSCL',
     '/_b_a_c_k_e_n_d/LIS/savesamplecollector/':'SD-P-LSC',
     '/_b_a_c_k_e_n_d/LIS/updatesamplecollectordetails/':'SD-P-LUSCD',
-    '/_b_a_c_k_e_n_d/LIS/get_logistic_task/':'SD-P-LGLT',
+    r'^/_b_a_c_k_e_n_d/LIS/get_logistic_task/?(\?.*)?$':'SD-P-LGLT',
+    '/_b_a_c_k_e_n_d/LIS/logisticdashboard/':'SD-P-LGD',
 
 
     #Sample Status: 

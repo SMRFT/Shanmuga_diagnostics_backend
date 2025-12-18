@@ -185,18 +185,18 @@ def getsalesmapping(request):
         return Response(serializer.data)
     
 
-@api_view(['GET'])
+@api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
 def logisticdashboard(request):
-    sample_collector = request.GET.get('sampleCollector')
-    selected_date = request.GET.get('date')
+    sample_collector = request.data.get('sampleCollector')
+    selected_date = request.data.get('date')
     if not sample_collector:
-        return Response({"error": "Sample collector is required"}, status=400)
-    try:
-        data = Patient.objects.filter(sample_collector=sample_collector)
-        if selected_date:
-            data = data.filter(date=selected_date)  # Filter by selected date
-        serializer = PatientSerializer(data, many=True)
-        return Response(serializer.data)
-    except Patient.DoesNotExist:
-        return Response({"error": "No data found"}, status=404)
+        return Response(
+            {"error": "Sample collector is required"},
+            status=400
+        )
+    data = Billing.objects.filter(sample_collector=sample_collector)
+    if selected_date:
+        data = data.filter(date=selected_date)
+    serializer = BillingSerializer(data, many=True)
+    return Response(serializer.data)
