@@ -60,7 +60,7 @@ PAGE_MAPPING = {
     #Sample Status: 
     r'^/_b_a_c_k_e_n_d/LIS/sample_patient/?(\?.*)?$':'SD-P-SS',
     '/_b_a_c_k_e_n_d/LIS/sample_status/':'SD-P-SS',
-    r'^/_b_a_c_k_e_n_d/LIS/test_details/?(\?.*)?$':'SD-API-TD',
+    r'^/_b_a_c_k_e_n_d/LIS/testdetails/?(\?.*)?$':'SD-API-TM',
     r'^/_b_a_c_k_e_n_d/LIS/update_sample_status(?:/[^/]+)+/$':'SD-P-SS',
     r'^/_b_a_c_k_e_n_d/LIS/check_sample_status(?:/[^/]+)+/$':'SD-P-SS',
     r'^/_b_a_c_k_e_n_d/LIS/sample_statusupdate(?:/[^/]+)+/$':'SD-P-SS',
@@ -101,6 +101,9 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/credit_amount/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update-credit/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/get_batch_investigation_status/?(\?.*)?$':'SD-P-CHC',
+
+
+    r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',
 
     # Invoice URLs
     r'/_b_a_c_k_e_n_d/LIS/get_clinicalname_invoice/': 'SD-API-IVM',

@@ -17,7 +17,6 @@ urlpatterns = [
     path('update_bill/', patients.update_bill, name='update_bill'),
     path('latest-bill-no/', patients.get_latest_bill_no, name='get_latest_bill_no'),
     path('patients_by_date/', patients.get_patients_by_date, name='get_patients_by_date'),
-    # path('prescription/<str:file_id>/', patients.get_prescription_file, name='get_prescription_file'),
     path('testdetails/', testdetails.get_test_details, name='get_test_details'),
     path('send_approval_email/', testdetails.send_approval_email, name='send_approval_email'),
     path('approve_test/', testdetails.approve_test, name='approve_test'),
