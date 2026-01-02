@@ -169,7 +169,8 @@ def get_corporate_sample(request, batch_number):
                         "rejected_time": detail.get("rejected_time"),
                         "rejected_by": detail.get("rejected_by"),
                         "outsourced_time": detail.get("outsourced_time"),
-                        "outsourced_by": detail.get("outsourced_by")
+                        "outsourced_by": detail.get("outsourced_by"),
+                        "outsource_lab": detail.get("outsource_lab")
                     }
                     enhanced_test_details.append(enhanced_detail)
 
@@ -273,6 +274,7 @@ def update_corporate_sample(request,barcode):
                         received_by = update.get("received_by")
                         rejected_by = update.get("rejected_by")
                         outsourced_by = update.get("outsourced_by")
+                        outsource_lab = update.get("outsource_lab")
                         remarks = update.get("remarks")
                         batch_number = update.get("batch_number")
                         
@@ -326,6 +328,7 @@ def update_corporate_sample(request,barcode):
                         elif new_status == "Outsource":
                             test_entry['outsourced_time'] = formatted_time
                             test_entry['outsourced_by'] = outsourced_by
+                            test_entry['outsource_lab'] = outsource_lab
                             # Clear other status fields
                             test_entry.pop('received_time', None)
                             test_entry.pop('received_by', None)

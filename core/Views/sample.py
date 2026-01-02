@@ -1,23 +1,17 @@
 from django.http import JsonResponse
-
 from django.views.decorators.csrf import csrf_exempt
 from django.forms.models import model_to_dict
 import json
-from urllib.parse import quote_plus
-from django.utils import timezone 
 from datetime import timedelta
 from datetime import datetime
 import os
 from pymongo import MongoClient
-#models
 from ..models import SampleStatus,Billing
 from ..models import BarcodeTestDetails
-#auth
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.permissions import AllowAny
 from pyauth.auth import HasRoleAndDataPermission
 from dotenv import load_dotenv
+from django.utils.timezone import make_aware
 
 load_dotenv()
 
@@ -102,14 +96,23 @@ def get_samplepatients_by_date(request):
                 filtered_patients.append(patient)
         
         patient_ids = [patient.patient_id for patient in filtered_patients]
+        
+        # Get billing records with bill_no
         billing_records = Billing.objects.filter(
             patient_id__in=patient_ids,
             date__gte=from_date_parsed,
             date__lte=to_date_parsed + timedelta(days=1)
-        ).values('bill_no', 'sample_collector', 'patient_id')
+        ).values('bill_no', 'sample_collector', 'patient_id', 'branch','B2B', 'payment_method')
         
+        # Create dictionaries for quick lookup
         bill_to_collector = {record['bill_no']: record['sample_collector'] for record in billing_records}
         patient_to_collector = {record['patient_id']: record['sample_collector'] for record in billing_records}
+        bill_to_branch = {record['bill_no']: record['branch'] for record in billing_records}
+        patient_to_branch = {record['patient_id']: record['branch'] for record in billing_records}
+        bill_to_b2b = {record['bill_no']: record['B2B'] for record in billing_records}
+        patient_to_b2b = {record['patient_id']: record['B2B'] for record in billing_records}
+        bill_to_payment = {record['bill_no']: record['payment_method'] for record in billing_records}
+        patient_to_payment = {record['patient_id']: record['payment_method'] for record in billing_records}
         
         patient_data = []
         for patient in filtered_patients:
@@ -130,6 +133,7 @@ def get_samplepatients_by_date(request):
                     for test in patient_dict['testdetails']
                 ]
             
+            # Get sample collector
             sample_collector = None
             if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_collector:
                 sample_collector = bill_to_collector[patient.bill_no]
@@ -137,6 +141,40 @@ def get_samplepatients_by_date(request):
                 sample_collector = patient_to_collector[patient.patient_id]
             
             patient_dict['sample_collector'] = sample_collector if sample_collector else ''
+            
+            # Get branch (processing location)
+            branch = None
+            if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_branch:
+                branch = bill_to_branch[patient.bill_no]
+            elif patient.patient_id in patient_to_branch:
+                branch = patient_to_branch[patient.patient_id]
+            
+            patient_dict['branch'] = branch if branch else ''
+
+            # Get B2B
+            B2B = None
+            if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_b2b:
+                B2B = bill_to_b2b[patient.bill_no]
+            elif patient.patient_id in bill_to_b2b:
+                B2B = bill_to_b2b[patient.patient_id]
+            
+            patient_dict['B2B'] = B2B if B2B else ''
+            
+            # Get payment method
+            payment_method = None
+            if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_payment:
+                payment_method = bill_to_payment[patient.bill_no]
+            elif patient.patient_id in patient_to_payment:
+                payment_method = patient_to_payment[patient.patient_id]
+            
+            # Parse payment_method if it's a string
+            if payment_method and isinstance(payment_method, str):
+                try:
+                    payment_method = json.loads(payment_method)
+                except json.JSONDecodeError:
+                    payment_method = None
+            
+            patient_dict['payment_method'] = payment_method if payment_method else {}
             
             patient_data.append(patient_dict)
         
@@ -211,7 +249,6 @@ def sample_status(request):
                 samplecollected_time = test.get('samplecollected_time')
                 received_time = test.get('received_time')
                 rejected_time = test.get('rejected_time')
-                oursourced_time = test.get('oursourced_time')
                 
                 processed_test = {
                     'test_id': test.get('test_id'),
@@ -223,11 +260,9 @@ def sample_status(request):
                     'samplecollected_time': samplecollected_time,
                     'received_time': received_time,
                     'rejected_time': rejected_time,
-                    'oursourced_time': oursourced_time,
                     'collectd_by': test.get('collectd_by'),
                     'received_by': test.get('received_by'),
                     'rejected_by': test.get('rejected_by'),
-                    'oursourced_by': test.get('oursourced_by'),
                     'remarks': test.get('remarks'),
                 }
                 processed_testdetails.append(processed_test)
@@ -498,7 +533,7 @@ def patch_sample_status(request, barcode):
     
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
-from django.utils.timezone import make_aware
+
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -511,7 +546,7 @@ def get_sample_collected(request):
             
             # Start with all samples
             samples_query = SampleStatus.objects.all()
-            # print(f"Initial samples count: {samples_query.count()}") 
+            
             # Apply date filtering if parameters are provided
             if from_date:
                 try:
@@ -528,9 +563,9 @@ def get_sample_collected(request):
                     samples_query = samples_query.filter(date__lte=end_of_day)
                 except ValueError:
                     return JsonResponse({"error": "Invalid to_date format. Use YYYY-MM-DD"}, status=400)
+            
             # Fetch filtered samples
             samples = samples_query
-            # print(f"Filtered samples count: {samples.count()}") 
             patient_data = {}
             
             # Prepare the data grouped by patient
@@ -538,7 +573,6 @@ def get_sample_collected(request):
                 # Deserialize testdetails if it's a string
                 if isinstance(sample.testdetails, str):
                     test_details = json.loads(sample.testdetails)
-                    print(f"Deserialized test_details: {test_details}")  # Debugging line
                 else:
                     test_details = sample.testdetails
                 
@@ -547,14 +581,33 @@ def get_sample_collected(request):
                     if detail.get("samplestatus") == "Sample Collected":
                         # Fetch additional patient data from BarcodeTestDetails using barcode
                         barcode_details = None
+                        billing_details = None
+                        
                         try:
                             barcode_details = BarcodeTestDetails.objects.get(barcode=sample.barcode)
+                            
+                            # Get bill_no from BarcodeTestDetails and fetch Billing details
+                            if barcode_details and barcode_details.bill_no:
+                                try:
+                                    billing_details = Billing.objects.get(bill_no=barcode_details.bill_no)
+                                except Billing.DoesNotExist:
+                                    pass
+                                    
                         except BarcodeTestDetails.DoesNotExist:
                             # If no matching barcode found, use existing sample data
                             pass
                         
                         # If patient is not already in the dictionary, add them
                         if sample.patient_id not in patient_data:
+                            # Prepare billing information
+                            payment_method_data = {}
+                            if billing_details and billing_details.payment_method:
+                                # Parse payment_method if it's a string
+                                if isinstance(billing_details.payment_method, str):
+                                    payment_method_data = json.loads(billing_details.payment_method)
+                                else:
+                                    payment_method_data = billing_details.payment_method
+                            
                             # Use BarcodeTestDetails data if available, otherwise fallback to SampleStatus data
                             if barcode_details:
                                 patient_data[sample.patient_id] = {
@@ -563,9 +616,13 @@ def get_sample_collected(request):
                                     "patientname": barcode_details.patientname,
                                     "barcode": sample.barcode,
                                     "age": barcode_details.age,
-                                    "gender": barcode_details.gender,  # New field from BarcodeTestDetails
+                                    "gender": barcode_details.gender,
                                     "segment": barcode_details.segment,
                                     "is_emergency": barcode_details.is_emergency,
+                                    "bill_no": barcode_details.bill_no if barcode_details.bill_no else "N/A",
+                                    "B2B": billing_details.B2B if billing_details else "N/A",
+                                    "branch": billing_details.branch if billing_details else "N/A",
+                                    "payment_method": payment_method_data.get("paymentmethod", "N/A") if payment_method_data else "N/A",
                                     "testdetails": []
                                 }
                             else:
@@ -576,8 +633,12 @@ def get_sample_collected(request):
                                     "patientname": sample.patientname,
                                     "barcode": sample.barcode,
                                     "age": sample.age,
-                                    "gender": "N/A",  # Default value if not found
+                                    "gender": "N/A",
                                     "segment": sample.segment,
+                                    "bill_no": "N/A",
+                                    "B2B": "N/A",
+                                    "branch": "N/A",
+                                    "payment_method": "N/A",
                                     "testdetails": []
                                 }
                         
@@ -608,14 +669,41 @@ def get_sample_collected(request):
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
 
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def get_outsource_labs(request):
+    """Fetch all active outsource labs"""
+    if request.method == "GET":
+        try:
+            # MongoDB connection setup
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Diagnostics
+            collection = db.outsource_lab
+            
+            # Fetch only active labs
+            labs = list(collection.find(
+                {"is_active": True},
+                {"_id": 0, "labID": 1, "labName": 1}
+            ))
+            
+            return JsonResponse({
+                "success": True,
+                "data": labs
+            }, safe=False)
+            
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
+
+
 @api_view(['PUT'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def update_sample_collected(request, patient_id):
     # MongoDB connection setup
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client.Diagnostics  # Database name
-    collection = db.core_samplestatus  # Collection name
+    db = client.Diagnostics
+    collection = db.core_samplestatus
     
     if request.method == "PUT":
         try:
@@ -658,6 +746,7 @@ def update_sample_collected(request, patient_id):
                 received_by = update.get("received_by")
                 rejected_by = update.get("rejected_by")
                 outsourced_by = update.get("outsourced_by")
+                outsource_lab = update.get("outsource_lab")  # New field
                 remarks = update.get("remarks")
                 
                 if test_id is None or new_status is None:
@@ -687,6 +776,7 @@ def update_sample_collected(request, patient_id):
                             test_entry.pop('remarks', None)
                             test_entry.pop('outsourced_time', None)
                             test_entry.pop('outsourced_by', None)
+                            test_entry.pop('outsource_lab', None)
                             
                         elif new_status == "Rejected":
                             test_entry['rejected_time'] = formatted_time
@@ -697,10 +787,12 @@ def update_sample_collected(request, patient_id):
                             test_entry.pop('received_by', None)
                             test_entry.pop('outsourced_time', None)
                             test_entry.pop('outsourced_by', None)
+                            test_entry.pop('outsource_lab', None)
                             
                         elif new_status == "Outsource":
                             test_entry['outsourced_time'] = formatted_time
                             test_entry['outsourced_by'] = outsourced_by
+                            test_entry['outsource_lab'] = outsource_lab  # Store lab name
                             # Clear received/rejection fields if they exist
                             test_entry.pop('received_time', None)
                             test_entry.pop('received_by', None)
@@ -729,6 +821,7 @@ def update_sample_collected(request, patient_id):
             
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
+        
 
 @api_view(['GET'])       
 @permission_classes([ HasRoleAndDataPermission])

@@ -569,6 +569,7 @@ def get_patient_test_details(request):
                     testname = test.get("testname")
                     department = test.get("department", "N/A")
                     NABL = test.get("NABL", "N/A")
+                    outsourced = test.get("outsourced", False)
                     verified_by = test.get("verified_by", "N/A")
                     approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
@@ -587,6 +588,7 @@ def get_patient_test_details(request):
                     test_detail = {
                         "department": department,
                         "NABL": NABL,
+                        "outsourced": outsourced,
                         "testname": testname,
                         "verified_by": verified_by,
                         "approve_by": approve_by,
@@ -932,3 +934,65 @@ def update_dispatch_status(request, barcode):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     finally:
         client.close()
+
+@api_view(['PATCH'])
+@csrf_exempt
+@permission_classes([ HasRoleAndDataPermission])
+def credit_amount_update(request, patient_id):    
+    # MongoDB connection with TLS certificate
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    db = client.Diagnostics
+    collection = db['core_billing']
+    if request.method == "PATCH":
+        try:
+            body = json.loads(request.body)
+            # Convert incoming values
+            credit_amount = str(body.get("credit_amount", "0"))  # Store as a string
+            amount_paid = int(float(body.get("amount_paid", 0)))
+            paid_date = body.get("paid_date", None)
+            payment_method = body.get("payment_method", "N/A")  # Default to "N/A" if missing
+            # Validate required fields
+            if not credit_amount:
+                return JsonResponse({"error": "Missing required field: credit_amount."}, status=400)
+            # Fetch the patient document
+            patient = collection.find_one({"patient_id": patient_id})
+            if not patient:
+                return JsonResponse({"error": "Patient not found."}, status=404)
+            # Parse existing credit details safely
+            credit_details = patient.get("credit_details", [])
+            if isinstance(credit_details, str):
+                try:
+                    credit_details = json.loads(credit_details)
+                except json.JSONDecodeError:
+                    credit_details = []
+            # Calculate the updated credit amount
+            current_credit_amount = int(float(patient.get("credit_amount", 0)))
+            updated_credit_amount = str(current_credit_amount - amount_paid)  # Store as string
+            # Append the new entry to `credit_details`
+            credit_details.append({
+                "credit_amount": credit_amount,  # Stored as a string
+                "amount_paid": amount_paid,
+                "paid_date": paid_date,
+                "payment_method": payment_method,  # Store payment method
+                "remaining_amount": updated_credit_amount  # Stored as a string
+            })
+            # Update the database
+            collection.update_one(
+                {"patient_id": patient_id},
+                {
+                    "$set": {
+                        "credit_amount": updated_credit_amount,  # Store as a string
+                        "credit_details": json.dumps(credit_details)  # Store as JSON string
+                    }
+                }
+            )
+            return JsonResponse({
+                "message": "Credit amount updated successfully.",
+                "credit_details": credit_details
+            })
+        except json.JSONDecodeError:
+            return JsonResponse({"error": "Invalid JSON format."}, status=400)
+        except Exception as e:
+            return JsonResponse({"error": str(e)}, status=500)
+    else:
+        return JsonResponse({"error": "Invalid request method. Only PATCH is allowed."}, status=405)

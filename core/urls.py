@@ -1,14 +1,15 @@
 #urls.py
 from django.urls import path
 from core import views
-from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestvalue
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue,logistic,location
-from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
+from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location
+from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report, os_management
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
 from .Views import preetham_hospital_report
 
 urlpatterns = [
+    #Registration and Billing:
     path('create_patient/', patients.create_patient, name='create_patient'),
     path('create_patient/<str:patient_id>/', patients.create_patient, name='create_patient'),
     path('latest-patient-id/', patients.get_latest_patient_id, name='get_latest_patient_id'),
@@ -30,68 +31,45 @@ urlpatterns = [
     path('refby/', form.refby, name='refby'),
     path("appointments/", patients.appointment_booking, name="appointment_booking"),
 
-    path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
-    path('sample_status/', sample.sample_status, name='sample_status'), 
-    path('check_sample_status/<str:barcode>/', sample.check_sample_status, name='check_sample_status'),
-    path('sample_statusupdate/<str:barcode>/', sample.patch_sample_status, name='patch_sample_status'),
-
-
-    path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
-    path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
-
-    #sales
-    path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
-    path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
-    path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
-    path('get_sales_executives/', sales.get_sales_executives, name='get_sales_executives'),
-    path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
-    path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
-    path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
-    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
-    path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
-
-    #Logistics
-    path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),
-    path('get_logistic_data/', logistic.get_logistic_data, name='get_logistic_data/'),
-    path('save_logistic_data/',logistic.save_logistic_data, name='save_logistic_data/'),
-    path('sample_collector_location/', location.sample_collector_location, name='save_collector_location'),
-    path('savesamplecollector/', logistic.savesamplecollectordetails, name='savesamplecollector'),
-    path('updatesamplecollectordetails/', logistic.update_sample_collector_details, name='updatesamplecollectordetails'),
-    path('get_logistic_task/', logistic.get_logistic_task, name='get_logistic_task'),
-    
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
     path('save-barcodes/', barcode.save_barcodes, name='save_barcodes'),
     path('get-existing-barcode/',barcode.get_existing_barcode, name='get_latest_bill_no'),
 
+    #sampleStatus:
+    path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
+    path('sample_status/', sample.sample_status, name='sample_status'),   
+    path('check_sample_status/<str:barcode>/', sample.check_sample_status, name='check_sample_status'),
+    path('sample_statusupdate/<str:barcode>/', sample.patch_sample_status, name='patch_sample_status'),
+
+    #sample accessioning:
+    path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
+    path('get_outsource_labs/', sample.get_outsource_labs, name='get_outsource_labs'),
+    path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
+
     #Test Values:
     path('samplestatus-testvalue/', testvalue.get_samplestatus_testvalue, name='sample-status-list'), 
     path('compare_test_details/', testvalue.compare_test_details, name='compare_test_details'),
     path('test-value/save/', testvalue.save_test_value, name='save_test_value'),    
 
-    #Test Approval:
+    #Out source Test Values:
+    path('os-samplestatus-testvalue/', os_management.get_os_samplestatus_testvalue, name='os_sample-status-list'), 
+    path('os-compare_test_details/', os_management.os_compare_test_details, name='os_compare_test_details'),
+    path('os-test-value/save/', os_management.os_save_test_value, name='os_save_test_value'), 
+
+    #Test Approval:y
     path('test-values/', testapproval.get_test_values, name='get_test_values'),
     path("test-approval/<path:patient_id>/<int:test_index>/approve/",testapproval.approve_test_detail,name="approve_test_detail"),
     path('test-rerun/<str:patient_id>/<int:test_index>/rerun/', testapproval.rerun_test_detail, name='rerun_test_detail'),
+
+    #Diagnostics Reports:
+    path('overall_report/', report.overall_report, name='overall_report'),    
     path('patient_test_sorting/', report.patient_test_sorting, name='patient_test_sorting'),
     path('get_patient_test_details/', report.get_patient_test_details, name='get_patient_test_details'),
-
-    #Invoice URLs
-    path("generate-invoice/", generate_invoice, name="generate-invoice"),
-    path("get-invoices/", get_invoices, name="get-invoices"),
-    path("update-invoice/<str:invoice_number>/", update_invoice, name="update-invoice"),
-    path("delete-invoice/<str:invoice_id>/", delete_invoice, name="delete-invoice"),
-    path('get_clinicalname_invoice/', get_clinicalname_invoice, name='get_clinicalname_by_referrer'),
-    path('all-patients/', get_all_patients, name='get_all_patients'),
-    path('patient_report/', patient_report, name='patient_report'),
-    path('overall_report/', report.overall_report, name='overall_report'),
-
-    path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
-
-    # CHC Test Values
-    path('chc_samplestatus_testvalue/', chctestvalue.get_corporate_samplestatus, name='get_chc_samplestatus_testvalue'),
-    path('chc_compare_test_details/', chctestvalue.corporate_test_details, name='chc_compare_test_details'),
+    path('send-email/', whatsapp.send_email, name='send_email'),
+    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
+    path('credit_amount/<str:patient_id>/', report.credit_amount_update, name='credit_amount_update'),
 
     # Refund and Cancellation URLs
     path('search_refund/', search_refund, name='search_refund'),
@@ -107,7 +85,6 @@ urlpatterns = [
     path("send-whatsapp/", whatsapp.send_whatsapp, name="send_whatsapp"),
     path('get_patientsbyb2b/', patients.get_patientsbyb2b, name='get_patients'),
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
-    path('send-email/', whatsapp.send_email, name='send_email'),
 
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
@@ -119,24 +96,6 @@ urlpatterns = [
     path('franchise_overall_report/', franchise.franchise_overall_report, name='franchise_overall_report'),
     path('franchise_patient_test_details/', franchise.franchise_patient_test_details, name='franchise_patient_test_details'),
     path('get-test-values/', franchise.get_test_value_for_franchise, name='get_test_values_franchise'),
-
-    #HMS Report:
-    path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
-    path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_patient_test_details'),
-    path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
-    path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
-    path("test-summary/", dashboard.test_summary, name="test-summary"),
-    
-    #HMS Billing:
-    path("hms_list_doctor/",hmsbilling.hms_get_doctor_list,name="doctor_list"),
-    path("hms_testdetails/", hmsbilling.hms_get_test_details, name="hms_get_test_details"),
-    path("hms_patient_billing/", hmsbilling.hms_patient_billing, name="hms_patient_billing"),
-
-    #HMS Barcode:
-    path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
-    path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
-    path('get_hmssamplestatus_testvalue/',hmstestvalue.get_hmssamplestatus_testvalue, name='get_hmssamplestatus_testvalue'),
-    path('hmscompare_test_details/',hmstestvalue.hmscompare_test_details, name='hmscompare_test_details'),
 
     #Corporate Batch and Sample Status Update:
     path('corporate-batches/', corporate.get_corporate_batch_generation_data, name='get_corporate_batch_generation_data'),
@@ -155,6 +114,17 @@ urlpatterns = [
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('get_batch_investigation_status/', corporate.get_batch_investigation_status, name='get_batch_investigation_status'),
     path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
+    
+
+    #HMS Billing:
+    path("hms_list_doctor/",hmsbilling.hms_get_doctor_list,name="doctor_list"),
+    path("hms_testdetails/", hmsbilling.hms_get_test_details, name="hms_get_test_details"),
+    path("hms_patient_billing/", hmsbilling.hms_patient_billing, name="hms_patient_billing"),
+
+    #HMS Barcode:
+    path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
+    path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
+
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),
     path('hms_sample_status/', hmssamplestatus.hms_sample_status, name='hms_sample_status'),
@@ -164,14 +134,49 @@ urlpatterns = [
     path('hms_get_sample_collected/', hmssamplestatus.hms_get_sample_collected, name='hms_get_sample_collected'),
     path('hms_update_sample_collected/<str:barcode>/', hmssamplestatus.hms_update_sample_collected, name='hms_update_sample_collected'),
 
+    #HMS Report:
+    path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
+    path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_patient_test_details'),
+    path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
+    path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
+    path("test-summary/", dashboard.test_summary, name="test-summary"),
+
     #MIS:
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
 
-    path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
-    path('get_devices/', testdetails.get_devices, name='get_devices'),
+    #sales
+    path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
+    path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
+    path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
+    path('get_sales_executives/', sales.get_sales_executives, name='get_sales_executives'),
+    path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
+    path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
+    path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
+    path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
 
-    path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
+    #Logistics
+    path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),
+    path('get_logistic_data/', logistic.get_logistic_data, name='get_logistic_data/'),
+    path('save_logistic_data/',logistic.save_logistic_data, name='save_logistic_data/'),
+    path('sample_collector_location/', location.sample_collector_location, name='save_collector_location'),
+    path('savesamplecollector/', logistic.savesamplecollectordetails, name='savesamplecollector'),
+    path('updatesamplecollectordetails/', logistic.update_sample_collector_details, name='updatesamplecollectordetails'),
+    path('get_logistic_task/', logistic.get_logistic_task, name='get_logistic_task'),
+
+    #Invoice URLs
+    path("generate-invoice/", generate_invoice, name="generate-invoice"),
+    path("get-invoices/", get_invoices, name="get-invoices"),
+    path("update-invoice/<str:invoice_number>/", update_invoice, name="update-invoice"),
+    path("delete-invoice/<str:invoice_id>/", delete_invoice, name="delete-invoice"),
+    path('get_clinicalname_invoice/', get_clinicalname_invoice, name='get_clinicalname_by_referrer'),
+    path('all-patients/', get_all_patients, name='get_all_patients'),
+    path('patient_report/', patient_report, name='patient_report'),
+
+    path('get_devices/', testdetails.get_devices, name='get_devices'),
+    path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
+
+    
 ]
 

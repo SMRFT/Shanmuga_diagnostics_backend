@@ -210,6 +210,7 @@ def update_franchise_sample(request,barcode):
                         received_by = update.get("received_by")
                         rejected_by = update.get("rejected_by")
                         outsourced_by = update.get("outsourced_by")
+                        outsource_lab = update.get("outsource_lab")
                         remarks = update.get("remarks")
                         batch_number = update.get("batch_number")
                         
@@ -259,10 +260,12 @@ def update_franchise_sample(request,barcode):
                             test_entry.pop('received_by', None)
                             test_entry.pop('outsourced_time', None)
                             test_entry.pop('outsourced_by', None)
+                            test_entry.pop('outsource_lab', None)
                             
                         elif new_status == "Outsource":
                             test_entry['outsourced_time'] = formatted_time
                             test_entry['outsourced_by'] = outsourced_by
+                            test_entry['outsource_lab'] = outsource_lab
                             # Clear other status fields
                             test_entry.pop('received_time', None)
                             test_entry.pop('received_by', None)
