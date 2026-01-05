@@ -48,6 +48,7 @@ urlpatterns = [
     path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
     path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
+    path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
 
     #Logistics
     path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),
@@ -173,4 +174,5 @@ urlpatterns = [
 
     path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
 ]
+
 
