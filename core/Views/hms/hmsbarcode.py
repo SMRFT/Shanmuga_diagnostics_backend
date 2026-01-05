@@ -53,6 +53,10 @@ def save_hms_barcodes(request):
 @api_view(["GET"])
 @permission_classes([HasRoleAndDataPermission])
 def get_hms_barcode_by_date(request):
+    import pymongo
+    from pymongo import MongoClient
+    import os
+
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
     
@@ -85,45 +89,35 @@ def get_hms_barcode_by_date(request):
             date__lte=end_of_range
         ).order_by('-date')  # Order by most recent first
        
-        # Process each billing record directly
+        processed_bills = set()
         patient_data = []
-        processed_bills = set()  # To avoid duplicate bills
-        
+
+        # Process existing billing records
         for billing in billing_records:
             try:
-                # Skip if we've already processed this bill
                 if billing.billnumber in processed_bills:
                     continue
                     
                 processed_bills.add(billing.billnumber)
                 
-                # Handle testdetails - it's already a JSONField in the model
                 tests = billing.testdetails
-                
-                # If tests is a string (legacy data), parse it as JSON
                 if isinstance(tests, str):
                     try:
                         tests = json.loads(tests)
                     except json.JSONDecodeError:
-                        # Skip billing records with invalid JSON in testdetails
                         continue
                 
-                # Ensure tests is a list
                 if not isinstance(tests, list):
                     tests = []
                 
-                # Filter out tests that are refunded or cancelled
                 valid_tests = []
                 for test in tests:
-                    # Check if refund or cancellation keys exist and are True
                     if not test.get('refund', False) and not test.get('cancellation', False):
                         valid_tests.append(test)
                 
-                # If no valid tests remain after filtering, skip this billing record entirely
                 if not valid_tests:
                     continue
                 
-                # Create patient data directly from billing record
                 patient_dict = {
                     'patient_id': billing.patient_id,
                     'patientname': billing.patientname,
@@ -138,14 +132,82 @@ def get_hms_barcode_by_date(request):
                     'testdetails': valid_tests,
                 }
                 
-
-                
                 patient_data.append(patient_dict)
                 
             except Exception as e:
-                # Log the error and continue with next record
                 print(f"Error processing billing record {billing.billnumber}: {str(e)}")
                 continue
+
+        # Now, try fetching from machine_hmsmi collection directly using pymongo
+        try:
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Diagnostics
+            machine_collection = db.machine_hmsmi
+            
+            # Query Logic for machine data
+            # machine_hmsmi uses 'BillDate' as date field usually
+            
+            machine_query = {
+                "BillDate": {
+                    "$gte": start_of_range,
+                    "$lte": end_of_range
+                }
+            }
+            
+            machine_records = list(machine_collection.find(machine_query))
+            
+            # Group machine records by BillNumber
+            machine_data_grouped = {}
+            for rec in machine_records:
+                bill_no = rec.get("BillNumber")
+                if not bill_no:
+                    continue
+                
+                if bill_no not in machine_data_grouped:
+                    machine_data_grouped[bill_no] = []
+                machine_data_grouped[bill_no].append(rec)
+            
+            # Create patient objects from machine data if not already processed
+            for bill_no, records in machine_data_grouped.items():
+                if bill_no in processed_bills:
+                    continue # Skip if we already have it from HmspatientBilling
+                
+                processed_bills.add(bill_no)
+                
+                # Use the first record for patient info
+                first_rec = records[0]
+                
+                # Construct testdetails list
+                test_details = []
+                for r in records:
+                   test_details.append({
+                       "testname": r.get("SubTestName") or r.get("TestName"),
+                       "test_code": r.get("SubTestcode") or r.get("TestCode"),
+                       "price": 0, # Placeholder
+                       "status": "Pending", # Default
+                       "sub_title": r.get("SubTestName", ""),
+                   })
+                
+                patient_dict = {
+                    'patient_id': first_rec.get('IPOPNumber', ''),
+                    'patientname': first_rec.get('PatientName', ''),
+                    'age': first_rec.get('PatientAge', ''),
+                    'age_type': 'Y', # Default
+                    'gender': first_rec.get('Gender', ''),
+                    'phone': first_rec.get('mobilenumber', ''),
+                    'bill_no': bill_no,
+                    'date': first_rec.get('BillDate'),
+                    'location_id': '',
+                    'ref_doctor': first_rec.get('RefDoctor', ''),
+                    'testdetails': test_details,
+                    'source': 'machine_hmsmi'
+                }
+                
+                patient_data.append(patient_dict)
+
+        except Exception as e:
+            print(f"Error fetching machine data: {str(e)}")
+            # Don't fail the whole request, just log
         
         # Add summary information to the response
         response_data = {
@@ -156,7 +218,7 @@ def get_hms_barcode_by_date(request):
                     'from': from_date,
                     'to': to_date
                 },
-                'total_records_processed': len(billing_records)
+                'total_records_processed': len(patient_data) # Approximate
             }
         }
         
