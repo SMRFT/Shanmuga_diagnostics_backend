@@ -317,3 +317,48 @@ def send_email(request):
             status="Failed",
             details=str(e)
         )
+
+from django.utils.dateparse import parse_date
+import datetime
+
+@api_view(['GET', 'POST'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def get_communication_logs(request):
+    print(f"DEBUG: get_communication_logs called with method {request.method}")
+    try:
+        if request.method == 'POST':
+            from_date_str = request.data.get('from_date')
+            to_date_str = request.data.get('to_date')
+        else:
+            from_date_str = request.GET.get('from_date')
+            to_date_str = request.GET.get('to_date')
+        
+        filter_kwargs = {}
+        if from_date_str:
+            d = parse_date(from_date_str)
+            if d:
+                filter_kwargs['created_date__gte'] = datetime.datetime.combine(d, datetime.time.min)
+        if to_date_str:
+            d = parse_date(to_date_str)
+            if d:
+                filter_kwargs['created_date__lte'] = datetime.datetime.combine(d, datetime.time.max)
+            
+        logs = CommunicationLog.objects.filter(**filter_kwargs).order_by('-created_date')
+            
+        data = [
+            {
+                "id": log.id,
+                "date": log.created_date,
+                "patientId": log.patient_id,
+                "patientName": log.patient_name,
+                "type": log.type,
+                "recipient": log.recipient,
+                "status": log.status,
+                "details": log.details
+            } for log in logs
+        ]
+            
+        return JsonResponse({"success": True, "data": data})
+    except Exception as e:
+        return JsonResponse({"success": False, "error": str(e)}, status=500)
