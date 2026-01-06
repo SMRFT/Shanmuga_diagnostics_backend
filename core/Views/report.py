@@ -570,6 +570,7 @@ def get_patient_test_details(request):
                     department = test.get("department", "N/A")
                     NABL = test.get("NABL", "N/A")
                     outsourced = test.get("outsourced", False)
+                    comment = test.get("comment", False)
                     verified_by = test.get("verified_by", "N/A")
                     approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
@@ -589,6 +590,7 @@ def get_patient_test_details(request):
                         "department": department,
                         "NABL": NABL,
                         "outsourced": outsourced,
+                        "comment": comment,
                         "testname": testname,
                         "verified_by": verified_by,
                         "approve_by": approve_by,

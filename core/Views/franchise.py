@@ -951,6 +951,9 @@ def franchise_patient_test_details(request):
             if test_value_details:
                 test_detail.update({
                     "verified_by": test_value_details.get("verified_by", "N/A"),
+                    "NABL": test_value_details.get("NABL", ""),
+                    "outsourced": test_value_details.get("outsourced", False),
+                    "comment": test_value_details.get("comment", False),
                     "method": test_value_details.get("method", "N/A"),
                     "specimen_type": test_value_details.get("specimen_type", "N/A"),
                     "value": test_value_details.get("value", "N/A"),

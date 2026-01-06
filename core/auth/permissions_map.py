@@ -80,12 +80,16 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/franchise_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',  
     '/_b_a_c_k_e_n_d/LIS/get-test-values/':'SD-P-SSU',  
 
+    #Franchise Reports:
+    r'^/_b_a_c_k_e_n_d/LIS/franchise_overall_report/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/get_franchise_patient_test_details/?(\?.*)?$':'SD-P-POV',
+
     #Test Values:
     r'^/_b_a_c_k_e_n_d/LIS/samplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       
     r'^/_b_a_c_k_e_n_d/LIS/compare_test_details/?(\?.*)?$':'SD-P-TD',
     '/_b_a_c_k_e_n_d/LIS/test-value/save/':'SD-P-TD',
 
-     #O/S Test Values:
+    #O/S Test Values:
     r'^/_b_a_c_k_e_n_d/LIS/os-samplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       
     r'^/_b_a_c_k_e_n_d/LIS/os-compare_test_details/?(\?.*)?$':'SD-P-TD',  
     '/_b_a_c_k_e_n_d/LIS/os-test-value/save/':'SD-P-TD',
@@ -103,7 +107,6 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/upload-pdf/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/credit_amount/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update-credit/?(\?.*)?$':'SD-P-POV',
-    r'^/_b_a_c_k_e_n_d/LIS/get_batch_investigation_status/?(\?.*)?$':'SD-P-CHC',
 
     # Invoice URLs
     r'/_b_a_c_k_e_n_d/LIS/get_clinicalname_invoice/': 'SD-API-IVM',
@@ -130,6 +133,12 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/hms_patch_sample_status(?:/[^/]+)+/$': 'SD-P-HMSPS',
     r'^/_b_a_c_k_e_n_d/LIS/hms_get_sample_collected/?(\?.*)?$':'SD-P-HMSGC',
     r'^/_b_a_c_k_e_n_d/LIS/hms_update_sample_collected(?:/[^/]+)+/$':'SD-P-HMSUC',
+
+    #HMS Reports:
+    r'^/_b_a_c_k_e_n_d/LIS/hms_overall_report/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/hms_patient_test_sorting/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/get_hms_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/hms_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     
     #Corporate:
     '/_b_a_c_k_e_n_d/LIS/corporate-batches/':'SD-P-SSU',

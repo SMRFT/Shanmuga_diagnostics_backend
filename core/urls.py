@@ -139,7 +139,6 @@ urlpatterns = [
     path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_patient_test_details'),
     path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
     path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
-    path("test-summary/", dashboard.test_summary, name="test-summary"),
 
     #MIS:
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
@@ -176,6 +175,9 @@ urlpatterns = [
 
     path('get_devices/', testdetails.get_devices, name='get_devices'),
     path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
+
+    
+    path("test-summary/", dashboard.test_summary, name="test-summary"),
 
     
 ]

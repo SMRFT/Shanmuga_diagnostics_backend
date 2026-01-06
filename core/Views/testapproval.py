@@ -71,7 +71,7 @@ def get_test_values(request):
         return JsonResponse([], safe=False)
 
     # Extract all barcodes upfront
-    barcodes = [str(p.barcode).zfill(5) for p in patients_list]
+    barcodes = [str(p.barcode).zfill(0) for p in patients_list]
     
     # ============================================
     # BULK FETCH ALL DATA SOURCES AT ONCE
@@ -185,7 +185,7 @@ def get_test_values(request):
     patient_data = []
     
     for patient in patients_list:
-        barcode_val = str(patient.barcode).zfill(5)
+        barcode_val = str(patient.barcode).zfill(0)
         
         try:
             test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails

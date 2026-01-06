@@ -1010,7 +1010,8 @@ def corporate_patient_test_details(request):
                     # Build test detail object - ONLY if we have TestValue data
                     test_response = {
                         "department": test_detail.get("department", sample_status.get("department", "") if sample_status else ""),
-                        "NABL": test_detail.get("NABL", True),
+                        "NABL": test_detail.get("NABL", ""),
+                        "outsourced": test_detail.get("outsourced", False),
                         "testname": testname,
                         "verified_by": test_detail.get("verified_by", ""),
                         "approve_by": test_detail.get("approve_by", ""),
@@ -1026,6 +1027,7 @@ def corporate_patient_test_details(request):
                         for param in test_detail.get("parameters", []):
                             processed_param = {
                                 "name": param.get("name", ""),
+                                "comment": param.get("comment", False),
                                 "value": param.get("value", ""),
                                 "unit": param.get("unit", ""),
                                 "specimen_type": param.get("specimen_type", ""),
@@ -1040,6 +1042,7 @@ def corporate_patient_test_details(request):
                         # Test without parameters - add direct values
                         test_response.update({
                             "method": test_detail.get("method", ""),
+                            "comment": test_detail.get("comment", False),
                             "specimen_type": test_detail.get("specimen_type", ""),
                             "value": test_detail.get("value", ""),
                             "unit": test_detail.get("unit", ""),
