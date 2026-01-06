@@ -12,8 +12,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
 from pyauth.auth import HasRoleAndDataPermission
-from core.models import CommunicationLog
 
+from ..models import CommunicationLog
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django.core.mail import EmailMessage
