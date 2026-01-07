@@ -38,6 +38,7 @@ urlpatterns = [
     path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
     path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
     path("get_rejected_samples/", sample.get_rejected_samples, name="get_rejected_samples"),
+    path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
 
     #sales
     path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
@@ -183,4 +184,6 @@ urlpatterns = [
 
     path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
 ]
+
+
 
