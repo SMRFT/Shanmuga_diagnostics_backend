@@ -19,3 +19,7 @@ python-dotenv==1.1.0
 pytz==2024.1
 typing_extensions==4.12.2
 tzdata==2024.1
+django-stubs==5.2.8
+django-stubs-ext==5.2.8
+types-pyyaml==6.0.12.20250915
+requests==2.32.3

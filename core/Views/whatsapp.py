@@ -5,12 +5,14 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 from django.views.decorators.csrf import csrf_exempt
 import json
+import requests
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 #auth
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
 from pyauth.auth import HasRoleAndDataPermission
 
 from ..models import CommunicationLog
@@ -49,7 +51,7 @@ def upload_pdf_to_gridfs(request):
         file_id = fs.put(file, filename=safe_name)
 
         # 5. Generate access URL
-        file_url = f"https://shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}"
+        file_url = f"https://test.shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}"
 
         return JsonResponse({"file_id": str(file_id), "file_url": file_url})
 
@@ -71,10 +73,10 @@ def get_pdf_from_gridfs(request, file_id):
         return JsonResponse({"error": "File not found"}, status=404)
 
 
-# views.py
-import requests
-from rest_framework.decorators import api_view
-from rest_framework.response import Response
+
+from core.models import CommunicationLog
+
+
 
 @api_view(["POST"])
 def send_whatsapp(request):

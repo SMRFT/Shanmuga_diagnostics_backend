@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestvalue
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue,logistic,location
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue,logistic,location,m_dashboard
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
@@ -37,6 +37,7 @@ urlpatterns = [
 
     path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
     path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
+    path("get_rejected_samples/", sample.get_rejected_samples, name="get_rejected_samples"),
     path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
 
     #sales
@@ -46,11 +47,11 @@ urlpatterns = [
     path('get_sales_executives/', sales.get_sales_executives, name='get_sales_executives'),
     path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
     path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
-    path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
+    path('salesexecutive_report/', sales.Adminview_salesexecutive_report, name='salesexecutive_report'),
     path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
-
+    path('mou-preview/<str:file_id>/',clinicalname.preview_mou_file, name='preview_mou_file'),
     #Logistics
     path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),
     path('get_logistic_data/', logistic.get_logistic_data, name='get_logistic_data/'),
@@ -81,12 +82,13 @@ urlpatterns = [
     #Invoice URLs
     path("generate-invoice/", generate_invoice, name="generate-invoice"),
     path("get-invoices/", get_invoices, name="get-invoices"),
-    path("update-invoice/<str:invoice_number>/", update_invoice, name="update-invoice"),
-    path("delete-invoice/<str:invoice_id>/", delete_invoice, name="delete-invoice"),
+    path("update-invoice/", update_invoice, name="update-invoice"),
+    path("delete-invoice/", delete_invoice, name="delete-invoice"),
     path('get_clinicalname_invoice/', get_clinicalname_invoice, name='get_clinicalname_by_referrer'),
     path('all-patients/', get_all_patients, name='get_all_patients'),
     path('patient_report/', patient_report, name='patient_report'),
     path('overall_report/', report.overall_report, name='overall_report'),
+    path('b2b_ledger_report/', report.b2b_ledger_report, name='b2b_ledger_report'),
 
     path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
 
@@ -108,7 +110,9 @@ urlpatterns = [
     path("send-whatsapp/", whatsapp.send_whatsapp, name="send_whatsapp"),
     path('get_patientsbyb2b/', patients.get_patientsbyb2b, name='get_patients'),
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
+    path('credit_amount/<str:bill_no>/', patients.update_credit_amount, name='update_credit_amount'),
     path('send-email/', whatsapp.send_email, name='send_email'),
+    path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
 
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
@@ -127,6 +131,7 @@ urlpatterns = [
     path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
     path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
     path("test-summary/", dashboard.test_summary, name="test-summary"),
+    path("m-dashboard-stats/", m_dashboard.m_dashboard_stats, name="m_dashboard_stats"),
     
     #HMS Billing:
     path("hms_list_doctor/",hmsbilling.hms_get_doctor_list,name="doctor_list"),
@@ -144,7 +149,7 @@ urlpatterns = [
     path('corporate-receive/<str:batch_no>/', corporate.update_corporate_batch_received_status, name='update_corporate_batch_received_status'),
     path("get_corporate_Transferred/<str:batch_number>/", corporate.get_corporate_sample, name="get_corporate_sample"),
     path("update_corporate_sample/<str:barcode>/", corporate.update_corporate_sample, name="update_corporate_sample"),
-
+    path('logisticdashboard/',logistic.logisticdashboard, name='logisticdashboard'),
     #Corporate Reports:    
     path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
     path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),
@@ -164,7 +169,9 @@ urlpatterns = [
     path('hms_patch_sample_status/<str:barcode>/', hmssamplestatus.hms_patch_sample_status, name='hms_patch_sample_status'),
     path('hms_get_sample_collected/', hmssamplestatus.hms_get_sample_collected, name='hms_get_sample_collected'),
     path('hms_update_sample_collected/<str:barcode>/', hmssamplestatus.hms_update_sample_collected, name='hms_update_sample_collected'),
+    
 
+    
     #MIS:
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
@@ -172,6 +179,8 @@ urlpatterns = [
 
     path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
     path('get_devices/', testdetails.get_devices, name='get_devices'),
+    path('get_home_collection_report/', report.get_home_collection_report, name='get_home_collection_report'),
+    path("get_outsourced_samples/", sample.get_outsourced_samples, name="get_outsourced_samples"),
 
     path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
 ]

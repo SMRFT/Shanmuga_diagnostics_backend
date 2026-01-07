@@ -53,7 +53,7 @@ class Billing(AuditModel):
     refby = models.CharField(max_length=100, blank=True)
     branch = models.CharField(max_length=100, blank=True)
     bill_date = models.DateTimeField(null=True, blank=True)
-    bill_no = models.CharField(max_length=20, null=True, blank=True)
+    bill_no = models.CharField(max_length=20, blank=True)
     testdetails = models.JSONField(blank=True, null=True)
     totalAmount = models.CharField(max_length=50, blank=True)
     netAmount = models.CharField(max_length=50, blank=True)
@@ -275,6 +275,8 @@ class Hmsbarcode(AuditModel):
     location_id=models.CharField(max_length=15, blank=True,default="hms")
 
 
+    
+    
 class Hmssamplestatus(AuditModel):
     barcode= models.CharField(max_length=50,  blank=True)
     date=models.DateField()

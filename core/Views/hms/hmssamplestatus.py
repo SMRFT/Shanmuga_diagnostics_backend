@@ -170,6 +170,9 @@ def hms_get_samplepatients_by_date(request):
 @api_view(['POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
+@api_view(['POST'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def hms_sample_status(request):
     if request.method == 'POST':
         try:
@@ -214,10 +217,21 @@ def hms_sample_status(request):
             # Process and validate testdetails
             processed_testdetails = []
             for test in testdetails:
+                # Helper function to clean strings
+                def clean_str(s):
+                    return str(s).strip().lower() if s else ""
+                
+                # Try to find the correct test name
+                testname = test.get('testname')
+                test_id = test.get('test_id')
+                
+                # Use a dictionary to map common variations or lookups if needed
+                # For now, just robust cleaning
+                
                 samplestatus = test.get('samplestatus', 'Pending')
                 processed_test = {
-                    'test_id': test.get('test_id'),
-                    'testname': test.get('testname'),
+                    'test_id': test_id,
+                    'testname': testname,  # Keep original casing for display? Or normalize?
                     'collection_container': test.get('collection_container', 'N/A'),
                     'department': test.get('department', 'N/A'),
                     'samplestatus': samplestatus,

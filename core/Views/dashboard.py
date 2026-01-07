@@ -12,21 +12,34 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 
+#auth
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
+from pyauth.auth import HasRoleAndDataPermission
+from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from django.utils.dateparse import parse_date
 import json, ast
 from datetime import datetime, timedelta
 
-@api_view(["GET"])
+@api_view(["POST", "GET"])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def test_summary(request):
     summary = {}
 
-    # --- Filters from query params ---
-    search = request.GET.get("search", "").strip().lower()
-    from_date_str = request.GET.get("from_date")
-    to_date_str = request.GET.get("to_date")
+    # --- Filters ---
+    if request.method == "POST":
+        data = request.data
+        search = data.get("search", "").strip().lower()
+        from_date_str = data.get("from_date")
+        to_date_str = data.get("to_date")
+    else:
+        search = request.GET.get("search", "").strip().lower()
+        from_date_str = request.GET.get("from_date")
+        to_date_str = request.GET.get("to_date")
 
     # Convert string to datetime
     from_date = parse_date(from_date_str) if from_date_str else None
