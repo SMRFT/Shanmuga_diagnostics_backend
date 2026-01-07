@@ -1,8 +1,8 @@
 #urls.py
 from django.urls import path
 from core import views
-from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,hmstestvalue
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,chctestvalue,logistic,location,m_dashboard
+from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
@@ -29,6 +29,8 @@ urlpatterns = [
     path('dashboard-data/', patients.dashboard_data, name='sales_person'),
     path('refby/', form.refby, name='refby'),
     path("appointments/", patients.appointment_booking, name="appointment_booking"),
+    path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
+
 
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
@@ -110,8 +112,7 @@ urlpatterns = [
     path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
 
     # CHC Test Values
-    path('chc_samplestatus_testvalue/', chctestvalue.get_corporate_samplestatus, name='get_chc_samplestatus_testvalue'),
-    path('chc_compare_test_details/', chctestvalue.corporate_test_details, name='chc_compare_test_details'),
+
 
     # Refund and Cancellation URLs
     path('search_refund/', search_refund, name='search_refund'),
@@ -158,8 +159,7 @@ urlpatterns = [
     #HMS Barcode:
     path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
     path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
-    path('get_hmssamplestatus_testvalue/',hmstestvalue.get_hmssamplestatus_testvalue, name='get_hmssamplestatus_testvalue'),
-    path('hmscompare_test_details/',hmstestvalue.hmscompare_test_details, name='hmscompare_test_details'),
+
 
     #Corporate Batch and Sample Status Update:
     path('corporate-batches/', corporate.get_corporate_batch_generation_data, name='get_corporate_batch_generation_data'),
