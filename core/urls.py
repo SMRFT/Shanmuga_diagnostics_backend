@@ -71,7 +71,7 @@ urlpatterns = [
     path('savesamplecollector/', logistic.savesamplecollectordetails, name='savesamplecollector'),
     path('updatesamplecollectordetails/', logistic.update_sample_collector_details, name='updatesamplecollectordetails'),
     path('get_logistic_task/', logistic.get_logistic_task, name='get_logistic_task'),
-    
+    path('get_home_collection_report/', report.get_home_collection_report, name='get_home_collection_report'),
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
@@ -246,6 +246,7 @@ urlpatterns = [
 
     
 ]
+
 
 
 
