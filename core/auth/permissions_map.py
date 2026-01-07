@@ -56,7 +56,10 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/get_logistic_task/?(\?.*)?$':'SD-P-LGLT',
     '/_b_a_c_k_e_n_d/LIS/logisticdashboard/':'SD-P-LGD',
 
-
+    r'^/_b_a_c_k_e_n_d/LIS/hms_overall_report/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/hms_patient_test_sorting/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/get_hms_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/hms_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     #Sample Status: 
     r'^/_b_a_c_k_e_n_d/LIS/sample_patient/?(\?.*)?$':'SD-P-SS',
     '/_b_a_c_k_e_n_d/LIS/sample_status/':'SD-P-SS',
@@ -170,3 +173,4 @@ GEN_ACTION_MAPPING = {
     'PATCH': 'RW',
     'OPTIONS': 'RW',
 }
+
