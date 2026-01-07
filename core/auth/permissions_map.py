@@ -113,9 +113,13 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/credit_amount/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update-credit/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/get_batch_investigation_status/?(\?.*)?$':'SD-P-CHC',
-    '/_b_a_c_k_e_n_d/LIS/test-summary/':'SD-P-TS',
-    '/_b_a_c_k_e_n_d/LIS/communication_logs/':'SD-P-CL',
-
+    '/_b_a_c_k_e_n_d/LIS/communication_logs/':'SD-API-MIS',
+    '/_b_a_c_k_e_n_d/LIS/test-summary/':'SD-API-MIS',
+    '/_b_a_c_k_e_n_d/LIS/communication_logs/':'SD-API-MIS',
+    
+    '/_b_a_c_k_e_n_d/LIS/get_rejected_samples/': 'SD-API-MIS',
+    '/_b_a_c_k_e_n_d/LIS/get_outsourced_samples/': 'SD-API-MIS',
+    '/_b_a_c_k_e_n_d/LIS/get_home_collection_report/': 'SD-API-MIS',
 
 
     r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',
@@ -189,3 +193,4 @@ GEN_ACTION_MAPPING = {
     'PATCH': 'RW',
     'OPTIONS': 'RW',
 }
+
