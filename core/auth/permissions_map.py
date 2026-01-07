@@ -115,7 +115,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/get-invoices/?(\?.*)?$': 'SD-API-IVM',
     r'^/_b_a_c_k_e_n_d/LIS/generate-invoice/?(\?.*)?$': 'SD-API-IVM',
     r'^/_b_a_c_k_e_n_d/LIS/all-patients/?(\?.*)?$': 'SD-API-IVM',
-
+ 
     #Hms Billing
     '/_b_a_c_k_e_n_d/LIS/hms_patient_billing/':'SD-P-HMSPB',
     '/_b_a_c_k_e_n_d/LIS/hms_testdetails/':'SD-P-HMSTD',
@@ -131,7 +131,10 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/hms_check_sample_status(?:/[^/]+)+/$': 'SD-P-HMSCS',
     r'^/_b_a_c_k_e_n_d/LIS/hms_sample_status_data(?:/[^/]+)+/$': 'SD-P-HMSSD',
     r'^/_b_a_c_k_e_n_d/LIS/hms_patch_sample_status(?:/[^/]+)+/$': 'SD-P-HMSPS',
-    
+    r'^/_b_a_c_k_e_n_d/LIS/hms_overall_report/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/hms_patient_test_sorting/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/get_hms_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/hms_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     #Corporate:
     '/_b_a_c_k_e_n_d/LIS/corporate-batches/':'SD-P-SSU',
     r'^/_b_a_c_k_e_n_d/LIS/corporate-batches/?(\?.*)?$':'SD-P-SSU',
@@ -173,5 +176,6 @@ GEN_ACTION_MAPPING = {
     'PATCH': 'RW',
     'OPTIONS': 'RW',
 }
+
 
 
