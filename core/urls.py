@@ -77,7 +77,7 @@ urlpatterns = [
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
     path('save-barcodes/', barcode.save_barcodes, name='save_barcodes'),
     path('get-existing-barcode/',barcode.get_existing_barcode, name='get_latest_bill_no'),
-
+    path("get_outsourced_samples/", sample.get_outsourced_samples, name="get_outsourced_samples"),
     #Test Values:
     path('samplestatus-testvalue/', testvalue.get_samplestatus_testvalue, name='sample-status-list'), 
     path('compare_test_details/', testvalue.compare_test_details, name='compare_test_details'),
@@ -246,6 +246,7 @@ urlpatterns = [
 
     
 ]
+
 
 
 
