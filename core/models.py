@@ -53,7 +53,7 @@ class Billing(AuditModel):
     refby = models.CharField(max_length=100, blank=True)
     branch = models.CharField(max_length=100, blank=True)
     bill_date = models.DateTimeField(null=True, blank=True)
-    bill_no = models.CharField(max_length=20, null=True, blank=True)
+    bill_no = models.CharField(max_length=20, blank=True)
     testdetails = models.JSONField(blank=True, null=True)
     totalAmount = models.CharField(max_length=50, blank=True)
     netAmount = models.CharField(max_length=50, blank=True)
@@ -275,8 +275,22 @@ class Hmsbarcode(AuditModel):
     location_id=models.CharField(max_length=15, blank=True,default="hms")
 
 
+    
+    
 class Hmssamplestatus(AuditModel):
     barcode= models.CharField(max_length=50,  blank=True)
     date=models.DateField()
     testdetails = models.JSONField(blank=True, null=True)
     location_id=models.CharField(max_length=15, blank=True,default="hms")
+
+
+class CommunicationLog(AuditModel):
+    patient_id = models.CharField(max_length=50, blank=True, null=True)
+    patient_name = models.CharField(max_length=255, blank=True, null=True)
+    type = models.CharField(max_length=20) # 'Email' or 'WhatsApp'
+    recipient = models.CharField(max_length=255) # Phone or Email
+    status = models.CharField(max_length=50) # 'Success', 'Failed'
+    details = models.TextField(blank=True, null=True) # Error message or success details
+    
+    def __str__(self):
+        return f"{self.type} to {self.recipient}"

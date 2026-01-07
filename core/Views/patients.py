@@ -685,12 +685,21 @@ def patient_get(request):
         }, status=500)
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes([HasRoleAndDataPermission])
 def get_patients_by_date(request):
-    start_date = request.GET.get('start_date')
-    end_date = request.GET.get('end_date')
-    single_date = request.GET.get('date')
+    start_date = None
+    end_date = None
+    single_date = None
+
+    if request.method == 'POST':
+        start_date = request.data.get('start_date')
+        end_date = request.data.get('end_date')
+        single_date = request.data.get('date')
+    else:
+        start_date = request.GET.get('start_date')
+        end_date = request.GET.get('end_date')
+        single_date = request.GET.get('date')
 
     if single_date and not (start_date and end_date):
         start_date = single_date
@@ -711,7 +720,7 @@ def get_patients_by_date(request):
             patients = Billing.objects.filter(
                 date__gte=start_date_parsed,
                 date__lte=end_date_parsed
-            )
+            ).order_by('date') # It's often good to order by date
 
             patient_data = []
             for patient in patients:
@@ -751,14 +760,17 @@ def get_patients_by_date(request):
                     print(f"Error processing patient {getattr(patient, 'patient_id', 'unknown')}: {patient_error}")
                     continue
 
-            return JsonResponse({'success': True, 'data': patient_data}, safe=False)
+            # Return standard DRF Response for consistency if desired, or JsonResponse
+            # Using Response allows DRF to handle content negotiation
+            return Response({'success': True, 'data': patient_data})
 
         except ValueError as e:
-            return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+            return Response({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
         except Exception as e:
-            return JsonResponse({'error': 'An error occurred while fetching patients.'}, status=500)
+            print(f"Error in get_patients_by_date: {str(e)}")
+            return Response({'error': 'An error occurred while fetching patients.'}, status=500)
 
-    return JsonResponse({
+    return Response({
         'error': 'start_date and end_date parameters are required, or provide a single date parameter.'
     }, status=400)
 
@@ -815,6 +827,8 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 import json
 import os
+
+
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -995,3 +1009,102 @@ def dashboard_data(request):
 
     except Exception as e:
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
+
+
+
+@api_view(['PATCH'])
+@permission_classes([HasRoleAndDataPermission])
+def update_credit_amount(request, bill_no):
+    try:
+        data = request.data
+        
+        # 1. Update Django Billing Model
+        billing = Billing.objects.filter(bill_no=bill_no).first()
+        if not billing:
+            return Response({"error": "Billing record not found"}, status=404)
+
+        new_credit_amount = data.get("credit_amount")
+        amount_paid = data.get("amount_paid")
+        paid_date = data.get("paid_date")
+        payment_method = data.get("payment_method")
+
+        if new_credit_amount is not None:
+             Billing.objects.filter(bill_no=bill_no).update(credit_amount=str(new_credit_amount))
+
+        # 2. Update MongoDB core_billing Collection (critical for reports)
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        collection = db.core_billing
+        
+        # Create the new credit detail entry
+        new_credit_detail = {
+            "credit_amount": str(new_credit_amount), # Store current total status
+            "amount_paid": amount_paid if amount_paid is not None else 0,
+            "paid_date": paid_date,
+            "payment_method": payment_method,
+            "remaining_amount": str(new_credit_amount)
+        }
+        
+        # Fetch existing document to handle credit_details being a string
+        billing_doc = collection.find_one({"bill_no": bill_no})
+        
+        if billing_doc:
+            existing_details = billing_doc.get("credit_details", [])
+            
+            # Parse if it's a string (which causes the $push error)
+            if isinstance(existing_details, str):
+                try:
+                    credit_details_list = json.loads(existing_details)
+                except json.JSONDecodeError:
+                    credit_details_list = []
+            elif isinstance(existing_details, list):
+                credit_details_list = existing_details
+            else:
+                credit_details_list = []
+                
+            # Append new detail
+            credit_details_list.append(new_credit_detail)
+            
+            # Update back as string (to maintain consistency if that's the pattern) or list
+            # The error showed it was a string, so we'll save it back as a string to be safe,
+            # or we could save as list directly. Given report.py parses it, string is safe.
+            # However, saving as a list is generally better for MongoDB. 
+            # But let's stick to the observed pattern to avoid breaking other unknown readers.
+            updated_details_str = json.dumps(credit_details_list)
+            
+            update_result = collection.update_one(
+                {"bill_no": bill_no},
+                {
+                    "$set": {
+                        "credit_amount": str(new_credit_amount),
+                        "credit_details": updated_details_str
+                    }
+                }
+            )
+        else:
+             return Response({"error": "Billing record not found in MongoDB"}, status=404)
+
+        return Response({"success": True, "message": "Credit amount updated successfully"}, status=200)
+
+    except Exception as e:
+        print(f"Error updating credit amount: {str(e)}")
+        return Response({"error": str(e)}, status=500)
+import ast
+
+def safe_parse_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except json.JSONDecodeError:
+            try:
+                # Fallback for Python stringified lists (single quotes)
+                parsed = ast.literal_eval(data)
+                if isinstance(parsed, list):
+                    return parsed
+            except:
+                pass
+    return []
