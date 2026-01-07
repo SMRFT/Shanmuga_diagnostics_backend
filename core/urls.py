@@ -50,6 +50,7 @@ urlpatterns = [
     path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
     path("get_rejected_samples/", sample.get_rejected_samples, name="get_rejected_samples"),
     path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
+    path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
 
     #sales
     path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
@@ -246,6 +247,7 @@ urlpatterns = [
 
     
 ]
+
 
 
 
