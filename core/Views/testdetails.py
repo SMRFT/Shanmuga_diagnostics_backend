@@ -217,7 +217,7 @@ def get_test_details(request):
         elif request.method == 'PATCH':
             # Update parameters with correct shape (single device -> array, multiple -> dict)
             try:
-                data = json.loads(request.body.decode('utf-8'))
+                data = request.data
                 test_id = data.get('test_id')
                 test_name = data.get('test_name')
                 updated_parameters = data.get('parameters')
@@ -270,10 +270,7 @@ def send_approval_email(request):
 
     try:
         # ✅ Handle both JSON body and form data
-        if request.content_type == 'application/json':
-            data = json.loads(request.body.decode('utf-8'))
-        else:
-            data = request.data
+        data = request.data
         
         test_id = data.get('test_id')
         recipient_email = data.get('recipient_email')
@@ -550,8 +547,7 @@ def handle_patch_request(request):
         collection = db.core_testdetails
 
         data = {}
-        if request.body:
-            data = json.loads(request.body.decode('utf-8'))
+        data = request.data
 
         test_id = data.get('test_id')
         test_name = data.get('test_name')
