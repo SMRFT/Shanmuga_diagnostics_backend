@@ -697,6 +697,7 @@ def hms_update_dispatch_status(request, barcode):
         
         # Get auth-user-id from request data
         auth_user_id = request.data.get('auth-user-id')
+        auth_user_name = request.data.get('auth-user-name')
         
         if not created_date:
             return Response({"error": "created_date parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -745,6 +746,7 @@ def hms_update_dispatch_status(request, barcode):
             test["dispatch"] = True
             # Only set dispatch_time if dispatch is True
             if test.get("dispatch", False):
+                test["dispatched_by"] = auth_user_name
                 test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')  # Convert to IST format
         
         # Convert the updated testdetails back to a JSON string

@@ -60,8 +60,8 @@ urlpatterns = [
 
     #Test Approval:y
     path('test-values/', testapproval.get_test_values, name='get_test_values'),
-    path("test-approval/<path:patient_id>/<int:test_index>/approve/",testapproval.approve_test_detail,name="approve_test_detail"),
-    path('test-rerun/<str:patient_id>/<int:test_index>/rerun/', testapproval.rerun_test_detail, name='rerun_test_detail'),
+    path('test-approval/<str:barcode>/approve/', testapproval.approve_test_detail, name='approve_test_detail'),
+    path('test-rerun/<str:barcode>/rerun/', testapproval.rerun_test_detail, name='rerun_test_detail'),
 
     #Diagnostics Reports:
     path('overall_report/', report.overall_report, name='overall_report'),    

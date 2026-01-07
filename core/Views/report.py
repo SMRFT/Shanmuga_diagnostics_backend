@@ -854,6 +854,7 @@ def update_dispatch_status(request, barcode):
     try:
         # Get auth-user-id from request data
         auth_user_id = request.data.get('auth-user-id')
+        auth_user_name = request.data.get('auth-user-name')
         if not auth_user_id:
             return Response({"error": "auth-user-id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
         # Build the query filter with only barcode
@@ -896,6 +897,7 @@ def update_dispatch_status(request, barcode):
                 # Only update if dispatch is currently false
                 if not test.get("dispatch", False):
                     test["dispatch"] = True
+                    test["dispatched_by"] = auth_user_name
                     test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
                     tests_updated_in_doc += 1
             # Convert the updated testdetails back to a JSON string

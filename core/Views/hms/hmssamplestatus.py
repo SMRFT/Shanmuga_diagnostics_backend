@@ -182,13 +182,13 @@ def hms_sample_status(request):
             print(f"Request Data: {data}")  # For debugging
             
             # Extract patient data
-            employee_id = data.get('auth-user-id')
-            barcode = data.get('barcode')           
+            employee_id = data.get('auth-user-id')       
             date = data.get('date')          
+            barcode = data.get('barcode')           
             testdetails = data.get('testdetails', [])
             
             # Validate required fields
-            required_fields = ['barcode']
+            required_fields = [ 'barcode']
             missing_fields = []
             for field in required_fields:
                 if not data.get(field):
@@ -199,7 +199,7 @@ def hms_sample_status(request):
                     'error': f'Missing required fields: {", ".join(missing_fields)}'
                 }, status=400)
             
-            # Check if an entry with the same barcode and date exists
+            # Check if an entry with the same patient_id, barcode, and date exists
             existing_entry = Hmssamplestatus.objects.filter(
                 barcode=barcode,
                 date=date
@@ -208,44 +208,38 @@ def hms_sample_status(request):
             if existing_entry:
                 return JsonResponse({
                     'error': 'Please change status as Sample Collected',
-                    'message': 'Barcode already exists. Please change status as Sample Collected'
+                    'message': 'Patient ID already exists. Please change status as Sample Collected'
                 }, status=409)
             
             # Process and validate testdetails
             processed_testdetails = []
             for test in testdetails:
-                samplestatus = test.get('samplestatus', 'Pending')
+                # Handle datetime formatting if needed
+                samplecollected_time = test.get('samplecollected_time')
+                received_time = test.get('received_time')
+                rejected_time = test.get('rejected_time')
+                
                 processed_test = {
                     'test_id': test.get('test_id'),
                     'testname': test.get('testname'),
-                    'collection_container': test.get('collection_container', 'N/A'),
+                    'container': test.get('container', 'N/A'),
                     'department': test.get('department', 'N/A'),
-                    'samplestatus': samplestatus,
-                    'samplecollected_time': (
-                        test.get('samplecollected_time') 
-                        if samplestatus != "Sample Collected" 
-                        else timezone.now().isoformat()
-                    ),
-                    'received_time': test.get('received_time'),
-                    'rejected_time': test.get('rejected_time'),
-                    'oursourced_time': test.get('oursourced_time'),
-                    'collectd_by': (
-                        test.get('collectd_by') 
-                        if samplestatus != "Sample Collected" 
-                        else request.user.get_full_name() if hasattr(request.user, 'get_full_name') 
-                        else data.get('employee_name')  # fallback if you send from frontend
-                    ),
+                    'samplecollector': test.get('samplecollector', 'N/A'),
+                    'samplestatus': test.get('samplestatus', 'Pending'),
+                    'samplecollected_time': samplecollected_time,
+                    'received_time': received_time,
+                    'rejected_time': rejected_time,
+                    'collectd_by': test.get('collectd_by'),
                     'received_by': test.get('received_by'),
                     'rejected_by': test.get('rejected_by'),
-                    'oursourced_by': test.get('oursourced_by'),
                     'remarks': test.get('remarks'),
                 }
                 processed_testdetails.append(processed_test)
             
             # Save the new entry
-            sample_status = Hmssamplestatus(
-                barcode=barcode,             
+            sample_status = Hmssamplestatus(       
                 date=date,               
+                barcode=barcode,             
                 created_by=employee_id,             
                 testdetails=processed_testdetails
             )
@@ -253,7 +247,7 @@ def hms_sample_status(request):
             
             return JsonResponse({
                 'message': 'Data saved successfully',
-                'saved_data': {
+                'saved_data': {                 
                     'barcode': barcode,
                     'testdetails_count': len(processed_testdetails),
                     'testdetails': processed_testdetails
@@ -267,6 +261,7 @@ def hms_sample_status(request):
             return JsonResponse({'error': str(e)}, status=400)
     
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
 
 @api_view(['GET'])
 @csrf_exempt
@@ -608,9 +603,9 @@ def hms_get_sample_collected(request):
                         patient_data[patient_key]["testdetails"].append({
                             "test_id": detail.get("test_id", "N/A"),
                             "testname": detail.get("testname", "N/A"),
-                            "collection_container": detail.get("collection_container", "N/A"),
+                            "container": detail.get("container", "N/A"),
                             "department": detail.get("department", "N/A"),
-                            "samplecollector": detail.get("samplecollector", "N/A"),
+                            "collectd_by": detail.get("collectd_by", "N/A"),
                             "samplestatus": detail.get("samplestatus", "N/A"),
                             "samplecollected_time": detail.get("samplecollected_time", "N/A"),
                         })

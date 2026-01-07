@@ -276,7 +276,8 @@ class Hmsbarcode(AuditModel):
 
 
 class Hmssamplestatus(AuditModel):
-    barcode= models.CharField(max_length=50,  blank=True)
-    date=models.DateField()
-    testdetails = models.JSONField(blank=True, null=True)
-    location_id=models.CharField(max_length=15, blank=True,default="hms")
+    barcode= models.CharField(max_length=50)   
+    date = models.DateTimeField(null=True, blank=True)  # Use DateTimeField to store both date and time
+    testdetails = models.JSONField()  # Assuming you're using Django 3.1+ for JSONField
+    def __str__(self):
+        return self.patient_id
