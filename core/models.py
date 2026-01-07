@@ -281,7 +281,6 @@ class Hmssamplestatus(AuditModel):
     barcode= models.CharField(max_length=50,  blank=True)
     date=models.DateField()
     testdetails = models.JSONField(blank=True, null=True)
-
     location_id=models.CharField(max_length=15, blank=True,default="hms")
 
 

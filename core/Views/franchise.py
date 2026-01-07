@@ -210,6 +210,7 @@ def update_franchise_sample(request,barcode):
                         received_by = update.get("received_by")
                         rejected_by = update.get("rejected_by")
                         outsourced_by = update.get("outsourced_by")
+                        outsource_lab = update.get("outsource_lab")
                         remarks = update.get("remarks")
                         batch_number = update.get("batch_number")
                         
@@ -259,10 +260,12 @@ def update_franchise_sample(request,barcode):
                             test_entry.pop('received_by', None)
                             test_entry.pop('outsourced_time', None)
                             test_entry.pop('outsourced_by', None)
+                            test_entry.pop('outsource_lab', None)
                             
                         elif new_status == "Outsource":
                             test_entry['outsourced_time'] = formatted_time
                             test_entry['outsourced_by'] = outsourced_by
+                            test_entry['outsource_lab'] = outsource_lab
                             # Clear other status fields
                             test_entry.pop('received_time', None)
                             test_entry.pop('received_by', None)
@@ -948,6 +951,9 @@ def franchise_patient_test_details(request):
             if test_value_details:
                 test_detail.update({
                     "verified_by": test_value_details.get("verified_by", "N/A"),
+                    "NABL": test_value_details.get("NABL", ""),
+                    "outsourced": test_value_details.get("outsourced", False),
+                    "comment": test_value_details.get("comment", False),
                     "method": test_value_details.get("method", "N/A"),
                     "specimen_type": test_value_details.get("specimen_type", "N/A"),
                     "value": test_value_details.get("value", "N/A"),

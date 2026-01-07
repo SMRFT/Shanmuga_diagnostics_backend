@@ -611,6 +611,8 @@ def get_patient_test_details(request):
                     testname = test.get("testname")
                     department = test.get("department", "N/A")
                     NABL = test.get("NABL", "N/A")
+                    outsourced = test.get("outsourced", False)
+                    comment = test.get("comment", False)
                     verified_by = test.get("verified_by", "N/A")
                     approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
@@ -629,6 +631,8 @@ def get_patient_test_details(request):
                     test_detail = {
                         "department": department,
                         "NABL": NABL,
+                        "outsourced": outsourced,
+                        "comment": comment,
                         "testname": testname,
                         "verified_by": verified_by,
                         "approve_by": approve_by,
@@ -934,6 +938,7 @@ def update_dispatch_status(request, barcode):
                 # Only update if dispatch is currently false
                 if not test.get("dispatch", False):
                     test["dispatch"] = True
+                    test["dispatched_by"] = auth_user_name
                     test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
                     tests_updated_in_doc += 1
             # Convert the updated testdetails back to a JSON string

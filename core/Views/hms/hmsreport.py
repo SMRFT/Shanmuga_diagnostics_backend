@@ -40,7 +40,7 @@ load_dotenv()
 
 
 @api_view(['GET', 'PATCH'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 @csrf_exempt
 def hms_overall_report(request):
     try:
@@ -399,6 +399,8 @@ def get_hms_patient_test_details(request):
                     testname = test.get("testname")
                     department = test.get("department", "N/A")
                     NABL = test.get("NABL", "N/A")
+                    outsourced = test.get("outsourced", False)
+                    comment = test.get("comment", False)
                     verified_by = test.get("verified_by", "N/A")
                     approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
@@ -421,6 +423,8 @@ def get_hms_patient_test_details(request):
                     test_detail = {
                         "department": department,
                         "NABL": NABL,
+                        "outsourced": outsourced,
+                        "comment": comment,
                         "testname": testname,
                         "verified_by": verified_by,
                         "approve_by": approve_by,
@@ -679,7 +683,7 @@ TIME_ZONE = 'Asia/Kolkata'
 IST = pytz.timezone(TIME_ZONE)
 
 @api_view(['PATCH'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def hms_update_dispatch_status(request, barcode):
     # MongoDB connection
     password = quote_plus('Smrft@2024')
@@ -693,6 +697,7 @@ def hms_update_dispatch_status(request, barcode):
         
         # Get auth-user-id from request data
         auth_user_id = request.data.get('auth-user-id')
+        auth_user_name = request.data.get('auth-user-name')
         
         if not created_date:
             return Response({"error": "created_date parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
@@ -741,6 +746,7 @@ def hms_update_dispatch_status(request, barcode):
             test["dispatch"] = True
             # Only set dispatch_time if dispatch is True
             if test.get("dispatch", False):
+                test["dispatched_by"] = auth_user_name
                 test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')  # Convert to IST format
         
         # Convert the updated testdetails back to a JSON string

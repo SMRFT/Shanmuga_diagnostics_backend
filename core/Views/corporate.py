@@ -169,7 +169,8 @@ def get_corporate_sample(request, batch_number):
                         "rejected_time": detail.get("rejected_time"),
                         "rejected_by": detail.get("rejected_by"),
                         "outsourced_time": detail.get("outsourced_time"),
-                        "outsourced_by": detail.get("outsourced_by")
+                        "outsourced_by": detail.get("outsourced_by"),
+                        "outsource_lab": detail.get("outsource_lab")
                     }
                     enhanced_test_details.append(enhanced_detail)
 
@@ -273,6 +274,7 @@ def update_corporate_sample(request,barcode):
                         received_by = update.get("received_by")
                         rejected_by = update.get("rejected_by")
                         outsourced_by = update.get("outsourced_by")
+                        outsource_lab = update.get("outsource_lab")
                         remarks = update.get("remarks")
                         batch_number = update.get("batch_number")
                         
@@ -326,6 +328,7 @@ def update_corporate_sample(request,barcode):
                         elif new_status == "Outsource":
                             test_entry['outsourced_time'] = formatted_time
                             test_entry['outsourced_by'] = outsourced_by
+                            test_entry['outsource_lab'] = outsource_lab
                             # Clear other status fields
                             test_entry.pop('received_time', None)
                             test_entry.pop('received_by', None)
@@ -1007,7 +1010,8 @@ def corporate_patient_test_details(request):
                     # Build test detail object - ONLY if we have TestValue data
                     test_response = {
                         "department": test_detail.get("department", sample_status.get("department", "") if sample_status else ""),
-                        "NABL": test_detail.get("NABL", True),
+                        "NABL": test_detail.get("NABL", ""),
+                        "outsourced": test_detail.get("outsourced", False),
                         "testname": testname,
                         "verified_by": test_detail.get("verified_by", ""),
                         "approve_by": test_detail.get("approve_by", ""),
@@ -1023,6 +1027,7 @@ def corporate_patient_test_details(request):
                         for param in test_detail.get("parameters", []):
                             processed_param = {
                                 "name": param.get("name", ""),
+                                "comment": param.get("comment", False),
                                 "value": param.get("value", ""),
                                 "unit": param.get("unit", ""),
                                 "specimen_type": param.get("specimen_type", ""),
@@ -1037,6 +1042,7 @@ def corporate_patient_test_details(request):
                         # Test without parameters - add direct values
                         test_response.update({
                             "method": test_detail.get("method", ""),
+                            "comment": test_detail.get("comment", False),
                             "specimen_type": test_detail.get("specimen_type", ""),
                             "value": test_detail.get("value", ""),
                             "unit": test_detail.get("unit", ""),

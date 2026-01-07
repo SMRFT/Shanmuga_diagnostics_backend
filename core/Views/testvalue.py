@@ -227,7 +227,7 @@ def get_samplestatus_testvalue(request):
                 
                 filtered_tests = [
                     test for test in testdetails
-                    if test.get('samplestatus') in ['Received', 'Outsource']
+                    if test.get('samplestatus') in ['Received']
                 ]
                 
                 if not filtered_tests:
@@ -283,7 +283,7 @@ def get_samplestatus_testvalue(request):
                 
                 filtered_tests = [
                     test for test in testdetails
-                    if test.get('samplestatus') in ['Received', 'Outsource']
+                    if test.get('samplestatus') in ['Received']
                 ]
                 
                 if not filtered_tests:
@@ -368,7 +368,7 @@ def get_samplestatus_testvalue(request):
                         continue
                     
                     testdetails = parse_testdetails(record.get('testdetails'))
-                    filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received', 'Outsource']]
+                    filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received']]
                     
                     if not filtered_tests:
                         continue
@@ -442,7 +442,7 @@ def get_samplestatus_testvalue(request):
                         continue
                     
                     testdetails = parse_testdetails(record.get('testdetails'))
-                    filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received', 'Outsource']]
+                    filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received']]
                     
                     if not filtered_tests:
                         continue
