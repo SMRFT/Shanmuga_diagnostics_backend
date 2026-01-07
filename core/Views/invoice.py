@@ -47,15 +47,23 @@ from django.views.decorators.csrf import csrf_exempt
 
 from django.db.models.functions import Lower, Trim, Upper
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def get_all_patients(request):
-    segment = request.GET.get('segment', 'B2B')
-    clinical_name = request.GET.get('clinical_name', '')
-    from_date = request.GET.get('from_date', '')
-    to_date = request.GET.get('to_date', '')
-    min_credit = request.GET.get('min_credit', '0')
+    if request.method == 'POST':
+        data = request.data
+        segment = data.get('segment', 'B2B')
+        clinical_name = data.get('clinical_name', '')
+        from_date = data.get('from_date', '')
+        to_date = data.get('to_date', '')
+        min_credit = data.get('min_credit', '0')
+    else:
+        segment = request.GET.get('segment', 'B2B')
+        clinical_name = request.GET.get('clinical_name', '')
+        from_date = request.GET.get('from_date', '')
+        to_date = request.GET.get('to_date', '')
+        min_credit = request.GET.get('min_credit', '0')
 
     # Get billing records as before
     patients_qs = Billing.objects.filter(segment=segment)
@@ -363,17 +371,21 @@ def get_invoices(request):
     invoices = list(collection.find({}, {"_id": 0}).sort("generatedAt", -1))
     return JsonResponse(invoices, safe=False)
 
-@api_view(['PUT'])
+@api_view(['PUT', 'POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def update_invoice(request, invoice_number):
+def update_invoice(request):
     """Update the invoice with total, paid, and pending amounts, and track payment history."""
     collection = get_mongo_collection()
 
-    if request.method == "PUT":
+    if request.method in ["PUT", "POST"]:
         try:
             # ✅ Use DRF's parsed data
-            data = request.data  
+            data = request.data
+            invoice_number = data.get("invoiceNumber")
+            if not invoice_number:
+                 return JsonResponse({"error": "Missing invoiceNumber field"}, status=400)
+                 
             employee_id = (data.get("auth-user-id")
             or request.headers.get("auth-user-id")
             or "system"
@@ -478,15 +490,19 @@ def update_invoice(request, invoice_number):
 
         
 
-@api_view(['DELETE'])
+@api_view(['DELETE', 'POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def delete_invoice(request, invoice_id):
+def delete_invoice(request):
     """Delete an invoice based on invoice_id"""
     collection = get_mongo_collection()
 
-    if request.method == "DELETE":
+    if request.method in ["DELETE", "POST"]:
         try:
+            invoice_id = request.data.get("invoiceNumber")
+            if not invoice_id:
+                 return JsonResponse({"error": "Missing invoiceNumber field"}, status=400)
+
             result = collection.delete_one({"invoiceNumber": invoice_id})
 
             if result.deleted_count == 0:

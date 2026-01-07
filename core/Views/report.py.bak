@@ -611,8 +611,6 @@ def get_patient_test_details(request):
                     testname = test.get("testname")
                     department = test.get("department", "N/A")
                     NABL = test.get("NABL", "N/A")
-                    outsourced = test.get("outsourced", False)
-                    comment = test.get("comment", False)
                     verified_by = test.get("verified_by", "N/A")
                     approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
@@ -631,8 +629,6 @@ def get_patient_test_details(request):
                     test_detail = {
                         "department": department,
                         "NABL": NABL,
-                        "outsourced": outsourced,
-                        "comment": comment,
                         "testname": testname,
                         "verified_by": verified_by,
                         "approve_by": approve_by,
@@ -895,7 +891,7 @@ def update_dispatch_status(request, barcode):
     collection = db.core_testvalue
     try:
         # Get auth-user-id from request data
-        auth_user_id = request.data.get('auth-user-id') or request.query_params.get('auth-user-id') or 'system'
+        auth_user_id = request.data.get('auth-user-id')
         if not auth_user_id:
             return Response({"error": "auth-user-id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
         # Build the query filter with only barcode
@@ -938,7 +934,6 @@ def update_dispatch_status(request, barcode):
                 # Only update if dispatch is currently false
                 if not test.get("dispatch", False):
                     test["dispatch"] = True
-                    test["dispatched_by"] = auth_user_name
                     test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
                     tests_updated_in_doc += 1
             # Convert the updated testdetails back to a JSON string
@@ -1045,128 +1040,3 @@ def b2b_ledger_report(request):
         print(f"Error in b2b_ledger_report: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({"success": False, "error": f"{str(e)} | {traceback.format_exc()}"}, status=500)
-
-
-@api_view(['POST'])
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def get_home_collection_report(request):
-    """
-    Get report specifically for Home Collection samples.
-    Filters by Date and Segment = 'Home Collection'.
-    Params are expected in the POST body.
-    """
-    try:
-        data = request.data
-        from_date = data.get('from_date')
-        to_date = data.get('to_date')
-
-        if not from_date or not to_date:
-             return JsonResponse({"error": "Date range (from_date, to_date) is required"}, status=400)
-
-        try:
-            from_dt = datetime.strptime(from_date, '%Y-%m-%d')
-            to_dt = datetime.strptime(to_date, '%Y-%m-%d') + timedelta(days=1) # Include full end date
-        except ValueError:
-             return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
-
-        # MongoDB setup (using same logic as overall_report)
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-        db = client.Diagnostics
-        billing_collection = db["core_billing"]
-
-        # Query for Home Collection in given date range
-        query = {
-            "date": {"$gte": from_dt, "$lt": to_dt},
-            "segment": "Home Collection"
-        }
-
-        records = list(billing_collection.find(query))
-        
-        # If no records found with explicit segment, check for 'Walk-in' with a sample_collector assigned, 
-        # as sometimes logic might differ, but user explicitly asked for "Home Collection Details".
-        # We will stick to segment="Home Collection" primarily. 
-        
-        # Fetch Patient model details using patient_id from billing records
-        patient_ids = [r.get('patient_id') for r in records if r.get('patient_id')]
-        patient_map = {}
-        if patient_ids:
-            try:
-                patient_records = Patient.objects.filter(patient_id__in=patient_ids).values(
-                    'patient_id', 'patientname', 'age', 'age_type', 'gender', 'phone', 'address'
-                )
-                patient_map = {p['patient_id']: p for p in patient_records}
-            except Exception as e:
-                print(f"Error fetching Patient model details: {e}")
-
-        report_data = []
-        for record in records:
-            bill_no = record.get("bill_no", "N/A")
-            pid = record.get("patient_id")
-            
-            p_details = patient_map.get(pid, {})
-            
-            # Helper to join address parts - Prioritize Patient Model -> Billing Record
-            address_source = p_details.get("address") or record.get("address")
-            formatted_address = "N/A"
-            
-            if address_source:
-                if isinstance(address_source, str):
-                    try:
-                        addr_json = json.loads(address_source)
-                        if isinstance(addr_json, dict):
-                             parts = [str(v) for k, v in addr_json.items() if v]
-                             formatted_address = ", ".join(parts)
-                        else:
-                            formatted_address = address_source
-                    except:
-                        formatted_address = address_source
-                elif isinstance(address_source, dict):
-                    parts = [str(v) for k, v in address_source.items() if v]
-                    formatted_address = ", ".join(parts)
-
-            # Patient Name priority: Patient Model > Billing
-            patient_name = p_details.get("patientname") or record.get("patientname") or "N/A"
-            
-            # Phone priority: Patient Model > Billing
-            phone = p_details.get("phone") or record.get("phone") or "N/A"
-
-            # Parse Test Names
-            test_names = record.get("test_names", "")
-            if not test_names:
-                # Fallback to testdetails parsing similar to overall_report (simplified)
-                td = record.get("testdetails")
-                if isinstance(td, str):
-                    try:
-                        parsed = json.loads(td)
-                        test_names = ", ".join([t.get("testname", "") for t in parsed if isinstance(t, dict)])
-                    except:
-                        pass
-                elif isinstance(td, list):
-                    test_names = ", ".join([t.get("testname", "") for t in td if isinstance(t, dict)])
-
-
-            item = {
-                "date": record.get("date").strftime("%Y-%m-%d") if record.get("date") else "N/A",
-                "bill_no": bill_no,
-                "patient_id": pid or "N/A",
-                "patient_name": patient_name,
-                "phone": phone,
-                "address": formatted_address,
-                "sample_collector": record.get("sample_collector", "N/A"),
-                "test_names": test_names,
-                "total_amount": record.get("totalAmount", 0),
-                "paid_amount": record.get("paid_amount", 0),
-                "balance_amount": record.get("balance_amount", 0),
-                "payment_status": record.get("payment_status", "N/A"),
-                "status": record.get("status", "N/A"),
-                "remarks": record.get("remarks", "")
-            }
-            report_data.append(item)
-
-        return JsonResponse({"data": report_data, "count": len(report_data)}, safe=False)
-
-    except Exception as e:
-        print(f"Error in get_home_collection_report: {str(e)}")
-        print(traceback.format_exc())
-        return JsonResponse({"error": str(e)}, status=500)

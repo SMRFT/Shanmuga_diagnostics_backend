@@ -170,6 +170,9 @@ def hms_get_samplepatients_by_date(request):
 @api_view(['POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
+@api_view(['POST'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def hms_sample_status(request):
     if request.method == 'POST':
         try:

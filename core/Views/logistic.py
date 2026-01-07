@@ -18,8 +18,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from ..models import LogisticTask ,LogisticData,Patient,SalesVisitLog
-from ..serializers import LogisticDataSerializer,LogisticTaskSerializer,SalesVisitLogSerializer,PatientSerializer
+from ..models import LogisticTask ,LogisticData,Patient,SalesVisitLog,Billing
+from ..serializers import LogisticDataSerializer,LogisticTaskSerializer,SalesVisitLogSerializer,PatientSerializer,BillingSerializer
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])

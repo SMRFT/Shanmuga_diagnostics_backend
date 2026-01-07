@@ -1,6 +1,8 @@
 PAGE_MAPPING = {
 
     #Registration, Billing and Forms
+    r'^/_b_a_c_k_e_n_d/LIS/test-summary/?(\?.*)?$':'SD-P-TS',
+    r'^/_b_a_c_k_e_n_d/LIS/communication_logs/?(\?.*)?$': 'SD-P-CL',
     '/_b_a_c_k_e_n_d/LIS/create_patient/': 'SD-P-PF',
     r'^/_b_a_c_k_e_n_d/LIS/create_patient/?(\?.*)?$': 'SD-P-PG',
     '/_b_a_c_k_e_n_d/LIS/latest-patient-id/': 'SD-P-LPI',
@@ -8,7 +10,7 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/latest-bill-no/': 'SD-P-LBN',
     '/_b_a_c_k_e_n_d/LIS/create_bill/': 'SD-P-PB',
     '/_b_a_c_k_e_n_d/LIS/update_bill/': 'SD-P-UPB',
-    r'^/_b_a_c_k_e_n_d/LIS/patients_by_date/?(\?.*)?$': 'SD-P-GPD',
+    r'^/_b_a_c_k_e_n_d/LIS/patients_by_date/?.*$': 'SD-P-GPD',
     '/_b_a_c_k_e_n_d/LIS/testdetails/':'SD-API-TM',
     '/_b_a_c_k_e_n_d/LIS/sample-collector/': 'SD-P-SC',
     '/_b_a_c_k_e_n_d/LIS/sales_person/': 'SD-P-GSP',
@@ -44,6 +46,9 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/get_all_clinicalnames/':'SD-P-SGAC',
     '/_b_a_c_k_e_n_d/LIS/get_sales_individual_report/':'SD-P-SIR',
     '/_b_a_c_k_e_n_d/LIS/clinicalname_update/':'SD-P-SCU',
+    '/_b_a_c_k_e_n_d/LIS/get_sales_executives/': 'SD-P-GSP',
+    '/_b_a_c_k_e_n_d/LIS/salesexecutive_report/': 'SD-P-SIR',
+    r'^/_b_a_c_k_e_n_d/LIS/salesexecutive_report/?(\?.*)?$': 'SD-P-SIR',
 
     #Logistics
     '/_b_a_c_k_e_n_d/LIS/get_sample_collectors/':'SD-P-LGSC',
@@ -107,14 +112,21 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/upload-pdf/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/credit_amount/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update-credit/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/get_batch_investigation_status/?(\?.*)?$':'SD-P-CHC',
+    '/_b_a_c_k_e_n_d/LIS/test-summary/':'SD-P-TS',
+    '/_b_a_c_k_e_n_d/LIS/communication_logs/':'SD-P-CL',
+
+
+
+    r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',
 
     # Invoice URLs
-    r'/_b_a_c_k_e_n_d/LIS/get_clinicalname_invoice/': 'SD-API-IVM',
-    '/_b_a_c_k_e_n_d/LIS/update-invoice/.*': 'SD-API-IVM',
-    '/_b_a_c_k_e_n_d/LIS/delete-invoice/.*': 'SD-API-IVM',
-    r'^/_b_a_c_k_e_n_d/LIS/get-invoices/?(\?.*)?$': 'SD-API-IVM',
-    r'^/_b_a_c_k_e_n_d/LIS/generate-invoice/?(\?.*)?$': 'SD-API-IVM',
-    r'^/_b_a_c_k_e_n_d/LIS/all-patients/?(\?.*)?$': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/LIS/get_clinicalname_invoice/': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/LIS/update-invoice/': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/LIS/delete-invoice/': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/LIS/get-invoices/': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/LIS/generate-invoice/': 'SD-API-IVM',
+    '/_b_a_c_k_e_n_d/LIS/all-patients/': 'SD-API-IVM',
 
     #Hms Billing
     '/_b_a_c_k_e_n_d/LIS/hms_patient_billing/':'SD-P-HMSPB',
