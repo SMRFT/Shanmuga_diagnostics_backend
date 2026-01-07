@@ -119,7 +119,7 @@ PAGE_MAPPING = {
     #Hms Billing
     '/_b_a_c_k_e_n_d/LIS/hms_patient_billing/':'SD-P-HMSPB',
     '/_b_a_c_k_e_n_d/LIS/hms_testdetails/':'SD-P-HMSTD',
-    '/_b_a_c_k_e_n_d/LIS/hms-list_doctor/':'SD-P-HMSLD',
+    '/_b_a_c_k_e_n_d/LIS/hms_list_doctor/':'SD-P-HMSLD',
 
     #HMS barcode:
     r'^/_b_a_c_k_e_n_d/LIS/hms_patients_get_barcode/?(\?.*)?$': 'SD-P-HMSLD',
@@ -173,4 +173,5 @@ GEN_ACTION_MAPPING = {
     'PATCH': 'RW',
     'OPTIONS': 'RW',
 }
+
 
