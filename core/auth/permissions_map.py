@@ -49,6 +49,7 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/get_sales_executives/': 'SD-P-GSP',
     '/_b_a_c_k_e_n_d/LIS/salesexecutive_report/': 'SD-P-SIR',
     r'^/_b_a_c_k_e_n_d/LIS/salesexecutive_report/?(\?.*)?$': 'SD-P-SIR',
+    '/_b_a_c_k_e_n_d/LIS/get_clinicalname/':'SD-P-SCU',
 
     #Logistics
     '/_b_a_c_k_e_n_d/LIS/get_sample_collectors/':'SD-P-LGSC',
@@ -193,5 +194,6 @@ GEN_ACTION_MAPPING = {
     'PATCH': 'RW',
     'OPTIONS': 'RW',
 }
+
 
 
