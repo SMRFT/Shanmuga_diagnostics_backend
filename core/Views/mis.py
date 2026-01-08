@@ -23,6 +23,9 @@ class ConsolidatedDataView(APIView):
         from_date = request.query_params.get('from_date')
         to_date = request.query_params.get('to_date')
         
+        # Define IST timezone
+        ist = pytz.timezone('Asia/Kolkata')
+        
         # Determine date filtering approach
         if from_date and to_date:
             # Date range filtering
@@ -41,7 +44,7 @@ class ConsolidatedDataView(APIView):
                 return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
         else:
             # Default to today if no date provided
-            input_date = datetime.now().date()
+            input_date = datetime.now(ist).date()
             use_date_range = False
         
         try:
@@ -55,7 +58,12 @@ class ConsolidatedDataView(APIView):
                 # Filter by bill_date in Python instead of database
                 if billing.bill_date:
                     bill_date = billing.bill_date
-                    if hasattr(bill_date, 'date'):
+                    
+                    # Convert to IST if datetime is timezone-aware
+                    if hasattr(bill_date, 'astimezone'):
+                        bill_date_ist = bill_date.astimezone(ist)
+                        bill_record_date = bill_date_ist.date()
+                    elif hasattr(bill_date, 'date'):
                         bill_record_date = bill_date.date()
                     else:
                         bill_record_date = bill_date
@@ -162,9 +170,14 @@ class ConsolidatedDataView(APIView):
                         test_data['approval_time'] = tv.get('approve_time', 'pending')
                         test_data['dispatch_time'] = tv.get('dispatch_time', 'pending')
                 
-                # Format bill_date for calculations
+                # Format bill_date for calculations - CONVERT TO IST
                 if billing.bill_date:
-                    if hasattr(billing.bill_date, 'strftime'):
+                    if hasattr(billing.bill_date, 'astimezone'):
+                        # If timezone-aware, convert to IST
+                        bill_date_ist = billing.bill_date.astimezone(ist)
+                        registered_time = bill_date_ist.strftime('%Y-%m-%d %H:%M:%S')
+                    elif hasattr(billing.bill_date, 'strftime'):
+                        # If timezone-naive, assume it's already in IST
                         registered_time = billing.bill_date.strftime('%Y-%m-%d %H:%M:%S')
                     else:
                         registered_time = str(billing.bill_date)
