@@ -316,63 +316,53 @@ def approve_test_detail(request, barcode):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics
     collection = db.core_testvalue
-    
     try:
         update_data = request.data
         barcode = update_data.get("barcode")
         created_date_str = update_data.get("created_date")
         test_id = update_data.get("test_id")
-        
+        approve_time = update_data.get("approve_time")  # Get from frontend
         if not (barcode and created_date_str and test_id):
             return JsonResponse({
                 "error": "barcode, created_date, and test_id required"
             }, status=400)
-        
         created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
         return JsonResponse({"error": f"Invalid request format: {str(e)}"}, status=400)
-    
     # Query with barcode and created_date
     query = {"barcode": barcode, "created_date": created_date}
     test_value = collection.find_one(query)
-    
     if not test_value:
         return JsonResponse({
             "error": "Patient record not found for given barcode & created_date."
         }, status=404)
-    
     try:
         test_details = json.loads(test_value.get("testdetails", "[]"))
     except json.JSONDecodeError:
         return JsonResponse({"error": "Failed to decode test details."}, status=500)
-    
     # Find the test by test_id
     test_found = False
     for test_detail in test_details:
         if test_detail.get("test_id") == test_id:
             test_detail["approve"] = update_data.get("approve", False)
             if test_detail["approve"]:
-                approve_time = timezone.localtime(timezone.now())
-                test_detail["approve_time"] = approve_time.strftime("%Y-%m-%d %H:%M:%S")
+                # Use approve_time from frontend if provided
+                if approve_time:
+                    test_detail["approve_time"] = approve_time
                 if "approve_by" in update_data:
                     test_detail["approve_by"] = update_data["approve_by"]
             test_found = True
             break
-    
     if not test_found:
         return JsonResponse({"error": "Test not found with given test_id."}, status=404)
-    
     # Update the document
     result = collection.update_one(
         query,
         {"$set": {"testdetails": json.dumps(test_details)}}
     )
-    
     if result.modified_count > 0:
         return JsonResponse({"message": "Test detail approved successfully."})
     return JsonResponse({"error": "Failed to update test detail."}, status=500)
-
-
 @api_view(["PATCH"])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -380,54 +370,46 @@ def rerun_test_detail(request, patient_id):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics
     collection = db.core_testvalue
-    
     try:
         update_data = request.data
         barcode = update_data.get("barcode")
         created_date_str = update_data.get("created_date")
         test_id = update_data.get("test_id")
-        
+        rerun_time = update_data.get("rerun_time")  # Get from frontend
         if not (barcode and created_date_str and test_id):
             return JsonResponse({
                 "error": "barcode, created_date, and test_id required"
             }, status=400)
-        
         created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
         return JsonResponse({"error": f"Invalid request format: {str(e)}"}, status=400)
-    
     query = {"barcode": barcode, "created_date": created_date}
     test_value = collection.find_one(query)
-    
     if not test_value:
         return JsonResponse({
             "error": "Patient record not found for given barcode & created_date."
         }, status=404)
-    
     try:
         test_details = json.loads(test_value.get("testdetails", "[]"))
     except json.JSONDecodeError:
         return JsonResponse({"error": "Failed to decode test details."}, status=500)
-    
     # Find the test by test_id
     test_found = False
     for test_detail in test_details:
         if test_detail.get("test_id") == test_id:
             test_detail["rerun"] = update_data.get("rerun", False)
             if test_detail["rerun"]:
-                rerun_time = timezone.localtime(timezone.now())
-                test_detail["rerun_time"] = rerun_time.strftime("%Y-%m-%d %H:%M:%S")
+                # Use rerun_time from frontend if provided
+                if rerun_time:
+                    test_detail["rerun_time"] = rerun_time
             test_found = True
             break
-    
     if not test_found:
         return JsonResponse({"error": "Test not found with given test_id."}, status=404)
-    
     result = collection.update_one(
         query,
         {"$set": {"testdetails": json.dumps(test_details)}}
     )
-    
     if result.modified_count > 0:
         return JsonResponse({"message": "Test detail rerun status updated successfully."})
     return JsonResponse({"error": "Failed to update rerun status."}, status=500)
