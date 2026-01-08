@@ -50,15 +50,15 @@ def to_float(value):
         # logger.warning(f"Failed to convert value {value} to float: {e}")
         return 0.0
 
-@api_view(['GET'])
+@api_view(['POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def m_dashboard_stats(request):
     try:
         # Date Filtering
-        date_str = request.GET.get('date')
-        from_date_str = request.GET.get('from_date')
-        to_date_str = request.GET.get('to_date')
+        date_str = request.data.get('date')
+        from_date_str = request.data.get('from_date')
+        to_date_str = request.data.get('to_date')
         
         start_date = None
         end_date = None
