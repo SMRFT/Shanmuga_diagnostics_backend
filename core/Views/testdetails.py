@@ -136,7 +136,6 @@ def get_devices(request):
 
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([HasRoleAndDataPermission])
-@csrf_exempt
 def get_test_details(request):
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -148,10 +147,7 @@ def get_test_details(request):
             test_id = request.GET.get('test_id')
             status_val = request.GET.get('status', 'Approved')
 
-            query_filter = {
-                "is_active": True,
-                "status": status_val
-            }
+            query_filter = {"is_active": True, "status": status_val}
 
             if test_id:
                 try:
@@ -165,110 +161,88 @@ def get_test_details(request):
                 doc['parameters'] = normalize_parameters(doc.get('parameters'))
                 doc['device_id'] = normalize_device_ids(doc.get('device_id'))
 
-            if docs:
-                return JsonResponse({
-                    'success': True,
-                    'data': docs,
-                    'count': len(docs)
-                }, status=200)
-            else:
-                return JsonResponse({
-                    'success': False,
-                    'message': 'No test details found for the given criteria',
-                    'data': []
-                }, status=404)
+            return JsonResponse({
+                'success': bool(docs),
+                'data': docs,
+                'count': len(docs),
+                'message': 'Success' if docs else 'No test details found'
+            }, status=200 if docs else 404)
 
         # -------------------- POST --------------------
         elif request.method == 'POST':
-            try:
-                data = request.data.copy()
+            data = request.data.copy()   # ✅ DRF safe
 
-                data['device_id'] = normalize_device_ids(data.get('device_id'))
+            data['device_id'] = normalize_device_ids(data.get('device_id'))
 
-                if 'parameters' in data and data.get('parameters') not in ("", None):
-                    data['parameters'] = shape_parameters_for_storage(
-                        data.get('parameters'),
-                        data['device_id']
-                    )
-                else:
-                    data.pop('parameters', None)
-
-                max_doc = collection.find_one(
-                    {"test_id": {"$exists": True}},
-                    sort=[("test_id", -1)],
-                    projection={"test_id": 1, "_id": 0}
+            if data.get('parameters'):
+                data['parameters'] = shape_parameters_for_storage(
+                    data.get('parameters'),
+                    data['device_id']
                 )
+            else:
+                data.pop('parameters', None)
 
-                next_id = (max_doc.get('test_id', 0) if max_doc else 0) + 1
-                data['test_id'] = next_id
+            max_doc = collection.find_one(
+                {"test_id": {"$exists": True}},
+                sort=[("test_id", -1)],
+                projection={"test_id": 1, "_id": 0}
+            )
 
-                data.setdefault('is_active', True)
-                data.setdefault('NABL', False)
-                data.setdefault('status', 'Pending')
+            next_id = (max_doc.get('test_id', 0) if max_doc else 0) + 1
+            data['test_id'] = next_id
 
-                collection.insert_one(dict(data))
+            data.setdefault('is_active', True)
+            data.setdefault('NABL', False)
+            data.setdefault('status', 'Pending')
 
-                return JsonResponse({
-                    'success': True,
-                    'message': 'Test details added successfully',
-                    'test_id': next_id
-                }, status=201)
+            collection.insert_one(dict(data))
 
-            except Exception as e:
-                print("POST Error:", e)
-                return JsonResponse({'success': False, 'error': 'An error occurred while saving data'}, status=500)
+            return JsonResponse({
+                'success': True,
+                'message': 'Test details added successfully',
+                'test_id': next_id
+            }, status=201)
 
         # -------------------- PATCH --------------------
         elif request.method == 'PATCH':
-            try:
-                # ✅ FIX: use request.data (DO NOT use request.body)
-                data = request.data
+            data = request.data   # ✅ ONLY this
 
-                test_id = data.get('test_id')
-                test_name = data.get('test_name')
-                updated_parameters = data.get('parameters')
+            test_id = data.get('test_id')
+            test_name = data.get('test_name')
+            updated_parameters = data.get('parameters')
 
-                if updated_parameters is None:
-                    return JsonResponse({'success': False, 'error': 'parameters are required'}, status=400)
+            if updated_parameters is None:
+                return JsonResponse({'success': False, 'error': 'parameters are required'}, status=400)
 
-                if test_id is not None:
-                    query = {'test_id': test_id}
-                elif test_name:
-                    query = {'test_name': test_name}
-                else:
-                    return JsonResponse({'success': False, 'error': 'Provide test_id or test_name'}, status=400)
+            if test_id is not None:
+                query = {'test_id': test_id}
+            elif test_name:
+                query = {'test_name': test_name}
+            else:
+                return JsonResponse({'success': False, 'error': 'Provide test_id or test_name'}, status=400)
 
-                existing = collection.find_one(query, {'device_id': 1, '_id': 0})
-                existing_devices = normalize_device_ids(existing.get('device_id') if existing else [])
+            existing = collection.find_one(query, {'device_id': 1, '_id': 0})
+            existing_devices = normalize_device_ids(existing.get('device_id') if existing else [])
 
-                devices_from_payload = (
-                    normalize_device_ids(data.get('device_id'))
-                    if 'device_id' in data else []
-                )
+            devices_from_payload = normalize_device_ids(data.get('device_id')) if 'device_id' in data else []
+            device_ids = devices_from_payload or existing_devices
 
-                device_ids = devices_from_payload or existing_devices
+            shaped = shape_parameters_for_storage(updated_parameters, device_ids)
 
-                shaped = shape_parameters_for_storage(updated_parameters, device_ids)
+            update_fields = {'parameters': shaped}
+            if 'device_id' in data:
+                update_fields['device_id'] = device_ids
 
-                update_fields = {'parameters': shaped}
+            result = collection.update_one(query, {'$set': update_fields})
 
-                if 'device_id' in data:
-                    update_fields['device_id'] = device_ids
-
-                result = collection.update_one(query, {'$set': update_fields})
-
-                if result.matched_count > 0:
-                    return JsonResponse({'success': True, 'message': 'Parameters updated successfully'}, status=200)
-                else:
-                    return JsonResponse({'success': False, 'error': 'Test not found'}, status=404)
-
-            except Exception as e:
-                print("PATCH Error:", e)
-                return JsonResponse({'success': False, 'error': 'An error occurred while updating data'}, status=500)
+            if result.matched_count:
+                return JsonResponse({'success': True, 'message': 'Parameters updated successfully'}, status=200)
+            else:
+                return JsonResponse({'success': False, 'error': 'Test not found'}, status=404)
 
     except Exception as e:
-        print("Main Error:", e)
-        return JsonResponse({'success': False, 'error': 'An error occurred'}, status=500)
+        print("API Error:", e)
+        return JsonResponse({'success': False, 'error': str(e)}, status=500)
 
 # --------------------------
 # Approval Email
@@ -627,6 +601,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
