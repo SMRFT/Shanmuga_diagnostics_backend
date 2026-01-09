@@ -218,7 +218,7 @@ def get_test_details(request):
         elif request.method == 'PATCH':
             # Update parameters with correct shape (single device -> array, multiple -> dict)
             try:
-                data = request.data
+                data = json.loads(request.body.decode('utf-8'))
                 test_id = data.get('test_id')
                 test_name = data.get('test_name')
                 updated_parameters = data.get('parameters')
@@ -257,7 +257,6 @@ def get_test_details(request):
     except Exception as e:
         print("Error:", e)
         return JsonResponse({'success': False, 'error': 'An error occurred'}, status=500)
-
 
 # --------------------------
 # Approval Email
@@ -616,6 +615,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
