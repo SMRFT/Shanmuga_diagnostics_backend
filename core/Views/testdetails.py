@@ -142,7 +142,7 @@ def get_test_details(request):
         db = client.Diagnostics
         collection = db.core_testdetails
 
-        # -------------------- GET --------------------
+        # ============================ GET ============================
         if request.method == 'GET':
             test_id = request.GET.get('test_id')
             status_val = request.GET.get('status', 'Approved')
@@ -168,12 +168,12 @@ def get_test_details(request):
                 'message': 'Success' if docs else 'No test details found'
             }, status=200 if docs else 404)
 
-        # -------------------- POST --------------------
+        # ============================ POST ============================
         elif request.method == 'POST':
-            data = request.data.copy()
+            data = request.data.copy()   # ✅ important: make mutable copy
 
-            payload = getattr(request.auth, 'payload', {})
-            employee_id = payload.get('auth-user-id')   # ✅ ONLY THIS
+            payload = request.auth.payload if hasattr(request.auth, 'payload') else {}
+            employee_id = payload.get('auth-user-id')  # ✅ ONLY THIS
 
             data['device_id'] = normalize_device_ids(data.get('device_id'))
 
@@ -193,7 +193,6 @@ def get_test_details(request):
             next_id = (max_doc.get('test_id', 0) if max_doc else 0) + 1
             data['test_id'] = next_id
 
-            # Defaults
             data.setdefault('is_active', True)
             data.setdefault('NABL', False)
             data.setdefault('status', 'Pending')
@@ -206,18 +205,17 @@ def get_test_details(request):
 
             collection.insert_one(data)
 
-            return JsonResponse({
-                'success': True,
-                'message': 'Test details added successfully',
-                'test_id': next_id
-            }, status=201)
+            return JsonResponse(
+                {'success': True, 'message': 'Test details added successfully', 'test_id': next_id},
+                status=201
+            )
 
-        # -------------------- PATCH --------------------
+        # ============================ PATCH ============================
         elif request.method == 'PATCH':
-            data = request.data.copy()
+            data = request.data.copy()   # ✅ only request.data
 
-            payload = getattr(request.auth, 'payload', {})
-            employee_id = payload.get('auth-user-id')   # ✅ ONLY THIS
+            payload = request.auth.payload if hasattr(request.auth, 'payload') else {}
+            employee_id = payload.get('auth-user-id')  # ✅ ONLY THIS
 
             test_id = data.get('test_id')
             test_name = data.get('test_name')
@@ -242,7 +240,9 @@ def get_test_details(request):
 
             update_fields = {
                 'parameters': shaped,
-                'lastmodified_by': employee_id,          # ✅ UPDATED USER
+
+                # ✅ AUDIT
+                'lastmodified_by': employee_id,
                 'lastmodified_date': timezone.now()
             }
 
@@ -623,6 +623,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
