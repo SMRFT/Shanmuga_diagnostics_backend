@@ -893,9 +893,11 @@ def update_dispatch_status(request, barcode):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics  # Database name
     collection = db.core_testvalue
+    
     try:
         # Get auth-user-id from request data
         auth_user_id = request.data.get('auth-user-id') or request.query_params.get('auth-user-id') or 'system'
+        auth_user_name = request.data.get('auth-user-name')
         if not auth_user_id:
             return Response({"error": "auth-user-id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
         # Build the query filter with only barcode
