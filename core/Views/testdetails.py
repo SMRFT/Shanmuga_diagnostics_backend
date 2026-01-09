@@ -133,6 +133,7 @@ def get_devices(request):
 # Test Details (read/create/update parameters only)
 # ------------------------------------------------
 
+
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 @csrf_exempt
@@ -170,10 +171,10 @@ def get_test_details(request):
 
         # ============================ POST ============================
         elif request.method == 'POST':
-            data = request.data.copy()   # ✅ important: make mutable copy
+            data = request.data.copy()
 
             payload = request.auth.payload if hasattr(request.auth, 'payload') else {}
-            employee_id = payload.get('auth-user-id')  # ✅ ONLY THIS
+            employee_id = payload.get('auth-user-id')
 
             data['device_id'] = normalize_device_ids(data.get('device_id'))
 
@@ -197,7 +198,6 @@ def get_test_details(request):
             data.setdefault('NABL', False)
             data.setdefault('status', 'Pending')
 
-            # ✅ AUDIT
             data['created_by'] = employee_id
             data['created_date'] = timezone.now()
             data['lastmodified_by'] = None
@@ -212,10 +212,10 @@ def get_test_details(request):
 
         # ============================ PATCH ============================
         elif request.method == 'PATCH':
-            data = request.data.copy()   # ✅ only request.data
+            data = request.data.copy()
 
             payload = request.auth.payload if hasattr(request.auth, 'payload') else {}
-            employee_id = payload.get('auth-user-id')  # ✅ ONLY THIS
+            employee_id = payload.get('auth-user-id')
 
             test_id = data.get('test_id')
             test_name = data.get('test_name')
@@ -240,8 +240,6 @@ def get_test_details(request):
 
             update_fields = {
                 'parameters': shaped,
-
-                # ✅ AUDIT
                 'lastmodified_by': employee_id,
                 'lastmodified_date': timezone.now()
             }
@@ -623,6 +621,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
