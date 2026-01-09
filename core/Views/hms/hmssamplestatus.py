@@ -167,9 +167,7 @@ def hms_get_samplepatients_by_date(request):
             'error': f'An error occurred: {str(e)}'
         }, status=500)
 
-@api_view(['POST'])
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
+
 @api_view(['POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -181,39 +179,32 @@ def hms_sample_status(request):
                 data = request.data
             else:
                 data = json.loads(request.body)
-            
             print(f"Request Data: {data}")  # For debugging
-            
             # Extract patient data
-            employee_id = data.get('auth-user-id')       
-            date = data.get('date')          
-            barcode = data.get('barcode')           
+            employee_id = data.get('auth-user-id')
+            date = data.get('date')
+            barcode = data.get('barcode')
             testdetails = data.get('testdetails', [])
-            
             # Validate required fields
             required_fields = [ 'barcode']
             missing_fields = []
             for field in required_fields:
                 if not data.get(field):
                     missing_fields.append(field)
-            
             if missing_fields:
                 return JsonResponse({
                     'error': f'Missing required fields: {", ".join(missing_fields)}'
                 }, status=400)
-            
             # Check if an entry with the same patient_id, barcode, and date exists
             existing_entry = Hmssamplestatus.objects.filter(
                 barcode=barcode,
                 date=date
             ).first()
-            
             if existing_entry:
                 return JsonResponse({
                     'error': 'Please change status as Sample Collected',
                     'message': 'Patient ID already exists. Please change status as Sample Collected'
                 }, status=409)
-            
             # Process and validate testdetails
             processed_testdetails = []
             for test in testdetails:
@@ -221,7 +212,6 @@ def hms_sample_status(request):
                 samplecollected_time = test.get('samplecollected_time')
                 received_time = test.get('received_time')
                 rejected_time = test.get('rejected_time')
-                
                 processed_test = {
                     'test_id': test.get('test_id'),
                     'testname': test.get('testname'),
@@ -238,31 +228,27 @@ def hms_sample_status(request):
                     'remarks': test.get('remarks'),
                 }
                 processed_testdetails.append(processed_test)
-            
             # Save the new entry
-            sample_status = Hmssamplestatus(       
-                date=date,               
-                barcode=barcode,             
-                created_by=employee_id,             
+            sample_status = Hmssamplestatus(
+                date=date,
+                barcode=barcode,
+                created_by=employee_id,
                 testdetails=processed_testdetails
             )
             sample_status.save()
-            
             return JsonResponse({
                 'message': 'Data saved successfully',
-                'saved_data': {                 
+                'saved_data': {
                     'barcode': barcode,
                     'testdetails_count': len(processed_testdetails),
                     'testdetails': processed_testdetails
                 }
             }, status=201)
-            
         except KeyError as e:
             return JsonResponse({'error': f'Missing key: {str(e)}'}, status=400)
         except Exception as e:
             print(f"Error saving sample status: {str(e)}")  # For debugging
             return JsonResponse({'error': str(e)}, status=400)
-    
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
 
@@ -723,4 +709,5 @@ def hms_update_sample_collected(request, barcode):
         return JsonResponse({"message": "Sample status updated successfully"}, status=200)
         
     except Exception as e:
+
         return JsonResponse({"error": str(e)}, status=500)
