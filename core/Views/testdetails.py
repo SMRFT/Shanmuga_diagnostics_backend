@@ -136,6 +136,7 @@ def get_devices(request):
 
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
 def get_test_details(request):
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -147,7 +148,10 @@ def get_test_details(request):
             test_id = request.GET.get('test_id')
             status_val = request.GET.get('status', 'Approved')
 
-            query_filter = {"is_active": True, "status": status_val}
+            query_filter = {
+                "is_active": True,
+                "status": status_val
+            }
 
             if test_id:
                 try:
@@ -166,83 +170,122 @@ def get_test_details(request):
                 'data': docs,
                 'count': len(docs),
                 'message': 'Success' if docs else 'No test details found'
-            }, status=200 if docs else 404)
+            }, status=200)
 
-        # -------------------- POST --------------------
+        # -------------------- POST (CREATE) --------------------
         elif request.method == 'POST':
-            data = request.data.copy()   # ✅ DRF safe
+            try:
+                data = request.data
 
-            data['device_id'] = normalize_device_ids(data.get('device_id'))
+                auth_user_id = request.headers.get('auth-user-id')
+                auth_user_name = request.headers.get('auth-user-name')
 
-            if data.get('parameters'):
-                data['parameters'] = shape_parameters_for_storage(
-                    data.get('parameters'),
-                    data['device_id']
+                # Normalize device_id
+                data['device_id'] = normalize_device_ids(data.get('device_id'))
+
+                if 'parameters' in data and data.get('parameters') not in ("", None):
+                    data['parameters'] = shape_parameters_for_storage(
+                        data.get('parameters'), data['device_id']
+                    )
+                else:
+                    data.pop('parameters', None)
+
+                max_doc = collection.find_one(
+                    {"test_id": {"$exists": True}},
+                    sort=[("test_id", -1)],
+                    projection={"test_id": 1, "_id": 0}
                 )
-            else:
-                data.pop('parameters', None)
+                next_id = (max_doc.get('test_id', 0) if max_doc else 0) + 1
+                data['test_id'] = next_id
 
-            max_doc = collection.find_one(
-                {"test_id": {"$exists": True}},
-                sort=[("test_id", -1)],
-                projection={"test_id": 1, "_id": 0}
-            )
+                data.setdefault('is_active', True)
+                data.setdefault('NABL', False)
+                data.setdefault('status', 'Pending')
 
-            next_id = (max_doc.get('test_id', 0) if max_doc else 0) + 1
-            data['test_id'] = next_id
+                # ✅ AUDIT FIELDS (CREATE)
+                data['created_at'] = datetime.utcnow()
+                data['created_by'] = auth_user_id
+                data['created_by_name'] = auth_user_name
 
-            data.setdefault('is_active', True)
-            data.setdefault('NABL', False)
-            data.setdefault('status', 'Pending')
+                data['last_modified_at'] = datetime.utcnow()
+                data['last_modified_by'] = auth_user_id
+                data['last_modified_by_name'] = auth_user_name
 
-            collection.insert_one(dict(data))
+                collection.insert_one(data)
 
-            return JsonResponse({
-                'success': True,
-                'message': 'Test details added successfully',
-                'test_id': next_id
-            }, status=201)
+                return JsonResponse({
+                    'success': True,
+                    'message': 'Test details added successfully',
+                    'test_id': next_id
+                }, status=201)
 
-        # -------------------- PATCH --------------------
+            except json.JSONDecodeError:
+                return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
+            except Exception as e:
+                print("POST Error:", e)
+                return JsonResponse({'success': False, 'error': 'Error while saving data'}, status=500)
+
+        # -------------------- PATCH (UPDATE) --------------------
         elif request.method == 'PATCH':
-            data = request.data   # ✅ ONLY this
+            try:
+                data = json.loads(request.body.decode('utf-8'))
 
-            test_id = data.get('test_id')
-            test_name = data.get('test_name')
-            updated_parameters = data.get('parameters')
+                auth_user_id = data.get('auth-user-id')
+                auth_user_name = data.get('auth-user-name')
 
-            if updated_parameters is None:
-                return JsonResponse({'success': False, 'error': 'parameters are required'}, status=400)
+                test_id = data.get('test_id')
+                test_name = data.get('test_name')
+                updated_parameters = data.get('parameters')
 
-            if test_id is not None:
-                query = {'test_id': test_id}
-            elif test_name:
-                query = {'test_name': test_name}
-            else:
-                return JsonResponse({'success': False, 'error': 'Provide test_id or test_name'}, status=400)
+                if updated_parameters is None:
+                    return JsonResponse({'success': False, 'error': 'parameters are required'}, status=400)
 
-            existing = collection.find_one(query, {'device_id': 1, '_id': 0})
-            existing_devices = normalize_device_ids(existing.get('device_id') if existing else [])
+                if test_id is not None:
+                    query = {'test_id': test_id}
+                elif test_name:
+                    query = {'test_name': test_name}
+                else:
+                    return JsonResponse({'success': False, 'error': 'Provide test_id or test_name'}, status=400)
 
-            devices_from_payload = normalize_device_ids(data.get('device_id')) if 'device_id' in data else []
-            device_ids = devices_from_payload or existing_devices
+                existing = collection.find_one(query, {'device_id': 1, '_id': 0})
 
-            shaped = shape_parameters_for_storage(updated_parameters, device_ids)
+                existing_devices = normalize_device_ids(
+                    existing.get('device_id') if existing else []
+                )
 
-            update_fields = {'parameters': shaped}
-            if 'device_id' in data:
-                update_fields['device_id'] = device_ids
+                devices_from_payload = normalize_device_ids(data.get('device_id')) if 'device_id' in data else []
+                device_ids = devices_from_payload or existing_devices
 
-            result = collection.update_one(query, {'$set': update_fields})
+                shaped = shape_parameters_for_storage(updated_parameters, device_ids)
 
-            if result.matched_count:
-                return JsonResponse({'success': True, 'message': 'Parameters updated successfully'}, status=200)
-            else:
-                return JsonResponse({'success': False, 'error': 'Test not found'}, status=404)
+                update_fields = {
+                    'parameters': shaped,
+
+                    # ✅ AUDIT FIELDS (UPDATE ONLY)
+                    'last_modified_at': datetime.utcnow(),
+                    'last_modified_by': auth_user_id,
+                    'last_modified_by_name': auth_user_name
+                }
+
+                if 'device_id' in data:
+                    update_fields['device_id'] = device_ids
+
+                result = collection.update_one(query, {'$set': update_fields})
+
+                if result.matched_count > 0:
+                    return JsonResponse({'success': True, 'message': 'Updated successfully'}, status=200)
+                else:
+                    return JsonResponse({'success': False, 'error': 'Test not found'}, status=404)
+
+            except json.JSONDecodeError:
+                return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
+            except Exception as e:
+                print("PATCH Error:", e)
+                return JsonResponse({'success': False, 'error': 'Update failed'}, status=500)
 
     except Exception as e:
-        print("API Error:", e)
-        return JsonResponse({'success': False, 'error': str(e)}, status=500)
+        print("Main Error:", e)
+        return JsonResponse({'success': False, 'error': 'Server error'}, status=500)
 
 # --------------------------
 # Approval Email
@@ -601,6 +644,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
