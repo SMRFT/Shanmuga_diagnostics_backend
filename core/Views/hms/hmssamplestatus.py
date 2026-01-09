@@ -186,7 +186,7 @@ def hms_sample_status(request):
             barcode = data.get('barcode')
             testdetails = data.get('testdetails', [])
             # Validate required fields
-            required_fields = [ 'barcode']
+            required_fields = ['barcode']
             missing_fields = []
             for field in required_fields:
                 if not data.get(field):
@@ -195,7 +195,21 @@ def hms_sample_status(request):
                 return JsonResponse({
                     'error': f'Missing required fields: {", ".join(missing_fields)}'
                 }, status=400)
-            # Check if an entry with the same patient_id, barcode, and date exists
+            # Parse and format date if provided
+            if date:
+                try:
+                    # Handle both date and datetime formats
+                    if ' ' in str(date):
+                        # If datetime string is provided, extract only the date part
+                        date = str(date).split(' ')[0]
+                    # Validate date format YYYY-MM-DD
+                    from datetime import datetime
+                    datetime.strptime(date, '%Y-%m-%d')
+                except ValueError:
+                    return JsonResponse({
+                        'error': 'Invalid date format. Expected YYYY-MM-DD'
+                    }, status=400)
+            # Check if an entry with the same barcode and date exists
             existing_entry = Hmssamplestatus.objects.filter(
                 barcode=barcode,
                 date=date
@@ -212,6 +226,17 @@ def hms_sample_status(request):
                 samplecollected_time = test.get('samplecollected_time')
                 received_time = test.get('received_time')
                 rejected_time = test.get('rejected_time')
+                # Parse datetime strings to ensure proper format
+                def parse_datetime(dt_string):
+                    if dt_string and isinstance(dt_string, str):
+                        try:
+                            from datetime import datetime
+                            # Try to parse the datetime string
+                            dt = datetime.strptime(dt_string, '%Y-%m-%d %H:%M:%S')
+                            return dt.strftime('%Y-%m-%d %H:%M:%S')
+                        except ValueError:
+                            return dt_string
+                    return dt_string
                 processed_test = {
                     'test_id': test.get('test_id'),
                     'testname': test.get('testname'),
@@ -219,9 +244,9 @@ def hms_sample_status(request):
                     'department': test.get('department', 'N/A'),
                     'samplecollector': test.get('samplecollector', 'N/A'),
                     'samplestatus': test.get('samplestatus', 'Pending'),
-                    'samplecollected_time': samplecollected_time,
-                    'received_time': received_time,
-                    'rejected_time': rejected_time,
+                    'samplecollected_time': parse_datetime(samplecollected_time),
+                    'received_time': parse_datetime(received_time),
+                    'rejected_time': parse_datetime(rejected_time),
                     'collectd_by': test.get('collectd_by'),
                     'received_by': test.get('received_by'),
                     'rejected_by': test.get('rejected_by'),
@@ -248,6 +273,8 @@ def hms_sample_status(request):
             return JsonResponse({'error': f'Missing key: {str(e)}'}, status=400)
         except Exception as e:
             print(f"Error saving sample status: {str(e)}")  # For debugging
+            import traceback
+            traceback.print_exc()  # Print full stack trace for debugging
             return JsonResponse({'error': str(e)}, status=400)
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
@@ -711,3 +738,4 @@ def hms_update_sample_collected(request, barcode):
     except Exception as e:
 
         return JsonResponse({"error": str(e)}, status=500)
+
