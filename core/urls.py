@@ -87,7 +87,6 @@ urlpatterns = [
     #Out source Test Values:
     path('os-samplestatus-testvalue/', os_management.get_os_samplestatus_testvalue, name='os_sample-status-list'), 
     path('os-compare_test_details/', os_management.os_compare_test_details, name='os_compare_test_details'),
-    path('os-test-value/save/', os_management.os_save_test_value, name='os_save_test_value'), 
 
     #Test Approval:y
     path('test-values/', testapproval.get_test_values, name='get_test_values'),
@@ -111,8 +110,6 @@ urlpatterns = [
     path('b2b_ledger_report/', report.b2b_ledger_report, name='b2b_ledger_report'),
 
     path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
-
-    # CHC Test Values
 
 
     # Refund and Cancellation URLs
@@ -193,8 +190,6 @@ urlpatterns = [
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),
     path('hms_sample_status/', hmssamplestatus.hms_sample_status, name='hms_sample_status'),
-    path('hms_check_sample_status/<str:barcode>/', hmssamplestatus.hms_check_sample_status, name='hms_check_sample_status'),
-    path('hms_sample_status_data/<str:barcode>/', hmssamplestatus.hms_get_sample_status_data, name='hms_get_sample_status_data'),
     path('hms_patch_sample_status/<str:barcode>/', hmssamplestatus.hms_patch_sample_status, name='hms_patch_sample_status'),
     path('hms_get_sample_collected/', hmssamplestatus.hms_get_sample_collected, name='hms_get_sample_collected'),
     path('hms_update_sample_collected/<str:barcode>/', hmssamplestatus.hms_update_sample_collected, name='hms_update_sample_collected'),

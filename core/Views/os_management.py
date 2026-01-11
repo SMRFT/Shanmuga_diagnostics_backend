@@ -84,6 +84,32 @@ def get_os_samplestatus_testvalue(request):
             return str(dt_obj)
         
         # ============================================
+        # Connect to MongoDB for test details
+        # ============================================
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        test_details_collection = db.core_testdetails
+        
+        # Cache test details by test_id
+        test_details_cache = {}
+        
+        def get_test_details(test_id):
+            """Fetch test details from MongoDB and cache"""
+            if test_id not in test_details_cache:
+                test_detail = test_details_collection.find_one(
+                    {"test_id": test_id},
+                    {
+                        "_id": 0,
+                        "test_id": 1,
+                        "test_name": 1,
+                        "department": 1,
+                        "collection_container": 1
+                    }
+                )
+                test_details_cache[test_id] = test_detail
+            return test_details_cache[test_id]
+        
+        # ============================================
         # OPTIMIZATION 1: Collect all barcodes first
         # ============================================
         all_barcodes = set()
@@ -148,16 +174,7 @@ def get_os_samplestatus_testvalue(request):
             ).select_related()
             hms_barcodes_dict = {hb.barcode: hb for hb in hms_barcodes}
         
-        # Fetch all HMS billing details in one query
-        hms_billing_dict = {}
-        if source in ['hms', 'all'] and hms_barcodes_dict:
-            billnumbers = [hb.billnumber for hb in hms_barcodes_dict.values() if hasattr(hb, 'billnumber')]
-            if billnumbers:
-                hms_billings = HmspatientBilling.objects.filter(
-                    billnumber__in=billnumbers
-                )
-                hms_billing_dict = {hb.billnumber: hb for hb in hms_billings}
-        
+               
         # Fetch all regular barcode details in one query
         regular_barcodes_dict = {}
         if source in ['regular', 'all'] and all_barcodes:
@@ -177,43 +194,65 @@ def get_os_samplestatus_testvalue(request):
             except (json.JSONDecodeError, TypeError):
                 return []
         
-        def match_test_values(test, barcode, test_values_by_barcode):
-            """Optimized test value matching with pre-fetched data"""
-            test_name = test.get('testname', '').strip().lower()
-            test_code = test.get('testcode', test_name).strip().lower()
-            
-            test.update({
-                'rerun': False,
-                'approve': False,
-                'test_value_exists': False,
-                'approve_time': None,
-                'rerun_time': None,
-                'approve_by': None
-            })
-            
-            # Use cached test values
-            test_values = test_values_by_barcode.get(barcode, [])
-            
-            for tv in test_values:
-                tv_details = parse_testdetails(tv.testdetails)
-                
-                for tv_test in tv_details:
-                    tv_test_name = tv_test.get('testname', '').strip().lower()
-                    tv_test_code = tv_test.get('testcode', tv_test_name).strip().lower()
-                    
-                    if tv_test_name == test_name or tv_test_code == test_code:
-                        test.update({
-                            'test_value_exists': True,
-                            'approve': bool(tv_test.get('approve', False)),
-                            'rerun': bool(tv_test.get('rerun', False)),
-                            'approve_time': tv_test.get('approve_time'),
-                            'rerun_time': tv_test.get('rerun_time'),
-                            'approve_by': tv_test.get('approve_by')
-                        })
-                        return test
-            
+        def enrich_test_with_details(test):
+            """Enrich test with details from MongoDB"""
+            test_id = test.get('test_id')
+            if test_id:
+                test_detail = get_test_details(test_id)
+                if test_detail:
+                    test['testname'] = test_detail.get('test_name', test.get('testname', 'N/A'))
+                    test['department'] = test_detail.get('department', test.get('department', 'N/A'))
+                    test['container'] = test_detail.get('collection_container', test.get('container', 'N/A'))
             return test
         
+        def match_test_values(test, barcode, test_values_by_barcode):
+                """Optimized test value matching with pre-fetched data using test_id"""
+                test_id = test.get('test_id')
+                
+                # Initialize default values
+                test.update({
+                    'rerun': False,
+                    'approve': False,
+                    'test_value_exists': False,
+                    'approve_time': None,
+                    'rerun_time': None,
+                    'approve_by': None,
+                    'value': None,
+                    'remarks': None,
+                    'comment': None,
+                    'verified_by': None
+                })
+                
+                # If no test_id, cannot match
+                if not test_id:
+                    return test
+                
+                # Use cached test values for this barcode
+                test_values = test_values_by_barcode.get(barcode, [])
+                
+                for tv in test_values:
+                    tv_details = parse_testdetails(tv.testdetails)
+                    
+                    for tv_test in tv_details:
+                        tv_test_id = tv_test.get('test_id')
+                        
+                        # Match based on test_id
+                        if tv_test_id == test_id:
+                            test.update({
+                                'test_value_exists': True,
+                                'approve': bool(tv_test.get('approve', False)),
+                                'rerun': bool(tv_test.get('rerun', False)),
+                                'approve_time': tv_test.get('approve_time'),
+                                'rerun_time': tv_test.get('rerun_time'),
+                                'approve_by': tv_test.get('approve_by'),
+                                'value': tv_test.get('value'),
+                                'remarks': tv_test.get('remarks'),
+                                'comment': tv_test.get('comment'),
+                                'verified_by': tv_test.get('verified_by')
+                            })
+                            return test
+                
+                return test
         combined_results = []
         
         # Process HMS samples
@@ -240,21 +279,20 @@ def get_os_samplestatus_testvalue(request):
                 gender = "Unknown"
                 
                 barcode_details = hms_barcodes_dict.get(barcode)
-                if barcode_details:
-                    billing_details = hms_billing_dict.get(barcode_details.billnumber)
-                    if billing_details:
-                        patient_name = billing_details.patientname
-                        patient_id = billing_details.patient_id
-                        age = billing_details.age
-                        gender = billing_details.gender
+                if barcode_details:                    
+                        patient_name = barcode_details.patientname
+                        patient_id = barcode_details.patient_id
+                        age = barcode_details.age
+                        gender = barcode_details.gender
                 elif hasattr(sample_status, 'patient_id'):
                     patient_id = sample_status.patient_id
                 
-                # Match test values
-                updated_tests = [
-                    match_test_values(test, barcode, test_values_by_barcode)
-                    for test in filtered_tests
-                ]
+                # Enrich tests with MongoDB details and match test values
+                updated_tests = []
+                for test in filtered_tests:
+                    enriched_test = enrich_test_with_details(test)
+                    matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
+                    updated_tests.append(matched_test)
                 
                 combined_results.append({
                     'id': sample_status.id,
@@ -304,11 +342,12 @@ def get_os_samplestatus_testvalue(request):
                     age = "Unknown"
                     gender = "Unknown"
                 
-                # Match test values
-                updated_tests = [
-                    match_test_values(test, barcode, test_values_by_barcode)
-                    for test in filtered_tests
-                ]
+                # Enrich tests with MongoDB details and match test values
+                updated_tests = []
+                for test in filtered_tests:
+                    enriched_test = enrich_test_with_details(test)
+                    matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
+                    updated_tests.append(matched_test)
                 
                 combined_results.append({
                     'id': sample_status.id,
@@ -333,7 +372,6 @@ def get_os_samplestatus_testvalue(request):
         # ============================================
         if source in ['chc', 'all']:
             try:
-                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
                 corp = client.Corporatehealthcheckup
                 sample_collection = corp.core_sample
                 billing_collection = corp.core_billing
@@ -377,10 +415,12 @@ def get_os_samplestatus_testvalue(request):
                     employee_id = billing.get("employee_id")
                     patient = patient_map.get(employee_id, {})
                     
-                    updated_tests = [
-                        match_test_values(test, barcode, chc_test_values_by_barcode)
-                        for test in filtered_tests
-                    ]
+                    # Enrich tests with MongoDB details and match test values
+                    updated_tests = []
+                    for test in filtered_tests:
+                        enriched_test = enrich_test_with_details(test)
+                        matched_test = match_test_values(enriched_test, barcode, chc_test_values_by_barcode)
+                        updated_tests.append(matched_test)
                     
                     combined_results.append({
                         'id': str(record.get('_id')),
@@ -400,7 +440,6 @@ def get_os_samplestatus_testvalue(request):
                     })
                     chc_processed[barcode] = True
                 
-                client.close()
             except Exception as e:
                 print(f"CHC MongoDB error: {str(e)}")
         
@@ -409,11 +448,10 @@ def get_os_samplestatus_testvalue(request):
         # ============================================
         if source in ['regular', 'all']:
             try:
-                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-                db = client.franchise
-                sample_collection = db.franchise_sample
-                billing_collection = db.franchise_billing
-                patient_collection = db.franchise_patient
+                franchise_db = client.franchise
+                sample_collection = franchise_db.franchise_sample
+                billing_collection = franchise_db.franchise_billing
+                patient_collection = franchise_db.franchise_patient
                 
                 mongo_query = {
                     "created_date": {"$gte": start_of_range, "$lt": end_of_range}
@@ -450,10 +488,12 @@ def get_os_samplestatus_testvalue(request):
                     patient_id = billing_map.get(barcode, {}).get('patient_id')
                     patient = patient_map.get(patient_id, {})
                     
-                    updated_tests = [
-                        match_test_values(test, barcode, mongo_test_values_by_barcode)
-                        for test in filtered_tests
-                    ]
+                    # Enrich tests with MongoDB details and match test values
+                    updated_tests = []
+                    for test in filtered_tests:
+                        enriched_test = enrich_test_with_details(test)
+                        matched_test = match_test_values(enriched_test, barcode, mongo_test_values_by_barcode)
+                        updated_tests.append(matched_test)
                     
                     combined_results.append({
                         'id': str(record.get('_id', '')),
@@ -479,9 +519,11 @@ def get_os_samplestatus_testvalue(request):
                     })
                     mongo_processed[barcode] = True
                 
-                client.close()
             except Exception as e:
                 print(f"MongoDB error: {str(e)}")
+        
+        # Close MongoDB connection
+        client.close()
         
         # Sort results
         combined_results.sort(key=lambda x: x.get('date', ''), reverse=True)
@@ -533,7 +575,7 @@ def os_compare_test_details(request):
                     normalized[str(k)] = [v] if v is not None else []
             return normalized
         if isinstance(parameters, list):
-            return {"default": parameters}
+            return {"N/A": parameters}
         return {}
 
     # Build query for core_testdetails
@@ -541,7 +583,14 @@ def os_compare_test_details(request):
     if test_name_filter:
         query["test_name"] = test_name_filter
     if test_id:
-        query["test_id"] = test_id
+        # Convert test_id to integer for MongoDB query
+        try:
+            query["test_id"] = int(test_id)
+        except (ValueError, TypeError):
+            client.close()
+            return JsonResponse({
+                'error': 'Invalid test_id parameter - must be a number'
+            }, status=400)
 
     # Get test details from core_testdetails
     if test_name_filter or test_id:
@@ -573,23 +622,22 @@ def os_compare_test_details(request):
             final_test_data.append({
                 "barcode": barcode,
                 "test_id": test_id,
+                "device_id": "N/A",
                 "testname": test_name,
                 "test_code": test_code,
-                "parameter_name": None,
                 "unit": test_detail.get("unit", "N/A"),
                 "reference_range": test_detail.get("reference_range", "N/A"),
                 "method": test_detail.get("method", "N/A"),
                 "department": test_detail.get("department", "N/A"),
                 "specimen_type": test_detail.get("specimen_type", "N/A"),
                 "NABL": test_detail.get("NABL", "N/A"),
-                "test_value": "",
                 "sub_title": None,
                 "value_option": test_detail.get("value_option", []),
             })
             continue
 
         # Handle parameterized tests - use first available device
-        selected_device = sorted(parameters.keys())[0] if parameters else None
+        selected_device = sorted(parameters.keys())[0] if parameters else "N/A"
 
         if selected_device and selected_device in parameters:
             param_list = parameters[selected_device] or []
@@ -615,7 +663,6 @@ def os_compare_test_details(request):
                     "department": test_detail.get("department"),
                     "specimen_type": test_detail.get("specimen_type", param.get("specimen_type")),
                     "NABL": test_detail.get("NABL", "N/A"),
-                    "test_value": "",
                     "sub_title": param.get("sub_title"),
                     "value_option": param.get("value_option"),
                 })
@@ -635,46 +682,3 @@ def os_compare_test_details(request):
     }
     return Response(response_data, status=200)
 
-
-@api_view(['POST'])
-@permission_classes([HasRoleAndDataPermission])
-def os_save_test_value(request):
-    """
-    Save test values to TestValue model
-    """
-    print(f"DEBUG: Request received: Method={request.method}, User={request.user}")
-    
-    if request.method == 'POST':
-        payload = request.data
-        employee_id = payload.get('auth-user-id')
-        
-        try:
-            test_details_json = payload.get("testdetails", [])
-            barcode = payload.get("barcode")
-            locationId = payload.get("locationId")
-            
-            if not isinstance(test_details_json, list) or not test_details_json:
-                return Response({"error": "Invalid test details format"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            for test in test_details_json:
-                testname = test.get('testname')
-                if not testname:
-                    return Response({"error": "Missing testname in test details"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Create the TestValue record
-            test_value_record = TestValue.objects.create(
-                created_by=employee_id,
-                date=payload.get('date'),
-                barcode=barcode,
-                locationId=locationId,
-                testdetails=test_details_json,
-            )
-            
-            return Response({
-                "message": "Test details saved successfully.",
-                "test_value_id": test_value_record.id
-            }, status=status.HTTP_201_CREATED)
-            
-        except Exception as e:
-            print(f"DEBUG: POST error: {str(e)}")
-            return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

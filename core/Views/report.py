@@ -522,12 +522,13 @@ def overall_report(request):
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
     
+
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def patient_test_sorting(request):
     try:
-        # Change from patient_id to barcode
+        # Get barcode from request
         barcode = request.GET.get('barcode')
         date = request.GET.get('date', datetime.now().strftime("%Y-%m-%d"))
         
@@ -540,7 +541,12 @@ def patient_test_sorting(request):
         except ValueError:
             return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
         
-        # Filter test values by barcode instead of patient_id
+        # MongoDB connection
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        core_testdetails_collection = db["core_testdetails"]
+        
+        # Filter test values by barcode
         tests = TestValue.objects.filter(barcode=barcode, date=formatted_date).values("testdetails")
         test_list = []
         
@@ -556,19 +562,42 @@ def patient_test_sorting(request):
             else:
                 continue
             
-            # Filter only approved tests
-            approved_tests = [test_item for test_item in testdetails_list if test_item.get('approve') is True]
-            test_list.extend(approved_tests)
+            # Filter only approved tests and enrich with test_name from core_testdetails
+            for test_item in testdetails_list:
+                if test_item.get('approve') is True:
+                    test_id = test_item.get('test_id')
+                    
+                    # Fetch test_name from core_testdetails collection
+                    if test_id:
+                        core_test = core_testdetails_collection.find_one(
+                            {"test_id": test_id},
+                            {"test_name": 1, "_id": 0}
+                        )
+                        
+                        if core_test:
+                            test_item['test_name'] = core_test.get('test_name', 'N/A')
+                        else:
+                            test_item['test_name'] = 'N/A'
+                    else:
+                        test_item['test_name'] = 'N/A'
+                    
+                    test_list.append(test_item)
         
-        # Return barcode as key instead of patient_id for consistency
+        # Return barcode as key
         if test_list:
             return JsonResponse({barcode: {"testdetails": test_list}})
         else:
             return JsonResponse({'error': 'No records found for this barcode'}, status=404)
     
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
-    
+    finally:
+        # Close MongoDB connection
+        if 'client' in locals():
+            client.close()  
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def get_patient_test_details(request):
