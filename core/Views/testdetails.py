@@ -609,15 +609,23 @@ def handle_patch_request(request):
         else:
             return JsonResponse({'error': 'Provide test_id or test_name'}, status=400)
 
-        # Build update fields (exclude identifiers and protected fields)
-        excluded_fields = [
-            'test_name', 'test_id', '_id', 
-            'auth-user-id', 'auth-user-name', 'auth-branch-code',
-            'created_at', 'created_by', 'created_by_name',
-            'last_modified_at', 'last_modified_by', 'last_modified_by_name'
-        ]
-        
-        update_fields = {k: v for k, v in data.items() if k not in excluded_fields}
+        # Build update fields
+        update_fields = {}
+        for k, v in data.items():
+            # Exclude identifiers
+            if k in ('test_name', 'test_id', '_id'):
+                continue
+            # Exclude immutable audit fields
+            if k in ('created_at', 'created_by', 'created_by_name'):
+                continue
+            # Exclude last_modified fields (we will set them manually)
+            if k in ('last_modified_at', 'last_modified_by', 'last_modified_by_name'):
+                continue
+            # Exclude auth-injected metadata
+            if k.startswith('auth-'):
+                continue
+            
+            update_fields[k] = v
 
         # Handle audit fields
         auth_user_id = data.get('auth-user-id')
@@ -675,6 +683,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
