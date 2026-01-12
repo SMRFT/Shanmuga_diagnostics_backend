@@ -228,7 +228,7 @@ def get_test_details(request):
         # -------------------- PATCH (UPDATE) --------------------
         elif request.method == 'PATCH':
             try:
-                data = json.loads(request.body.decode('utf-8'))
+                data = request.data
 
                 auth_user_id = data.get('auth-user-id')
                 auth_user_name = data.get('auth-user-name')
@@ -644,6 +644,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
