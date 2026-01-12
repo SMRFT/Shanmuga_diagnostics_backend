@@ -634,8 +634,7 @@ def handle_patch_request(request):
         update_fields['last_modified_at'] = datetime.utcnow()
         if auth_user_id:
             update_fields['last_modified_by'] = auth_user_id
-        if auth_user_name:
-            update_fields['last_modified_by_name'] = auth_user_name
+
 
         # Normalize device_id if provided
         if 'device_id' in update_fields:
@@ -683,6 +682,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
