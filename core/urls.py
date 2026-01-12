@@ -129,7 +129,7 @@ urlpatterns = [
     path("send-whatsapp/", whatsapp.send_whatsapp, name="send_whatsapp"),
     path('get_patientsbyb2b/', patients.get_patientsbyb2b, name='get_patients'),
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
-    path('credit_amount/<str:bill_no>/', patients.update_credit_amount, name='update_credit_amount'),
+    path('credit_amount/', patients.update_credit_amount, name='update_credit_amount'),
     path('send-email/', whatsapp.send_email, name='send_email'),
     path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
 
@@ -247,6 +247,7 @@ urlpatterns = [
 
     
 ]
+
 
 
 
