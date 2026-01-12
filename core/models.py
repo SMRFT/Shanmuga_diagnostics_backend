@@ -277,7 +277,7 @@ class Hmsbarcode(AuditModel):
     billnumber= models.CharField(max_length=15, blank=True,primary_key=True)
     gender = models.CharField(max_length=10)
     barcode= models.CharField(max_length=50,  blank=True)
-    opiptype=models.CharField(max_length=15, blank=True)
+    IPOPType=models.CharField(max_length=15, blank=True)
     ref_doctor= models.CharField(max_length=500, blank=True)
     date=models.DateField()
     testdetails = models.JSONField(blank=True, null=True)

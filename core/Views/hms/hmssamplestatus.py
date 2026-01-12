@@ -137,7 +137,7 @@ def hms_get_samplepatients_by_date(request):
                     'billnumber': patient.billnumber or '',
                     'gender': patient.gender or '',
                     'barcode': patient.barcode or '',
-                    'opiptype': patient.opiptype or '',
+                    'opiptype': patient.IPOPType or '',
                     'ref_doctor': patient.ref_doctor or '',
                     'date': patient.date.isoformat() if patient.date else '',
                     'location_id': patient.location_id or 'hms',
@@ -483,7 +483,7 @@ def hms_get_sample_collected(request):
                                     "age_type": hms_barcode.age_type or '',
                                     "gender": hms_barcode.gender or '',
                                     "billnumber": hms_barcode.billnumber or '',
-                                    "opiptype": hms_barcode.opiptype or '',
+                                    "opiptype": hms_barcode.IPOPType or '',
                                     "ref_doctor": hms_barcode.ref_doctor or '',
                                     "location_id": hms_barcode.location_id or '',
                                     "testdetails": []

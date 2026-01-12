@@ -277,7 +277,7 @@ def get_samplestatus_testvalue(request):
                 patient_id = "Unknown ID"
                 age = "Unknown"
                 gender = "Unknown"
-                opiptype = "Unknown"
+                IPOPType = "Unknown"
                 
                 barcode_details = hms_barcodes_dict.get(barcode)
                 if barcode_details:                    
@@ -285,7 +285,7 @@ def get_samplestatus_testvalue(request):
                         patient_id = barcode_details.patient_id
                         age = barcode_details.age
                         gender = barcode_details.gender
-                        opiptype = barcode_details.opiptype
+                        IPOPType = barcode_details.IPOPType
                 elif hasattr(sample_status, 'patient_id'):
                     patient_id = sample_status.patient_id
                 
@@ -306,7 +306,7 @@ def get_samplestatus_testvalue(request):
                     'patientname': patient_name,
                     'age': age,
                     'gender': gender,
-                    'opiptype': opiptype,
+                    'opiptype': IPOPType,
                     'barcode': barcode,
                     'date': safe_datetime_to_string(sample_status.date),
                     'testdetails': updated_tests,

@@ -41,7 +41,6 @@ urlpatterns = [
     #sampleStatus:
     path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
     path('sample_status/', sample.sample_status, name='sample_status'),   
-    path('check_sample_status/<str:barcode>/', sample.check_sample_status, name='check_sample_status'),
     path('sample_statusupdate/<str:barcode>/', sample.patch_sample_status, name='patch_sample_status'),
 
     #sample accessioning:
@@ -106,7 +105,6 @@ urlpatterns = [
     path('get_clinicalname_invoice/', get_clinicalname_invoice, name='get_clinicalname_by_referrer'),
     path('all-patients/', get_all_patients, name='get_all_patients'),
     path('patient_report/', patient_report, name='patient_report'),
-    path('overall_report/', report.overall_report, name='overall_report'),
     path('b2b_ledger_report/', report.b2b_ledger_report, name='b2b_ledger_report'),
 
     path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),

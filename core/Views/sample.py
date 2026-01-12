@@ -21,7 +21,7 @@ load_dotenv()
 def get_samplepatients_by_date(request):
     """
     Get sample patients from BarcodeTestDetails who have tests that are either not in SampleStatus
-    or have Pending status in SampleStatus. Supports both single date and date range queries.
+    or have Pending status in SampleStatus. Enriches test details from core_testdetails MongoDB collection.
     """
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
@@ -48,6 +48,7 @@ def get_samplepatients_by_date(request):
             date__lte=to_date_parsed + timedelta(days=1)
         ).values_list('patient_id', 'barcode', 'testdetails')
         
+        # Track test status by patient_id, barcode, and test_id
         completed_samples = set()
         pending_samples = set()
         
@@ -59,10 +60,12 @@ def get_samplepatients_by_date(request):
                     continue
             
             for test in testdetails:
-                test_key = (patient_id, barcode, test.get('testname', ''))
+                # Use test_id instead of testname for more accurate tracking
+                test_key = (patient_id, barcode, test.get('test_id', ''))
                 if test.get('samplestatus') == 'Pending':
                     pending_samples.add(test_key)
                 else:
+                    # Any other status (Sample Collected, Received, etc.) is considered completed
                     completed_samples.add(test_key)
         
         # Get patients from BarcodeTestDetails
@@ -70,6 +73,11 @@ def get_samplepatients_by_date(request):
             date__gte=from_date_parsed, 
             date__lte=to_date_parsed + timedelta(days=1)
         ).order_by('-date', 'patient_id')
+        
+        # Connect to MongoDB to get test details from core_testdetails
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        test_details_collection = db.core_testdetails
         
         filtered_patients = []
         for patient in patients:
@@ -80,108 +88,103 @@ def get_samplepatients_by_date(request):
                 except json.JSONDecodeError:
                     continue
             
-            if isinstance(patient_tests, list):
-                patient_test_names = {test.get('testname', '') for test in patient_tests}
-            else:
+            if not isinstance(patient_tests, list):
                 continue
             
-            should_include = False
-            for test_name in patient_test_names:
-                test_key = (patient.patient_id, patient.barcode, test_name)
+            # Filter tests to include only pending or not-in-status tests
+            enriched_testdetails = []
+            
+            for test in patient_tests:
+                test_id = test.get('test_id')
+                test_key = (patient.patient_id, patient.barcode, test_id)
+                
+                # Include test only if it's pending or not in any status
                 if (test_key not in completed_samples and test_key not in pending_samples) or \
                    (test_key in pending_samples):
-                    should_include = True
-                    break
+                    
+                    if test_id:
+                        # Query core_testdetails by test_id
+                        test_detail = test_details_collection.find_one(
+                            {"test_id": test_id},
+                            {
+                                "_id": 0,
+                                "test_id": 1,
+                                "test_name": 1,
+                                "department": 1,
+                                "collection_container": 1,
+                                "parameters": 1,
+                                "device_id": 1
+                            }
+                        )
+                        
+                        if test_detail:
+                            enriched_test = {
+                                **test,
+                                'barcode': patient.barcode,
+                                'testname': test_detail.get('test_name', 'N/A'),
+                                'test_name': test_detail.get('test_name', 'N/A'),
+                                'department': test_detail.get('department', 'N/A'),
+                                'collection_container': test_detail.get('collection_container', 'N/A')
+                            }
+                            enriched_testdetails.append(enriched_test)
             
-            if should_include:
-                filtered_patients.append(patient)
-        
-        patient_ids = [patient.patient_id for patient in filtered_patients]
-        
-        # Get billing records with bill_no
-        billing_records = Billing.objects.filter(
-            patient_id__in=patient_ids,
-            date__gte=from_date_parsed,
-            date__lte=to_date_parsed + timedelta(days=1)
-        ).values('bill_no', 'sample_collector', 'patient_id', 'branch','B2B', 'payment_method')
-        
-        # Create dictionaries for quick lookup
-        bill_to_collector = {record['bill_no']: record['sample_collector'] for record in billing_records}
-        patient_to_collector = {record['patient_id']: record['sample_collector'] for record in billing_records}
-        bill_to_branch = {record['bill_no']: record['branch'] for record in billing_records}
-        patient_to_branch = {record['patient_id']: record['branch'] for record in billing_records}
-        bill_to_b2b = {record['bill_no']: record['B2B'] for record in billing_records}
-        patient_to_b2b = {record['patient_id']: record['B2B'] for record in billing_records}
-        bill_to_payment = {record['bill_no']: record['payment_method'] for record in billing_records}
-        patient_to_payment = {record['patient_id']: record['payment_method'] for record in billing_records}
-        
-        patient_data = []
-        for patient in filtered_patients:
-            patient_dict = model_to_dict(patient)
-            
-            if patient_dict.get('date'):
-                patient_dict['date'] = patient_dict['date'].isoformat()
-            
-            if isinstance(patient_dict.get('testdetails'), str):
-                try:
-                    patient_dict['testdetails'] = json.loads(patient_dict['testdetails'])
-                except json.JSONDecodeError:
-                    patient_dict['testdetails'] = []
-            
-            if isinstance(patient_dict['testdetails'], list):
-                patient_dict['testdetails'] = [
-                    {**test, 'barcode': patient.barcode}
-                    for test in patient_dict['testdetails']
-                ]
-            
-            # Get sample collector
-            sample_collector = None
-            if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_collector:
-                sample_collector = bill_to_collector[patient.bill_no]
-            elif patient.patient_id in patient_to_collector:
-                sample_collector = patient_to_collector[patient.patient_id]
-            
-            patient_dict['sample_collector'] = sample_collector if sample_collector else ''
-            
-            # Get branch (processing location)
-            branch = None
-            if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_branch:
-                branch = bill_to_branch[patient.bill_no]
-            elif patient.patient_id in patient_to_branch:
-                branch = patient_to_branch[patient.patient_id]
-            
-            patient_dict['branch'] = branch if branch else ''
-
-            # Get B2B
-            B2B = None
-            if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_b2b:
-                B2B = bill_to_b2b[patient.bill_no]
-            elif patient.patient_id in bill_to_b2b:
-                B2B = bill_to_b2b[patient.patient_id]
-            
-            patient_dict['B2B'] = B2B if B2B else ''
-            
-            # Get payment method
-            payment_method = None
-            if hasattr(patient, 'bill_no') and patient.bill_no and patient.bill_no in bill_to_payment:
-                payment_method = bill_to_payment[patient.bill_no]
-            elif patient.patient_id in patient_to_payment:
-                payment_method = patient_to_payment[patient.patient_id]
-            
-            # Parse payment_method if it's a string
-            if payment_method and isinstance(payment_method, str):
-                try:
-                    payment_method = json.loads(payment_method)
-                except json.JSONDecodeError:
-                    payment_method = None
-            
-            patient_dict['payment_method'] = payment_method if payment_method else {}
-            
-            patient_data.append(patient_dict)
+            # Only include patient if they have at least one pending/not-in-status test
+            if enriched_testdetails:
+                patient_dict = model_to_dict(patient)
+                
+                if patient_dict.get('date'):
+                    patient_dict['date'] = patient_dict['date'].isoformat()
+                
+                # Replace testdetails with enriched version
+                patient_dict['testdetails'] = enriched_testdetails
+                
+                # Get billing records with bill_no for this specific patient
+                billing_record = Billing.objects.filter(
+                    patient_id=patient.patient_id,
+                    date__gte=from_date_parsed,
+                    date__lte=to_date_parsed + timedelta(days=1)
+                ).values('bill_no', 'sample_collector', 'patient_id', 'branch', 'B2B', 'payment_method').first()
+                
+                # Get sample collector
+                sample_collector = ''
+                if billing_record:
+                    sample_collector = billing_record.get('sample_collector', '')
+                
+                patient_dict['sample_collector'] = sample_collector if sample_collector else ''
+                
+                # Get branch (processing location)
+                branch = ''
+                if billing_record:
+                    branch = billing_record.get('branch', '')
+                
+                patient_dict['branch'] = branch if branch else ''
+                
+                # Get B2B
+                B2B = ''
+                if billing_record:
+                    B2B = billing_record.get('B2B', '')
+                
+                patient_dict['B2B'] = B2B if B2B else ''
+                
+                # Get payment method
+                payment_method = None
+                if billing_record:
+                    payment_method = billing_record.get('payment_method')
+                
+                # Parse payment_method if it's a string
+                if payment_method and isinstance(payment_method, str):
+                    try:
+                        payment_method = json.loads(payment_method)
+                    except json.JSONDecodeError:
+                        payment_method = None
+                
+                patient_dict['payment_method'] = payment_method if payment_method else {}
+                
+                filtered_patients.append(patient_dict)
         
         return JsonResponse({
-            'data': patient_data,
-            'total_count': len(patient_data),
+            'data': filtered_patients,
+            'total_count': len(filtered_patients),
             'date_range': {
                 'from_date': from_date_parsed.isoformat(),
                 'to_date': to_date_parsed.isoformat()
@@ -196,7 +199,6 @@ def get_samplepatients_by_date(request):
         return JsonResponse({
             'error': f'An error occurred: {str(e)}'
         }, status=500)
-
 @api_view(['POST'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -253,9 +255,6 @@ def sample_status(request):
                 
                 processed_test = {
                     'test_id': test.get('test_id'),
-                    'testname': test.get('testname'),
-                    'container': test.get('container', 'N/A'),
-                    'department': test.get('department', 'N/A'),
                     'samplecollector': test.get('samplecollector', 'N/A'),
                     'samplestatus': test.get('samplestatus', 'Pending'),
                     'samplecollected_time': samplecollected_time,
@@ -293,81 +292,6 @@ def sample_status(request):
         except Exception as e:
             print(f"Error saving sample status: {str(e)}")  # For debugging
             return JsonResponse({'error': str(e)}, status=400)
-    
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
-
-@api_view(['GET'])
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def check_sample_status(request, barcode):
-    if request.method == 'GET':
-        try:
-            # Check if an entry exists for this patient_id
-            existing_entry = SampleStatus.objects.filter(barcode=barcode).first()
-            
-            if existing_entry:
-                return JsonResponse({
-                    'exists': True,
-                    'message': 'Sample status data exists for this patient'
-                }, status=200)
-            else:
-                return JsonResponse({
-                    'exists': False,
-                    'message': 'No sample status data found for this patient'
-                }, status=200)
-                
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
-    
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
-
-
-# Add this view to your Django views file (likely in the same file as your other sample status views)
-
-@api_view(['GET'])
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def get_sample_status_data(request, barcode):
-    """
-    Get sample status data for a specific barcode
-    """
-    if request.method == 'GET':
-        try:
-            # Find the sample status entry for this barcode
-            sample_status = SampleStatus.objects.filter(barcode=barcode).first()
-            
-            if not sample_status:
-                return JsonResponse({
-                    'error': 'No sample status data found for this barcode'
-                }, status=404)
-            
-            # Convert model instance to dictionary
-            sample_data = model_to_dict(sample_status)
-            
-            # Format the date for frontend
-            if sample_data.get('date'):
-                sample_data['date'] = sample_data['date'].isoformat()
-            
-            # Format created_date and lastmodified_date if they exist
-            if sample_data.get('created_date'):
-                sample_data['created_date'] = sample_data['created_date'].isoformat()
-            if sample_data.get('lastmodified_date'):
-                sample_data['lastmodified_date'] = sample_data['lastmodified_date'].isoformat()
-            
-            # Ensure testdetails is properly formatted (parse if it's a JSON string)
-            if isinstance(sample_data.get('testdetails'), str):
-                try:
-                    sample_data['testdetails'] = json.loads(sample_data['testdetails'])
-                except json.JSONDecodeError:
-                    sample_data['testdetails'] = []
-            
-            return JsonResponse({
-                'data': sample_data,
-                'message': 'Sample status data retrieved successfully'
-            }, status=200)
-                
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
     
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
@@ -539,6 +463,11 @@ def patch_sample_status(request, barcode):
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def get_sample_collected(request):
+    """
+    Get sample collected patients from SampleStatus.
+    Fetches patient details directly from BarcodeTestDetails and Billing models,
+    and enriches test details from core_testdetails MongoDB collection.
+    """
     if request.method == "GET":
         try:
             # Get date parameters from query string
@@ -567,6 +496,12 @@ def get_sample_collected(request):
             
             # Fetch filtered samples
             samples = samples_query
+            
+            # Connect to MongoDB to get test details from core_testdetails
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Diagnostics
+            test_details_collection = db.core_testdetails
+            
             patient_data = {}
             
             # Prepare the data grouped by patient
@@ -580,62 +515,58 @@ def get_sample_collected(request):
                 # Filter test details based on samplestatus only
                 for detail in test_details:
                     if detail.get("samplestatus") == "Sample Collected":
-                        # Fetch additional patient data from BarcodeTestDetails using barcode
-                        barcode_details = None
-                        billing_details = None
+                        # Create unique key for patient
+                        patient_key = sample.barcode
                         
-                        try:
-                            barcode_details = BarcodeTestDetails.objects.get(barcode=sample.barcode)
-                            
-                            # Get bill_no from BarcodeTestDetails and fetch Billing details
-                            if barcode_details and barcode_details.bill_no:
-                                try:
-                                    billing_details = Billing.objects.get(bill_no=barcode_details.bill_no)
-                                except Billing.DoesNotExist:
-                                    pass
-                                    
-                        except BarcodeTestDetails.DoesNotExist:
-                            # If no matching barcode found, use existing sample data
-                            pass
-                        
-                        # If patient is not already in the dictionary, add them
-                        if sample.patient_id not in patient_data:
-                            # Prepare billing information
-                            payment_method_data = {}
-                            if billing_details and billing_details.payment_method:
-                                # Parse payment_method if it's a string
-                                if isinstance(billing_details.payment_method, str):
-                                    payment_method_data = json.loads(billing_details.payment_method)
-                                else:
-                                    payment_method_data = billing_details.payment_method
-                            
-                            # Use BarcodeTestDetails data if available, otherwise fallback to SampleStatus data
-                            if barcode_details:
-                                patient_data[sample.patient_id] = {
+                        # If patient is not already in the dictionary, fetch from BarcodeTestDetails and Billing
+                        if patient_key not in patient_data:
+                            try:
+                                # Find patient by barcode in BarcodeTestDetails model
+                                barcode_details = BarcodeTestDetails.objects.get(barcode=sample.barcode)
+                                
+                                # Get billing details if bill_no exists
+                                billing_details = None
+                                payment_method_data = {}
+                                
+                                if barcode_details.bill_no:
+                                    try:
+                                        billing_details = Billing.objects.get(bill_no=barcode_details.bill_no)
+                                        
+                                        # Parse payment_method if it's a string
+                                        if billing_details.payment_method:
+                                            if isinstance(billing_details.payment_method, str):
+                                                payment_method_data = json.loads(billing_details.payment_method)
+                                            else:
+                                                payment_method_data = billing_details.payment_method
+                                    except Billing.DoesNotExist:
+                                        pass
+                                
+                                patient_data[patient_key] = {
                                     "date": sample.date,
-                                    "patient_id": barcode_details.patient_id,
-                                    "patientname": barcode_details.patientname,
-                                    "barcode": sample.barcode,
-                                    "age": barcode_details.age,
-                                    "gender": barcode_details.gender,
-                                    "segment": barcode_details.segment,
-                                    "is_emergency": barcode_details.is_emergency,
-                                    "bill_no": barcode_details.bill_no if barcode_details.bill_no else "N/A",
+                                    "patient_id": barcode_details.patient_id or '',
+                                    "patientname": barcode_details.patientname or '',
+                                    "barcode": barcode_details.barcode or '',
+                                    "age": barcode_details.age or 0,
+                                    "gender": barcode_details.gender or '',
+                                    "segment": barcode_details.segment or '',
+                                    "is_emergency": barcode_details.is_emergency if hasattr(barcode_details, 'is_emergency') else False,
+                                    "bill_no": barcode_details.bill_no or "N/A",
                                     "B2B": billing_details.B2B if billing_details else "N/A",
                                     "branch": billing_details.branch if billing_details else "N/A",
                                     "payment_method": payment_method_data.get("paymentmethod", "N/A") if payment_method_data else "N/A",
                                     "testdetails": []
                                 }
-                            else:
-                                # Fallback to existing SampleStatus data
-                                patient_data[sample.patient_id] = {
+                            except BarcodeTestDetails.DoesNotExist:
+                                # Fallback if barcode not found in BarcodeTestDetails
+                                patient_data[patient_key] = {
                                     "date": sample.date,
-                                    "patient_id": sample.patient_id,
-                                    "patientname": sample.patientname,
+                                    "patient_id": sample.patient_id or '',
+                                    "patientname": "",
                                     "barcode": sample.barcode,
-                                    "age": sample.age,
-                                    "gender": "N/A",
-                                    "segment": sample.segment,
+                                    "age": 0,
+                                    "gender": "",
+                                    "segment": "",
+                                    "is_emergency": False,
                                     "bill_no": "N/A",
                                     "B2B": "N/A",
                                     "branch": "N/A",
@@ -643,16 +574,41 @@ def get_sample_collected(request):
                                     "testdetails": []
                                 }
                         
-                        # Append the test details
-                        patient_data[sample.patient_id]["testdetails"].append({
-                            "test_id": detail.get("test_id", "N/A"),
-                            "testname": detail.get("testname", "N/A"),
-                            "container": detail.get("container", "N/A"),
-                            "department": detail.get("department", "N/A"),
-                            "samplecollector": detail.get("samplecollector", "N/A"),
-                            "samplestatus": detail.get("samplestatus", "N/A"),
-                            "samplecollected_time": detail.get("samplecollected_time", "N/A"),
-                        })
+                        # Get enriched test details from MongoDB core_testdetails
+                        test_id = detail.get("test_id")
+                        enriched_test = None
+                        
+                        if test_id:
+                            # Query core_testdetails by test_id
+                            test_detail = test_details_collection.find_one(
+                                {"test_id": test_id},
+                                {
+                                    "_id": 0,
+                                    "test_id": 1,
+                                    "test_name": 1,
+                                    "department": 1,
+                                    "collection_container": 1,
+                                    "parameters": 1,
+                                    "device_id": 1
+                                }
+                            )
+                            
+                            if test_detail:
+                                enriched_test = {
+                                    "test_id": test_id,
+                                    "testname": test_detail.get('test_name', "N/A"),
+                                    "test_name": test_detail.get('test_name', "N/A"),
+                                    "container": test_detail.get('collection_container', "N/A"),
+                                    "department": test_detail.get('department', "N/A"),
+                                    "samplecollector": detail.get("samplecollector", "N/A"),
+                                    "collectd_by": detail.get("collectd_by", "N/A"),
+                                    "samplestatus": detail.get("samplestatus", "N/A"),
+                                    "samplecollected_time": detail.get("samplecollected_time", "N/A"),
+                                }
+                        
+                        # Only append if enriched test exists
+                        if enriched_test:
+                            patient_data[patient_key]["testdetails"].append(enriched_test)
             
             # Convert the dictionary to a list
             data = list(patient_data.values())
@@ -669,7 +625,7 @@ def get_sample_collected(request):
             
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
-
+        
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -715,7 +671,6 @@ def update_sample_collected(request, patient_id):
             
             # Extract barcode and samplecollected_time for validation
             barcode = body.get("barcode")
-            samplecollected_time = body.get("samplecollected_time")
             updates = body.get("updates", [])
             
             if not updates:
@@ -758,8 +713,7 @@ def update_sample_collected(request, patient_id):
                 # Find the test entry by test_id and samplecollected_time
                 test_found = False
                 for test_entry in testdetails:
-                    if (test_entry.get('test_id') == test_id and 
-                        test_entry.get('samplecollected_time') == samplecollected_time):
+                    if (test_entry.get('test_id') == test_id):
                         
                         # Update the sample status
                         test_entry['samplestatus'] = new_status
@@ -806,7 +760,7 @@ def update_sample_collected(request, patient_id):
                 
                 if not test_found:
                     return JsonResponse({
-                        "error": f"Test with id {test_id} and collection time {samplecollected_time} not found"
+                        "error": f"Test with id {test_id} not found"
                     }, status=404)
             
             # Save changes back to the database

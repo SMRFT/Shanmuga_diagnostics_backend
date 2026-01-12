@@ -80,7 +80,7 @@ def hms_overall_report(request):
         barcode_records = list(Hmsbarcode.objects.filter(**barcode_query).values(
             'billnumber', 'barcode', 'date', 'testdetails',
             'patient_id', 'patientname', 'age', 'age_type', 'gender', 
-            'opiptype', 'ref_doctor', 'ipnumber', 'location_id'
+            'IPOPType', 'ref_doctor', 'ipnumber', 'location_id'
         ))
         print(f"Found {len(barcode_records)} HMS barcode records")
         if barcode_records:
@@ -158,7 +158,7 @@ def hms_overall_report(request):
             }
 
             # Get opiptype and ref_doctor from Hmsbarcode only
-            opiptype = record.get("opiptype", "N/A")
+            opiptype = record.get("IPOPType", "N/A")
             refby = record.get("ref_doctor", "N/A")
             branch = record.get("location_id", "N/A")
 
@@ -567,6 +567,7 @@ def get_hms_patient_test_details(request):
         import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)   
+
 @csrf_exempt
 def hms_send_email(request):
     try:
@@ -775,52 +776,76 @@ IST = pytz.timezone(TIME_ZONE)
 @api_view(['PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 def hms_update_dispatch_status(request, barcode):
+    """
+    Update dispatch status for tests in core_testvalue collection.
+    Uses test_id instead of testname for accurate tracking.
+    """
     # MongoDB connection
     password = quote_plus('Smrft@2024')
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics  # Database name
     collection = db.core_testvalue
+    
     try:
         # Get auth-user-id from request data
         auth_user_id = request.data.get('auth-user-id')
         auth_user_name = request.data.get('auth-user-name')
+        
         if not auth_user_id:
-            return Response({"error": "auth-user-id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "auth-user-id parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Build the query filter with only barcode
         query_filter = {
             "barcode": barcode
         }
+        
         # Find ALL documents with the same barcode, sorted by created_date descending (latest first)
         test_value_records = list(collection.find(query_filter).sort("created_date", -1))
+        
         if not test_value_records:
             return Response({
                 "error": f"No TestValue records found for barcode: {barcode}"
             }, status=status.HTTP_404_NOT_FOUND)
-        # Dictionary to track the latest document for each testname
-        latest_documents_by_testname = {}
-        # Process each document to find the latest one for each testname
+        
+        # Dictionary to track the latest document for each test_id
+        latest_documents_by_test_id = {}
+        
+        # Process each document to find the latest one for each test_id
         for record in test_value_records:
             # Parse the testdetails field
             test_details = json.loads(record.get("testdetails", "[]"))
+            
             for test in test_details:
-                testname = test.get("testname", "Unknown")
-                # If this testname hasn't been seen yet, or this document is newer
-                if testname not in latest_documents_by_testname:
-                    latest_documents_by_testname[testname] = {
+                test_id = test.get("test_id")
+                
+                # Skip if test_id is missing
+                if not test_id:
+                    continue
+                
+                # If this test_id hasn't been seen yet, or this document is newer
+                if test_id not in latest_documents_by_test_id:
+                    latest_documents_by_test_id[test_id] = {
                         "document": record,
                         "test_details": test_details,
-                        "created_date": record.get("created_date")
+                        "created_date": record.get("created_date"),
+                        "testname": test.get("testname", "Unknown")
                     }
                 # Since records are sorted by created_date descending,
                 # the first occurrence is the latest
+        
         updated_count = 0
         total_tests_updated = 0
         updated_records = []
-        # Update dispatch status for the latest document of each testname
-        for testname, doc_info in latest_documents_by_testname.items():
+        
+        # Update dispatch status for the latest document of each test_id
+        for test_id, doc_info in latest_documents_by_test_id.items():
             document = doc_info["document"]
             test_details = doc_info["test_details"]
             tests_updated_in_doc = 0
+            
             # Update dispatch status for all tests in this document
             for test in test_details:
                 # Only update if dispatch is currently false
@@ -829,8 +854,10 @@ def hms_update_dispatch_status(request, barcode):
                     test["dispatched_by"] = auth_user_name
                     test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
                     tests_updated_in_doc += 1
+            
             # Convert the updated testdetails back to a JSON string
             updated_test_details = json.dumps(test_details)
+            
             # Update the document in MongoDB using the document's _id
             result = collection.update_one(
                 {"_id": document["_id"]},
@@ -840,29 +867,40 @@ def hms_update_dispatch_status(request, barcode):
                     "lastmodified_date": datetime.now(IST)
                 }}
             )
+            
             if result.matched_count > 0:
                 updated_count += 1
                 total_tests_updated += tests_updated_in_doc
                 updated_records.append({
                     "document_id": str(document["_id"]),
                     "created_date": document.get("created_date"),
-                    "testname": testname,
+                    "test_id": test_id,
+                    "testname": doc_info["testname"],
                     "tests_updated": tests_updated_in_doc,
-                    "all_test_names": [t.get("testname", "Unknown") for t in test_details]
+                    "all_tests": [
+                        {
+                            "test_id": t.get("test_id", "Unknown"),
+                            "testname": t.get("testname", "Unknown")
+                        } 
+                        for t in test_details
+                    ]
                 })
+        
         if updated_count == 0:
             return Response({
                 "message": f"No records were updated for barcode: {barcode}. All tests may already be dispatched."
             }, status=status.HTTP_200_OK)
+        
         return Response({
-            "message": "Dispatch status updated successfully for latest documents of each testname.",
+            "message": "Dispatch status updated successfully for latest documents of each test.",
             "barcode": barcode,
-            "unique_testnames_processed": len(latest_documents_by_testname),
+            "unique_test_ids_processed": len(latest_documents_by_test_id),
             "documents_updated": updated_count,
             "total_tests_updated": total_tests_updated,
             "modified_by": auth_user_id,
             "updated_records": updated_records
         }, status=status.HTTP_200_OK)
+        
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     finally:
