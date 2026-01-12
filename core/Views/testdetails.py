@@ -574,17 +574,31 @@ def approve_test(request):
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def handle_patch_request(request):
+    print("DEBUG: Entered handle_patch_request")
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Diagnostics
         collection = db.core_testdetails
 
         data = {}
-        if request.body:
-            data = json.loads(request.body.decode('utf-8'))
+        try:
+            print("DEBUG: Accessing request.data")
+            data = request.data
+            print("DEBUG: Accessed request.data success")
+        except Exception as e:
+            print(f"DEBUG: Failed to access request.data: {e}")
+            # Fallback to body if possible?
+            try:
+                print("DEBUG: Trying fallback to json.loads(request.body)")
+                data = json.loads(request.body.decode('utf-8'))
+            except Exception as e2:
+                print(f"DEBUG: Fallback failed: {e2}")
+                return JsonResponse({'success': False, 'error': f'Body read error: {e}'}, status=500)
 
         test_id = data.get('test_id')
         test_name = data.get('test_name')
+
+        print(f"DEBUG: test_id={test_id}, test_name={test_name}")
 
         # Build filter by test_id or test_name
         query = {}
@@ -595,8 +609,25 @@ def handle_patch_request(request):
         else:
             return JsonResponse({'error': 'Provide test_id or test_name'}, status=400)
 
-        # Build update fields (exclude identifiers)
-        update_fields = {k: v for k, v in data.items() if k not in ('test_name', 'test_id')}
+        # Build update fields (exclude identifiers and protected fields)
+        excluded_fields = [
+            'test_name', 'test_id', '_id', 
+            'auth-user-id', 'auth-user-name', 'auth-branch-code',
+            'created_at', 'created_by', 'created_by_name',
+            'last_modified_at', 'last_modified_by', 'last_modified_by_name'
+        ]
+        
+        update_fields = {k: v for k, v in data.items() if k not in excluded_fields}
+
+        # Handle audit fields
+        auth_user_id = data.get('auth-user-id')
+        auth_user_name = data.get('auth-user-name')
+        
+        update_fields['last_modified_at'] = datetime.utcnow()
+        if auth_user_id:
+            update_fields['last_modified_by'] = auth_user_id
+        if auth_user_name:
+            update_fields['last_modified_by_name'] = auth_user_name
 
         # Normalize device_id if provided
         if 'device_id' in update_fields:
@@ -644,6 +675,7 @@ def get_test_parameters(request, test_name):
     except Exception as e:
         print("Error fetching parameters:", e)
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
+
 
 
 
