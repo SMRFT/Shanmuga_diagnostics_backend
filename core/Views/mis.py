@@ -48,11 +48,16 @@ class ConsolidatedDataView(APIView):
             use_date_range = False
         
         try:
+            # Connect to MongoDB to get test details from core_testdetails
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Diagnostics
+            test_details_collection = db.core_testdetails
+            
             # Step 1: Get all billing records and filter by date in Python
             billing_records = Billing.objects.all()
             
             response_data = []
-            processed_barcodes = {}  # Track processed barcodes to avoid duplicates
+            processed_barcodes = set()  # Track processed barcodes to avoid duplicates
             
             for billing in billing_records:
                 # Filter by bill_date in Python instead of database
@@ -95,11 +100,13 @@ class ConsolidatedDataView(APIView):
                 if barcode in processed_barcodes:
                     continue
                 
-                # Step 3: Get sample status data based on barcode
+                # Step 3: Try to get sample status data based on barcode (optional now)
+                sample_status = None
                 try:
                     sample_status = SampleStatus.objects.get(barcode=barcode)
                 except SampleStatus.DoesNotExist:
-                    continue
+                    # Continue processing even if sample status doesn't exist
+                    pass
                 
                 # Step 4: Get ALL test value records for this barcode (not just the latest)
                 test_value_records = TestValue.objects.filter(barcode=barcode).order_by('-created_date', '-lastmodified_date')
@@ -110,20 +117,31 @@ class ConsolidatedDataView(APIView):
                 except Patient.DoesNotExist:
                     continue
                 
-                # Parse JSON fields
+                # Parse testdetails from BarcodeTestDetails to get test_ids
+                barcode_tests = []
                 try:
-                    if isinstance(sample_status.testdetails, str):
-                        sample_tests = json.loads(sample_status.testdetails)
+                    if isinstance(barcode_details.testdetails, str):
+                        barcode_tests = json.loads(barcode_details.testdetails)
                     else:
-                        sample_tests = sample_status.testdetails
-                        
+                        barcode_tests = barcode_details.testdetails
                 except json.JSONDecodeError:
-                    continue
+                    barcode_tests = []
                 
-                # Create a dictionary to store test value data by test name
-                test_values_by_name = {}
+                # Parse JSON fields from sample status (if exists)
+                sample_tests = []
+                if sample_status:
+                    try:
+                        if isinstance(sample_status.testdetails, str):
+                            sample_tests = json.loads(sample_status.testdetails)
+                        else:
+                            sample_tests = sample_status.testdetails
+                    except json.JSONDecodeError:
+                        sample_tests = []
                 
-                # Process all TestValue records and organize by test name
+                # Create a dictionary to store test value data by test_id
+                test_values_by_id = {}
+                
+                # Process all TestValue records and organize by test_id
                 for test_value in test_value_records:
                     try:
                         if isinstance(test_value.testdetails, str):
@@ -133,40 +151,71 @@ class ConsolidatedDataView(APIView):
                         
                         # Process each test in this TestValue record
                         for tv in test_values:
-                            testname = tv.get('testname')
-                            if testname:
-                                # Only keep the most recent record for each test name
-                                if testname not in test_values_by_name:
-                                    test_values_by_name[testname] = tv
+                            test_id = tv.get('test_id')
+                            if test_id:
+                                # Only keep the most recent record for each test_id
+                                if test_id not in test_values_by_id:
+                                    test_values_by_id[test_id] = tv
                                     
                     except json.JSONDecodeError:
                         continue
                 
-                # Create a dictionary to store the consolidated test data
+                # Create a dictionary to map test_id to sample status info
+                sample_status_by_id = {}
+                for test in sample_tests:
+                    test_id = test.get('test_id')
+                    if test_id:
+                        sample_status_by_id[test_id] = test
+                
+                # Create a dictionary to store the consolidated test data by test_id
                 consolidated_test_data = {}
                 
-                # First, populate with sample status data (excluding Outsource tests)
-                for test in sample_tests:
-                    testname = test.get('testname', 'N/A')
-                    sample_status_value = test.get('samplestatus', '')
+                # Process tests from barcode record (which has the original test list)
+                for test in barcode_tests:
+                    test_id = test.get('test_id')
+                    
+                    if not test_id:
+                        continue
+                    
+                    # Get sample status for this test_id (if exists)
+                    sample_test = sample_status_by_id.get(test_id, {})
+                    sample_status_value = sample_test.get('samplestatus', '')
                     
                     # Skip if sample status is "Outsource"
                     if sample_status_value == 'Outsource':
                         continue
                     
-                    consolidated_test_data[testname] = {
+                    # Fetch test name and department from MongoDB core_testdetails
+                    test_detail = test_details_collection.find_one(
+                        {"test_id": test_id},
+                        {
+                            "_id": 0,
+                            "test_id": 1,
+                            "test_name": 1,
+                            "department": 1
+                        }
+                    )
+                    
+                    if not test_detail:
+                        continue
+                    
+                    testname = test_detail.get('test_name', 'N/A')
+                    department = test_detail.get('department', 'N/A')
+                    
+                    consolidated_test_data[test_id] = {
+                        'test_id': test_id,
                         'testname': testname,
-                        'department': test.get('department', 'N/A'),
-                        'collected_time': test.get('samplecollected_time', 'pending'),
-                        'received_time': test.get('received_time', 'pending'),
+                        'department': department,
+                        'collected_time': sample_test.get('samplecollected_time', 'pending'),
+                        'received_time': sample_test.get('received_time', 'pending'),
                         'approval_time': 'pending',
                         'dispatch_time': 'pending'
                     }
                 
                 # Then, update with the corresponding test values if available
-                for testname, test_data in consolidated_test_data.items():
-                    if testname in test_values_by_name:
-                        tv = test_values_by_name[testname]
+                for test_id, test_data in consolidated_test_data.items():
+                    if test_id in test_values_by_id:
+                        tv = test_values_by_id[test_id]
                         test_data['approval_time'] = tv.get('approve_time', 'pending')
                         test_data['dispatch_time'] = tv.get('dispatch_time', 'pending')
                 
@@ -185,7 +234,7 @@ class ConsolidatedDataView(APIView):
                     registered_time = 'N/A'
                 
                 # Process each unique test
-                for testname, test_data in consolidated_test_data.items():
+                for test_id, test_data in consolidated_test_data.items():
                     collected_time = test_data['collected_time']
                     received_time = test_data['received_time']
                     approval_time = test_data['approval_time']
@@ -222,8 +271,10 @@ class ConsolidatedDataView(APIView):
                         "patient_name": patient.patientname,
                         "age": patient.age,
                         "date": registered_time,
+                        "registered_time": registered_time,
                         "barcode": barcode,
-                        "test_name": testname,
+                        "test_id": test_id,
+                        "test_name": test_data['testname'],
                         "department": test_data['department'],
                         "collected_time": collected_time,
                         "received_time": received_time,
@@ -234,7 +285,7 @@ class ConsolidatedDataView(APIView):
                     })
                 
                 # Mark this barcode as processed
-                processed_barcodes[barcode] = True
+                processed_barcodes.add(barcode)
             
             return Response(response_data, status=200)
             
@@ -242,7 +293,6 @@ class ConsolidatedDataView(APIView):
             return Response({
                 "error": str(e)
             }, status=500)
-        
 
 @permission_classes([HasRoleAndDataPermission])
 class HMSConsolidatedDataView(APIView):
@@ -256,89 +306,86 @@ class HMSConsolidatedDataView(APIView):
         if from_date and to_date:
             # Date range filtering
             try:
-                from_date_obj = datetime.strptime(from_date, '%Y-%m-%d').date()
-                to_date_obj = datetime.strptime(to_date, '%Y-%m-%d').date()
+                from_date_obj = datetime.strptime(from_date, '%Y-%m-%d')
+                to_date_obj = datetime.strptime(to_date, '%Y-%m-%d')
+                # Set to end of day for to_date
+                to_date_obj = to_date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
                 use_date_range = True
             except ValueError:
                 return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
         elif single_date:
             # Single date filtering (backward compatibility)
             try:
-                input_date = datetime.strptime(single_date, '%Y-%m-%d').date()
-                use_date_range = False
+                from_date_obj = datetime.strptime(single_date, '%Y-%m-%d')
+                to_date_obj = from_date_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
+                use_date_range = True
             except ValueError:
                 return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
         else:
             # Default to today if no date provided
-            input_date = datetime.now().date()
-            use_date_range = False
+            from_date_obj = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            to_date_obj = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
+            use_date_range = True
         
         try:
-            # Step 1: Get all billing records from HmspatientBilling and filter by date in Python
-            billing_records = HmspatientBilling.objects.all()
+            # Define Indian timezone
+            ist = pytz.timezone('Asia/Kolkata')
+            
+            # Connect to MongoDB to get test details from core_testdetails
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Diagnostics
+            test_details_collection = db.core_testdetails
+            
+            # Step 1: Get barcode records directly from Hmsbarcode based on date range
+            barcode_records = Hmsbarcode.objects.filter(
+                date__gte=from_date_obj,
+                date__lte=to_date_obj + timedelta(days=1)
+            ).order_by('-date', 'barcode')
             
             response_data = []
-            processed_barcodes = {}  # Track processed barcodes to avoid duplicates
+            processed_barcodes = set()  # Track processed barcodes to avoid duplicates
             
-            for billing in billing_records:
-                # Filter by date in Python instead of database
-                if billing.date:
-                    bill_date = billing.date
-                    if hasattr(bill_date, 'date'):
-                        bill_record_date = bill_date.date()
-                    else:
-                        bill_record_date = bill_date
-                    
-                    # Apply date filtering based on mode
-                    if use_date_range:
-                        if not (from_date_obj <= bill_record_date <= to_date_obj):
-                            continue
-                    else:
-                        if bill_record_date != input_date:
-                            continue
-                else:
+            for barcode_record in barcode_records:
+                barcode = barcode_record.barcode
+                
+                if not barcode or barcode in processed_barcodes:
                     continue
                 
-                billnumber = billing.billnumber
-                patient_id = billing.patient_id
-                
-                if not billnumber:
-                    continue
-                
-                # Step 2: Get barcode from Hmsbarcode based on billnumber
-                try:
-                    barcode_details = Hmsbarcode.objects.get(billnumber=billnumber)
-                    barcode = barcode_details.barcode
-                except Hmsbarcode.DoesNotExist:
-                    continue
-                
-                # Skip if we've already processed this barcode
-                if barcode in processed_barcodes:
-                    continue
-                
-                # Step 3: Get sample status data based on barcode
+                # Step 2: Try to get sample status data based on barcode (optional now)
+                sample_status = None
                 try:
                     sample_status = Hmssamplestatus.objects.get(barcode=barcode)
                 except Hmssamplestatus.DoesNotExist:
-                    continue
+                    # Continue processing even if sample status doesn't exist
+                    pass
                 
-                # Step 4: Get ALL test value records for this barcode (not just the latest)
+                # Step 3: Get ALL test value records for this barcode (not just the latest)
                 test_value_records = TestValue.objects.filter(barcode=barcode).order_by('-created_date', '-lastmodified_date')
                 
-                # Parse JSON fields from sample status
+                # Parse JSON fields from barcode record to get test_ids
                 try:
-                    if isinstance(sample_status.testdetails, str):
-                        sample_tests = json.loads(sample_status.testdetails)
+                    if isinstance(barcode_record.testdetails, str):
+                        barcode_tests = json.loads(barcode_record.testdetails)
                     else:
-                        sample_tests = sample_status.testdetails
-                        
+                        barcode_tests = barcode_record.testdetails
                 except json.JSONDecodeError:
                     continue
                 
-                # Create a dictionary to store test value data by test name
-                test_values_by_name = {}
+                # Parse JSON fields from sample status (if exists)
+                sample_tests = []
+                if sample_status:
+                    try:
+                        if isinstance(sample_status.testdetails, str):
+                            sample_tests = json.loads(sample_status.testdetails)
+                        else:
+                            sample_tests = sample_status.testdetails
+                    except json.JSONDecodeError:
+                        sample_tests = []
                 
-                # Process all TestValue records and organize by test name
+                # Create a dictionary to store test value data by test_id
+                test_values_by_id = {}
+                
+                # Process all TestValue records and organize by test_id
                 for test_value in test_value_records:
                     try:
                         if isinstance(test_value.testdetails, str):
@@ -348,54 +395,92 @@ class HMSConsolidatedDataView(APIView):
                         
                         # Process each test in this TestValue record
                         for tv in test_values:
-                            testname = tv.get('testname')
-                            if testname:
-                                # Only keep the most recent record for each test name
-                                if testname not in test_values_by_name:
-                                    test_values_by_name[testname] = tv
+                            test_id = tv.get('test_id')
+                            if test_id:
+                                # Only keep the most recent record for each test_id
+                                if test_id not in test_values_by_id:
+                                    test_values_by_id[test_id] = tv
                                     
                     except json.JSONDecodeError:
                         continue
                 
-                # Create a dictionary to store the consolidated test data
+                # Create a dictionary to map test_id to sample status info
+                sample_status_by_id = {}
+                for test in sample_tests:
+                    test_id = test.get('test_id')
+                    if test_id:
+                        sample_status_by_id[test_id] = test
+                
+                # Create a dictionary to store the consolidated test data by test_id
                 consolidated_test_data = {}
                 
-                # First, populate with sample status data (excluding Outsource tests)
-                for test in sample_tests:
-                    testname = test.get('testname', 'N/A')
-                    sample_status_value = test.get('samplestatus', '')
+                # Process tests from barcode record (which has the original test list)
+                for test in barcode_tests:
+                    test_id = test.get('test_id')
+                    
+                    if not test_id:
+                        continue
+                    
+                    # Get sample status for this test_id
+                    sample_test = sample_status_by_id.get(test_id, {})
+                    sample_status_value = sample_test.get('samplestatus', '')
                     
                     # Skip if sample status is "Outsource"
                     if sample_status_value == 'Outsource':
                         continue
                     
-                    consolidated_test_data[testname] = {
+                    # Fetch test name and department from MongoDB core_testdetails
+                    test_detail = test_details_collection.find_one(
+                        {"test_id": test_id},
+                        {
+                            "_id": 0,
+                            "test_id": 1,
+                            "test_name": 1,
+                            "department": 1
+                        }
+                    )
+                    
+                    if not test_detail:
+                        continue
+                    
+                    testname = test_detail.get('test_name', 'N/A')
+                    department = test_detail.get('department', 'N/A')
+                    
+                    consolidated_test_data[test_id] = {
+                        'test_id': test_id,
                         'testname': testname,
-                        'department': test.get('department', 'N/A'),
-                        'collected_time': test.get('samplecollected_time', 'pending'),
-                        'received_time': test.get('received_time', 'pending'),
+                        'department': department,
+                        'collected_time': sample_test.get('samplecollected_time', 'pending'),
+                        'received_time': sample_test.get('received_time', 'pending'),
                         'approval_time': 'pending',
                         'dispatch_time': 'pending'
                     }
                 
                 # Then, update with the corresponding test values if available
-                for testname, test_data in consolidated_test_data.items():
-                    if testname in test_values_by_name:
-                        tv = test_values_by_name[testname]
+                for test_id, test_data in consolidated_test_data.items():
+                    if test_id in test_values_by_id:
+                        tv = test_values_by_id[test_id]
                         test_data['approval_time'] = tv.get('approve_time', 'pending')
                         test_data['dispatch_time'] = tv.get('dispatch_time', 'pending')
                 
-                # Format bill_date for calculations
-                if billing.date:
-                    if hasattr(billing.date, 'strftime'):
-                        registered_time = billing.date.strftime('%Y-%m-%d %H:%M:%S')
+                # Format registration time from barcode record's created_date and convert to IST
+                if barcode_record.created_date:
+                    # Convert to IST timezone
+                    if hasattr(barcode_record.created_date, 'astimezone'):
+                        # If it's a timezone-aware datetime, convert to IST
+                        registered_dt_ist = barcode_record.created_date.astimezone(ist)
                     else:
-                        registered_time = str(billing.date)
+                        # If it's a naive datetime, assume it's UTC and convert to IST
+                        utc = pytz.UTC
+                        registered_dt_utc = utc.localize(barcode_record.created_date)
+                        registered_dt_ist = registered_dt_utc.astimezone(ist)
+                    
+                    registered_time = registered_dt_ist.strftime('%Y-%m-%d %H:%M:%S')
                 else:
                     registered_time = 'N/A'
                 
                 # Process each unique test
-                for testname, test_data in consolidated_test_data.items():
+                for test_id, test_data in consolidated_test_data.items():
                     collected_time = test_data['collected_time']
                     received_time = test_data['received_time']
                     approval_time = test_data['approval_time']
@@ -428,15 +513,16 @@ class HMSConsolidatedDataView(APIView):
                             total_processing_time = 'pending'
                     
                     response_data.append({
-                        "patient_id": patient_id,
-                        "patient_name": billing.patientname,  # Get from HmspatientBilling
-                        "age": billing.age,  # Get from HmspatientBilling
-                        "gender": billing.gender,  # Get from HmspatientBilling
-                        "phone": billing.phone,  # Get from HmspatientBilling
-                        "ref_doctor": billing.ref_doctor,  # Get from HmspatientBilling
+                        "patient_id": barcode_record.patient_id or '',
+                        "patient_name": barcode_record.patientname or '',
+                        "age": barcode_record.age or 0,
+                        "gender": barcode_record.gender or '',
+                        "phone": getattr(barcode_record, 'phone', '') or '',
+                        "ref_doctor": barcode_record.ref_doctor or '',
                         "date": registered_time,
                         "barcode": barcode,
-                        "test_name": testname,
+                        "test_id": test_id,
+                        "test_name": test_data['testname'],
                         "department": test_data['department'],
                         "collected_time": collected_time,
                         "received_time": received_time,
@@ -447,15 +533,15 @@ class HMSConsolidatedDataView(APIView):
                     })
                 
                 # Mark this barcode as processed
-                processed_barcodes[barcode] = True
+                processed_barcodes.add(barcode)
             
             return Response(response_data, status=200)
             
         except Exception as e:
             return Response({
                 "error": str(e)
-            }, status=500)
-        
+            }, status=500)     
+              
 @permission_classes([HasRoleAndDataPermission])
 class FranchiseConsolidatedDataView(APIView):
     def get(self, request):

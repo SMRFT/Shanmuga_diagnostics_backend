@@ -47,6 +47,7 @@ def overall_report(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Diagnostics
         billing_collection = db["core_billing"]
+        test_details_collection = db.core_testdetails
 
         # Log collection details
         total_billing_docs = billing_collection.count_documents({})
@@ -144,17 +145,12 @@ def overall_report(request):
         ).values("barcode", "testdetails", "created_date")
         print(f"Fetched {len(test_value_records)} TestValue records")
 
-        # Check all TestValue records for barcode 000005
-        if "000005" in barcodes:
-            all_test_value_records = TestValue.objects.filter(barcode="000005").values("barcode", "testdetails", "created_date")
-            print(f"All TestValue records for barcode 000005: {list(all_test_value_records)}")
-
         # Organize status data
         sample_status_map = {}
         for record in sample_status_records:
             sample_status_map.setdefault(record["barcode"], []).extend(record["testdetails"])
 
-        # FIXED: Organize test value data - COMBINE ALL RECORDS FOR SAME BARCODE
+        # Organize test value data - COMBINE ALL RECORDS FOR SAME BARCODE
         test_value_map = {}
         for record in test_value_records:
             barcode = record["barcode"]
@@ -256,23 +252,41 @@ def overall_report(request):
                 except json.JSONDecodeError:
                     pass
 
-            # Test list (prefer test_names from billing record)
+            # Test list - Get test_ids and enrich with test names from MongoDB
             test_list = []
-            test_names_str = record.get("test_names", "")
-            if test_names_str:
-                print(f"Using test_names for barcode {barcode_data.get('barcode')}: {test_names_str}")
-                test_list = [{"testname": name.strip()} for name in test_names_str.split(",") if name.strip()]
-            else:
-                test_field = barcode_data.get("testdetails", []) or record.get("testdetails", [])
-                print(f"Barcode {barcode_data.get('barcode')}: test_field source: {'barcode_data' if barcode_data.get('testdetails') else 'billing_record'}")
-                if isinstance(test_field, str):
-                    try:
-                        test_list = json.loads(test_field.strip('"'))
-                    except json.JSONDecodeError as e:
-                        print(f"Error parsing test_field for barcode {barcode_data.get('barcode')}: {e}")
-                        test_list = []
-                elif isinstance(test_field, list):
-                    test_list = test_field
+            test_ids = []
+            
+            # Try to get test_ids from barcode_data or billing record
+            test_field = barcode_data.get("testdetails", []) or record.get("testdetails", [])
+            
+            if isinstance(test_field, str):
+                try:
+                    test_field = json.loads(test_field.strip('"'))
+                except json.JSONDecodeError:
+                    test_field = []
+            
+            if isinstance(test_field, list):
+                test_ids = [test.get("test_id") for test in test_field if test.get("test_id")]
+            
+            # Enrich test details from MongoDB core_testdetails
+            if test_ids:
+                for test_id in test_ids:
+                    test_detail = test_details_collection.find_one(
+                        {"test_id": test_id},
+                        {"_id": 0, "test_id": 1, "test_name": 1}
+                    )
+                    if test_detail:
+                        test_list.append({
+                            "test_id": test_id,
+                            "testname": test_detail.get("test_name", "N/A")
+                        })
+            
+            # Fallback to test_names if available in billing record
+            if not test_list:
+                test_names_str = record.get("test_names", "")
+                if test_names_str:
+                    print(f"Using test_names fallback for barcode {barcode_data.get('barcode')}: {test_names_str}")
+                    test_list = [{"testname": name.strip()} for name in test_names_str.split(",") if name.strip()]
 
             testnames = ", ".join([test.get("testname", "") for test in test_list])
             no_of_tests = len(test_list) or record.get("no_of_tests", 0)
@@ -314,10 +328,6 @@ def overall_report(request):
                             unapproved_tests.append(test_record)
 
             print(f"Barcode: {barcode}, Total test records: {len(all_test_values)}, Valid (non-rerun) tests: {len(valid_test_values)}, Unapproved tests: {len(unapproved_tests)}")
-            if unapproved_tests:
-                print(f"Unapproved tests for barcode {barcode}: {unapproved_tests}")
-            if test_created_date:
-                print(f"Test created date: {test_created_date}")
 
             # Sample collection status and timestamps
             all_collected = all(t.get("samplestatus") == "Sample Collected" for t in sample_tests) if sample_tests else False
@@ -328,21 +338,14 @@ def overall_report(request):
             collection_time_val = "N/A"
             collected_date_val = "N/A"
             if sample_tests:
-                # Find the first available samplecollected_time
                 for t in sample_tests:
                     st = t.get("samplecollected_time")
                     if st:
                         try:
-                            # Try parsing if it's in a standard format, otherwise just use it
                             if isinstance(st, str):
-                                # If it looks like ISO or detailed string
                                 if 'T' in st:
                                     dt = datetime.fromisoformat(st)
                                 else:
-                                    # Attempt a common format or just string splits if necessary
-                                    # Assuming backend stores it reasonably. 
-                                    # If it's just a time string, we might not get date.
-                                    # Let's try to handle a full datetime string if present
                                     try:
                                         dt = datetime.strptime(st, "%Y-%m-%d %H:%M:%S")
                                     except ValueError:
@@ -352,7 +355,6 @@ def overall_report(request):
                                     collection_time_val = dt.strftime("%I:%M %p")
                                     collected_date_val = dt.strftime("%d-%m-%Y")
                                 else:
-                                    # Fallback: if it's just time or non-standard
                                     collection_time_val = st
                             elif isinstance(st, datetime):
                                 collection_time_val = st.strftime("%I:%M %p")
@@ -374,7 +376,7 @@ def overall_report(request):
             elif partially_received:
                 status = "Partially Received"
 
-            # FIXED: Test value status logic
+            # Test value status logic using test_id
             if valid_test_values:
                 # Check testing status
                 def has_test_values(test):
@@ -389,44 +391,26 @@ def overall_report(request):
                 all_tested = all(has_test_values(t) for t in valid_test_values)
                 partially_tested = any(has_test_values(t) for t in valid_test_values)
                
-                # Normalize test names for comparison
-                def normalize_test_name(name):
-                    if not name:
-                        return ""
-                    name = re.sub(r'\s+', ' ', name.strip())
-                    name = name.lower()
-                    name = re.sub(r'[^\w\s-]', '', name)
-                    name = name.split('[')[0].strip()
-                    return name
-
-                # Get test names from billing record
-                all_ordered_tests = {normalize_test_name(test.get("testname", "")) for test in test_list}
+                # Get test_ids from billing/barcode record
+                all_ordered_test_ids = {test.get("test_id") for test in test_list if test.get("test_id")}
                
-                # Get approved test names from ALL test value records
-                approved_test_names = {normalize_test_name(t.get("testname", "")) for t in valid_test_values if t.get("approve", False)}
+                # Get approved test_ids from test value records
+                approved_test_ids = {t.get("test_id") for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
                
-                # Debug logging
-                if barcode == "000005":
-                    print(f"=== DEBUG FOR BARCODE 000005 ===")
-                    print(f"All ordered tests: {all_ordered_tests}")
-                    print(f"Approved test names: {approved_test_names}")
-                    print(f"Number of ordered tests: {len(all_ordered_tests)}")
-                    print(f"Number of approved tests: {len(approved_test_names)}")
-                    print(f"Valid test values count: {len(valid_test_values)}")
-                    print(f"All approved individual checks: {[t.get('approve', False) for t in valid_test_values]}")
+                print(f"Barcode {barcode}: Ordered test_ids: {all_ordered_test_ids}, Approved test_ids: {approved_test_ids}")
 
                 # Check approval status
                 all_approved = False
                 partially_approved = False
                
-                if len(all_ordered_tests) > 0:
-                    # Method 1: Compare test names
-                    if all_ordered_tests.issubset(approved_test_names) and len(approved_test_names) == len(all_ordered_tests):
+                if len(all_ordered_test_ids) > 0:
+                    # Compare test_ids
+                    if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
                         all_approved = True
-                    elif len(approved_test_names) > 0:
+                    elif len(approved_test_ids) > 0:
                         partially_approved = True
                    
-                    # Method 2: Fallback - check if all individual tests are approved
+                    # Fallback - check if all individual tests are approved
                     if not all_approved and valid_test_values:
                         approved_count = sum(1 for t in valid_test_values if t.get("approve", False))
                         total_expected = record.get("no_of_tests", 0)
@@ -500,7 +484,6 @@ def overall_report(request):
                 "salesMapping": sales_mapping,
                 "total_amount": total_amount,
                 "credit_amount": credit_amount,
-                "credit_amount": credit_amount,
                 "credit_details": json.loads(record.get("credit_details")) if isinstance(record.get("credit_details"), str) else record.get("credit_details", []),
                 "discount": discount,
                 "payment_method": payment_details,
@@ -520,14 +503,14 @@ def overall_report(request):
     except Exception as e:
         print(f"Critical Error: {str(e)}")
         print(traceback.format_exc())
-        return JsonResponse({"error": str(e)}, status=500)
-    
+        return JsonResponse({"error": str(e)}, status=500)   
+
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def patient_test_sorting(request):
     try:
-        # Change from patient_id to barcode
+        # Get barcode from request
         barcode = request.GET.get('barcode')
         date = request.GET.get('date', datetime.now().strftime("%Y-%m-%d"))
         
@@ -540,7 +523,12 @@ def patient_test_sorting(request):
         except ValueError:
             return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
         
-        # Filter test values by barcode instead of patient_id
+        # MongoDB connection
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        core_testdetails_collection = db["core_testdetails"]
+        
+        # Filter test values by barcode
         tests = TestValue.objects.filter(barcode=barcode, date=formatted_date).values("testdetails")
         test_list = []
         
@@ -556,19 +544,42 @@ def patient_test_sorting(request):
             else:
                 continue
             
-            # Filter only approved tests
-            approved_tests = [test_item for test_item in testdetails_list if test_item.get('approve') is True]
-            test_list.extend(approved_tests)
+            # Filter only approved tests and enrich with test_name from core_testdetails
+            for test_item in testdetails_list:
+                if test_item.get('approve') is True:
+                    test_id = test_item.get('test_id')
+                    
+                    # Fetch test_name from core_testdetails collection
+                    if test_id:
+                        core_test = core_testdetails_collection.find_one(
+                            {"test_id": test_id},
+                            {"test_name": 1, "_id": 0}
+                        )
+                        
+                        if core_test:
+                            test_item['test_name'] = core_test.get('test_name', 'N/A')
+                        else:
+                            test_item['test_name'] = 'N/A'
+                    else:
+                        test_item['test_name'] = 'N/A'
+                    
+                    test_list.append(test_item)
         
-        # Return barcode as key instead of patient_id for consistency
+        # Return barcode as key
         if test_list:
             return JsonResponse({barcode: {"testdetails": test_list}})
         else:
             return JsonResponse({'error': 'No records found for this barcode'}, status=404)
     
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
-    
+    finally:
+        # Close MongoDB connection
+        if 'client' in locals():
+            client.close()  
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def get_patient_test_details(request):
@@ -584,7 +595,7 @@ def get_patient_test_details(request):
         patient_id = barcode_details.patient_id
         bill_no = barcode_details.bill_no
         # Get TestValue records using patient_id and barcode
-        test_values = TestValue.objects.filter( barcode=barcode)
+        test_values = TestValue.objects.filter(barcode=barcode)
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
         # Get patient details from Patient model using patient_id
@@ -600,34 +611,120 @@ def get_patient_test_details(request):
             barcodes = [test.get("barcode") for test in tests if test.get("barcode")]
         except (json.JSONDecodeError, AttributeError):
             barcodes = []
+        
+        # Connect to MongoDB
+        mongo_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        mongo_db = mongo_client.Diagnostics
+        core_testdetails_collection = mongo_db.core_testdetails
+        
+        # Helper function to get parameter details by index or test_code
+        def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
+            """
+            Get parameter details from core_testdetails
+            Supports both dict (device_id-keyed) and list formats
+            Uses param_index for accurate matching when available
+            """
+            core_parameters = core_test.get("parameters", {})
+            params_list = []
+            
+            # Case 1: parameters is a dictionary with device_id keys
+            if isinstance(core_parameters, dict):
+                # Try to get parameters for the specific device_id
+                if device_id and device_id != "N/A" and device_id in core_parameters:
+                    params_list = core_parameters[device_id]
+                else:
+                    # Use first available device's parameters
+                    if len(core_parameters) > 0:
+                        first_device = list(core_parameters.keys())[0]
+                        params_list = core_parameters[first_device]
+            
+            # Case 2: parameters is a list (like PT test)
+            elif isinstance(core_parameters, list):
+                params_list = core_parameters
+            
+            # Ensure params_list is actually a list
+            if not isinstance(params_list, list):
+                return None
+            
+            # If param_index is provided, use it directly (most accurate)
+            if param_index is not None and 0 <= param_index < len(params_list):
+                return params_list[param_index]
+            
+            # Fallback: Find by test_code (may not be unique)
+            if test_code:
+                matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
+                if matching_params:
+                    return matching_params[0]
+            
+            return None
+        
         all_results = []
         # Process each TestValue record
         for test_value_record in test_values:
             # Filter for approved tests only
             approved_tests = []
-            for test in test_value_record.testdetails:
+            
+            # Parse testdetails if it's a string
+            test_details_list = test_value_record.testdetails
+            if isinstance(test_details_list, str):
+                try:
+                    test_details_list = json.loads(test_details_list)
+                except:
+                    test_details_list = []
+            
+            if not isinstance(test_details_list, list):
+                test_details_list = []
+            
+            for test in test_details_list:
                 # Check if the test is approved
                 if test.get("approve") == True:  # Only include approved tests
-                    testname = test.get("testname")
-                    department = test.get("department", "N/A")
-                    NABL = test.get("NABL", "N/A")
+                    test_id = test.get("test_id")
+                    device_id = test.get("device_id")
+                    parameters = test.get("parameters", [])
+                    
+                    # Fetch test details from core_testdetails
+                    core_test = core_testdetails_collection.find_one({"test_id": test_id})
+                    
+                    if not core_test:
+                        # Fallback to original data if core_test not found
+                        testname = test.get("testname")
+                        department = test.get("department", "N/A")
+                        NABL = test.get("NABL", "N/A")
+                        specimen_type = test.get("specimen_type", "N/A")
+                    else:
+                        testname = core_test.get("test_name")
+                        department = core_test.get("department", "N/A")
+                        NABL = core_test.get("NABL", False)
+                        specimen_type = core_test.get("specimen_type", "N/A")
+                    
                     outsourced = test.get("outsourced", False)
-                    comment = test.get("comment", False)
+                    comment = test.get("comment", "")
                     verified_by = test.get("verified_by", "N/A")
                     approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
-                    parameters = test.get("parameters", [])
+                    
                     # Get sample status information
                     status = None
                     if sample_status.exists():
                         for sample_status_record in sample_status:
-                            status = next(
-                                (status for status in sample_status_record.testdetails
-                                 if status.get("testname") == testname), None)
+                            status_details = sample_status_record.testdetails
+                            if isinstance(status_details, str):
+                                try:
+                                    status_details = json.loads(status_details)
+                                except:
+                                    status_details = []
+                            
+                            if isinstance(status_details, list):
+                                status = next(
+                                    (s for s in status_details if s.get("test_id") == test_id or s.get("testname") == testname),
+                                    None
+                                )
                             if status:
                                 break
+                    
                     samplecollected_time = status.get("samplecollected_time") if status else None
                     received_time = status.get("received_time") if status else None
+                    
                     test_detail = {
                         "department": department,
                         "NABL": NABL,
@@ -640,25 +737,89 @@ def get_patient_test_details(request):
                         "samplecollected_time": samplecollected_time,
                         "received_time": received_time
                     }
-                    if parameters:
+                    
+                    # Handle parameters - match with core_testdetails using INDEX
+                    if parameters and len(parameters) > 0 and core_test:
+                        enriched_parameters = []
+                        
+                        # Use index-based matching for accurate parameter retrieval
+                        for param_index, param_value in enumerate(parameters):
+                            test_code = param_value.get("test_code")
+                            value = param_value.get("value", "")
+                            param_comment = param_value.get("comment", "")
+                            
+                            # Get parameter definition using INDEX (most accurate)
+                            param_def = get_parameter_from_core(
+                                core_test, 
+                                device_id, 
+                                test_code=test_code, 
+                                param_index=param_index
+                            )
+                            
+                            if param_def:
+                                enriched_param = {
+                                    "name": param_def.get("test_name", ""),
+                                    "test_code": test_code,
+                                    "value": value,
+                                    "unit": param_def.get("unit", ""),
+                                    "reference_range": param_def.get("reference_range", ""),
+                                    "method": param_def.get("method", ""),
+                                    "specimen_type": specimen_type,
+                                    "sub_title": param_def.get("sub_title", ""),
+                                    "value_option": param_def.get("value_option", []),
+                                    "comment": param_comment
+                                }
+                                enriched_parameters.append(enriched_param)
+                            else:
+                                # Fallback if parameter definition not found
+                                enriched_param = {
+                                    "name": param_value.get("name", "N/A"),
+                                    "test_code": test_code,
+                                    "value": value,
+                                    "unit": param_value.get("unit", "N/A"),
+                                    "reference_range": param_value.get("reference_range", "N/A"),
+                                    "method": param_value.get("method", "N/A"),
+                                    "specimen_type": specimen_type,
+                                    "sub_title": param_value.get("sub_title", ""),
+                                    "value_option": [],
+                                    "comment": param_comment
+                                }
+                                enriched_parameters.append(enriched_param)
+                        
+                        test_detail["parameters"] = enriched_parameters
+                    elif parameters and len(parameters) > 0:
+                        # No core_test found, use original parameters
                         test_detail["parameters"] = parameters
                     else:
-                        test_detail.update({
-                            "method": test.get("method", ""),
-                            "specimen_type": test.get("specimen_type", ""),
-                            "value": test.get("value", ""),
-                            "unit": test.get("unit", ""),
-                            "reference_range": test.get("reference_range", ""),
-                            "sub_title": test.get("sub_title", "")
-                        })
+                        # No parameters - single test with value
+                        if core_test:
+                            test_detail.update({
+                                "method": core_test.get("method", ""),
+                                "specimen_type": specimen_type,
+                                "value": test.get("value", ""),
+                                "unit": core_test.get("unit", ""),
+                                "reference_range": core_test.get("reference_range", ""),
+                                "sub_title": test.get("sub_title", "")
+                            })
+                        else:
+                            test_detail.update({
+                                "method": test.get("method", ""),
+                                "specimen_type": test.get("specimen_type", ""),
+                                "value": test.get("value", ""),
+                                "unit": test.get("unit", ""),
+                                "reference_range": test.get("reference_range", ""),
+                                "sub_title": test.get("sub_title", "")
+                            })
+                    
                     approved_tests.append(test_detail)
+            
             # Only add patient details if there are approved tests
             if approved_tests:
                 patient_details = {
                     "patient_id": patient_id,
-                    "patientname": patient.patientname,
-                    "age": patient.age,
-                    "age_type": patient.age_type,
+                    "patientname": patient.patientname if patient else "N/A",
+                    "age": patient.age if patient else "N/A",
+                    "age_type": patient.age_type if patient else "Years",
                     "gender": patient.gender if patient else "N/A",
                     "date": test_value_record.date,
                     "barcode": test_value_record.barcode,
@@ -670,16 +831,21 @@ def get_patient_test_details(request):
                     "branch": billing.branch if billing else "N/A",
                 }
                 all_results.append(patient_details)
+        
         if not all_results:
             return JsonResponse({'error': 'No approved test records found'}, status=404)
+        
         # If only one result, return it directly; otherwise return array
         if len(all_results) == 1:
             return JsonResponse(all_results[0], safe=False)
         else:
             return JsonResponse(all_results, safe=False)
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        import traceback
+        print(traceback.format_exc())
+        return JsonResponse({'error': str(e)}, status=500)   
     
+
 @csrf_exempt
 def send_email(request):
     try:
@@ -888,6 +1054,10 @@ IST = pytz.timezone(TIME_ZONE)
 @api_view(['PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 def update_dispatch_status(request, barcode):
+    """
+    Update dispatch status for tests in core_testvalue collection.
+    Uses test_id instead of testname for accurate tracking.
+    """
     # MongoDB connection
     password = quote_plus('Smrft@2024')
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -896,45 +1066,64 @@ def update_dispatch_status(request, barcode):
     
     try:
         # Get auth-user-id from request data
-        auth_user_id = request.data.get('auth-user-id') or request.query_params.get('auth-user-id') or 'system'
+        auth_user_id = request.data.get('auth-user-id')
         auth_user_name = request.data.get('auth-user-name')
+        
         if not auth_user_id:
-            return Response({"error": "auth-user-id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "auth-user-id parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Build the query filter with only barcode
         query_filter = {
             "barcode": barcode
         }
+        
         # Find ALL documents with the same barcode, sorted by created_date descending (latest first)
         test_value_records = list(collection.find(query_filter).sort("created_date", -1))
+        
         if not test_value_records:
             return Response({
                 "error": f"No TestValue records found for barcode: {barcode}"
             }, status=status.HTTP_404_NOT_FOUND)
-        # Dictionary to track the latest document for each testname
-        latest_documents_by_testname = {}
-        # Process each document to find the latest one for each testname
+        
+        # Dictionary to track the latest document for each test_id
+        latest_documents_by_test_id = {}
+        
+        # Process each document to find the latest one for each test_id
         for record in test_value_records:
             # Parse the testdetails field
             test_details = json.loads(record.get("testdetails", "[]"))
+            
             for test in test_details:
-                testname = test.get("testname", "Unknown")
-                # If this testname hasn't been seen yet, or this document is newer
-                if testname not in latest_documents_by_testname:
-                    latest_documents_by_testname[testname] = {
+                test_id = test.get("test_id")
+                
+                # Skip if test_id is missing
+                if not test_id:
+                    continue
+                
+                # If this test_id hasn't been seen yet, or this document is newer
+                if test_id not in latest_documents_by_test_id:
+                    latest_documents_by_test_id[test_id] = {
                         "document": record,
                         "test_details": test_details,
-                        "created_date": record.get("created_date")
+                        "created_date": record.get("created_date"),
+                        "testname": test.get("testname", "Unknown")
                     }
                 # Since records are sorted by created_date descending,
                 # the first occurrence is the latest
+        
         updated_count = 0
         total_tests_updated = 0
         updated_records = []
-        # Update dispatch status for the latest document of each testname
-        for testname, doc_info in latest_documents_by_testname.items():
+        
+        # Update dispatch status for the latest document of each test_id
+        for test_id, doc_info in latest_documents_by_test_id.items():
             document = doc_info["document"]
             test_details = doc_info["test_details"]
             tests_updated_in_doc = 0
+            
             # Update dispatch status for all tests in this document
             for test in test_details:
                 # Only update if dispatch is currently false
@@ -943,8 +1132,10 @@ def update_dispatch_status(request, barcode):
                     test["dispatched_by"] = auth_user_name
                     test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
                     tests_updated_in_doc += 1
+            
             # Convert the updated testdetails back to a JSON string
             updated_test_details = json.dumps(test_details)
+            
             # Update the document in MongoDB using the document's _id
             result = collection.update_one(
                 {"_id": document["_id"]},
@@ -954,34 +1145,44 @@ def update_dispatch_status(request, barcode):
                     "lastmodified_date": datetime.now(IST)
                 }}
             )
+            
             if result.matched_count > 0:
                 updated_count += 1
                 total_tests_updated += tests_updated_in_doc
                 updated_records.append({
                     "document_id": str(document["_id"]),
                     "created_date": document.get("created_date"),
-                    "testname": testname,
+                    "test_id": test_id,
+                    "testname": doc_info["testname"],
                     "tests_updated": tests_updated_in_doc,
-                    "all_test_names": [t.get("testname", "Unknown") for t in test_details]
+                    "all_tests": [
+                        {
+                            "test_id": t.get("test_id", "Unknown"),
+                            "testname": t.get("testname", "Unknown")
+                        } 
+                        for t in test_details
+                    ]
                 })
+        
         if updated_count == 0:
             return Response({
                 "message": f"No records were updated for barcode: {barcode}. All tests may already be dispatched."
             }, status=status.HTTP_200_OK)
+        
         return Response({
-            "message": "Dispatch status updated successfully for latest documents of each testname.",
+            "message": "Dispatch status updated successfully for latest documents of each test.",
             "barcode": barcode,
-            "unique_testnames_processed": len(latest_documents_by_testname),
+            "unique_test_ids_processed": len(latest_documents_by_test_id),
             "documents_updated": updated_count,
             "total_tests_updated": total_tests_updated,
             "modified_by": auth_user_id,
             "updated_records": updated_records
         }, status=status.HTTP_200_OK)
+        
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     finally:
         client.close()
-
 
 
         

@@ -269,8 +269,17 @@ class HmspatientBilling(AuditModel):
 
 
 class Hmsbarcode(AuditModel):
+    patient_id = models.CharField(max_length=20,  blank=True)
+    ipnumber= models.CharField(max_length=100,blank=True)
+    patientname =models.CharField(max_length=50,  blank=True)
+    patientname = models.CharField(max_length=100)
+    age = models.IntegerField()
+    age_type = models.CharField(max_length=10, blank=True)
     billnumber= models.CharField(max_length=15, blank=True,primary_key=True)
+    gender = models.CharField(max_length=10)
     barcode= models.CharField(max_length=50,  blank=True)
+    IPOPType=models.CharField(max_length=15, blank=True)
+    ref_doctor= models.CharField(max_length=500, blank=True)
     date=models.DateField()
     testdetails = models.JSONField(blank=True, null=True)
     location_id=models.CharField(max_length=15, blank=True,default="hms")

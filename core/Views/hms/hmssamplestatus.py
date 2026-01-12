@@ -20,10 +20,7 @@ from ...models import Hmsbarcode,Hmssamplestatus
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def hms_get_samplepatients_by_date(request):
-    """
-    Get sample patients from Hmsbarcode who have tests that are either not in Hmssamplestatus
-    or have Pending status in Hmssamplestatus. Supports both single date and date range queries.
-    """
+   
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
     single_date = request.GET.get('date')
@@ -49,6 +46,7 @@ def hms_get_samplepatients_by_date(request):
             date__lte=to_date_parsed + timedelta(days=1)
         ).values_list('barcode', 'testdetails')
         
+        # Track test status by barcode and test_id
         completed_samples = set()
         pending_samples = set()
         
@@ -60,22 +58,24 @@ def hms_get_samplepatients_by_date(request):
                     continue
             
             for test in testdetails:
-                test_key = (barcode, test.get('testname', ''))
+                # Use test_id instead of testname for more accurate tracking
+                test_key = (barcode, test.get('test_id', ''))
                 if test.get('samplestatus') == 'Pending':
                     pending_samples.add(test_key)
                 else:
+                    # Any other status (Sample Collected, Received, etc.) is considered completed
                     completed_samples.add(test_key)
         
-        # Get patients from Hmsbarcode
+        # Get patients from Hmsbarcode with all patient details
         patients = Hmsbarcode.objects.filter(
             date__gte=from_date_parsed, 
             date__lte=to_date_parsed + timedelta(days=1)
         ).order_by('-date', 'barcode')
         
-        # Connect to MongoDB to get patient details
+        # Connect to MongoDB to get test details from core_testdetails
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Diagnostics
-        collection = db.core_hmspatientbilling
+        test_details_collection = db.core_testdetails
         
         filtered_patients = []
         for patient in patients:
@@ -86,66 +86,63 @@ def hms_get_samplepatients_by_date(request):
                 except json.JSONDecodeError:
                     continue
             
-            if isinstance(patient_tests, list):
-                patient_test_names = {test.get('testname', '') for test in patient_tests}
-            else:
+            if not isinstance(patient_tests, list):
                 continue
             
-            should_include = False
-            for test_name in patient_test_names:
-                test_key = (patient.barcode, test_name)
+            # Filter tests to include only pending or not-in-status tests
+            enriched_testdetails = []
+            
+            for test in patient_tests:
+                test_id = test.get('test_id')
+                test_key = (patient.barcode, test_id)
+                
+                # Include test only if it's pending or not in any status
                 if (test_key not in completed_samples and test_key not in pending_samples) or \
                    (test_key in pending_samples):
-                    should_include = True
-                    break
+                    
+                    if test_id:
+                        # Query core_testdetails by test_id
+                        test_detail = test_details_collection.find_one(
+                            {"test_id": test_id},
+                            {
+                                "_id": 0,
+                                "test_id": 1,
+                                "test_name": 1,
+                                "department": 1,
+                                "collection_container": 1,
+                                "parameters": 1,
+                                "device_id": 1
+                            }
+                        )
+                        
+                        if test_detail:
+                            enriched_test = {
+                                **test,
+                                'barcode': patient.barcode,
+                                'test_name': test_detail.get('test_name', 'N/A'),
+                                'department': test_detail.get('department', 'N/A'),
+                                'collection_container': test_detail.get('collection_container', 'N/A')
+                            }
+                            enriched_testdetails.append(enriched_test)
             
-            if should_include:
-                # Get patient details from MongoDB
-                patient_details = collection.find_one(
-                    {"billnumber": patient.billnumber},
-                    {
-                        "_id": 0,
-                        "patient_id": 1,
-                        "ipnumber": 1,
-                        "patientname": 1,
-                        "age": 1,
-                        "age_type": 1,
-                        "gender": 1,
-                        "phone": 1,
-                        "ref_doctor": 1,
-                        "segment": 1
-                    }
-                )
-                
-                patient_dict = model_to_dict(patient)
-                
-                if patient_dict.get('date'):
-                    patient_dict['date'] = patient_dict['date'].isoformat()
-                
-                if isinstance(patient_dict.get('testdetails'), str):
-                    try:
-                        patient_dict['testdetails'] = json.loads(patient_dict['testdetails'])
-                    except json.JSONDecodeError:
-                        patient_dict['testdetails'] = []
-                
-                if isinstance(patient_dict['testdetails'], list):
-                    patient_dict['testdetails'] = [
-                        {**test, 'barcode': patient.barcode}
-                        for test in patient_dict['testdetails']
-                    ]
-                
-                # Add patient details from MongoDB
-                if patient_details:
-                    patient_dict.update({
-                        'patient_id': patient_details.get('patient_id', ''),
-                        'patientname': patient_details.get('patientname', ''),
-                        'age': patient_details.get('age', ''),
-                        'age_type': patient_details.get('age_type', ''),
-                        'gender': patient_details.get('gender', ''),
-                        'phone': patient_details.get('phone', ''),
-                        'ref_doctor': patient_details.get('ref_doctor', ''),
-                        'segment': patient_details.get('segment', '')
-                    })
+            # Only include patient if they have at least one pending/not-in-status test
+            if enriched_testdetails:
+                # Create patient dictionary with all Hmsbarcode model fields
+                patient_dict = {
+                    'patient_id': patient.patient_id or '',
+                    'ipnumber': patient.ipnumber or '',
+                    'patientname': patient.patientname or '',
+                    'age': patient.age or 0,
+                    'age_type': patient.age_type or '',
+                    'billnumber': patient.billnumber or '',
+                    'gender': patient.gender or '',
+                    'barcode': patient.barcode or '',
+                    'opiptype': patient.IPOPType or '',
+                    'ref_doctor': patient.ref_doctor or '',
+                    'date': patient.date.isoformat() if patient.date else '',
+                    'location_id': patient.location_id or 'hms',
+                    'testdetails': enriched_testdetails
+                }
                 
                 filtered_patients.append(patient_dict)
         
@@ -166,7 +163,6 @@ def hms_get_samplepatients_by_date(request):
         return JsonResponse({
             'error': f'An error occurred: {str(e)}'
         }, status=500)
-
 
 @api_view(['POST'])
 @csrf_exempt
@@ -239,10 +235,6 @@ def hms_sample_status(request):
                     return dt_string
                 processed_test = {
                     'test_id': test.get('test_id'),
-                    'testname': test.get('testname'),
-                    'container': test.get('container', 'N/A'),
-                    'department': test.get('department', 'N/A'),
-                    'samplecollector': test.get('samplecollector', 'N/A'),
                     'samplestatus': test.get('samplestatus', 'Pending'),
                     'samplecollected_time': parse_datetime(samplecollected_time),
                     'received_time': parse_datetime(received_time),
@@ -279,78 +271,6 @@ def hms_sample_status(request):
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
 
-@api_view(['GET'])
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def hms_check_sample_status(request, barcode):
-    if request.method == 'GET':
-        try:
-            # Check if an entry exists for this barcode
-            existing_entry = Hmssamplestatus.objects.filter(barcode=barcode).first()
-            
-            if existing_entry:
-                return JsonResponse({
-                    'exists': True,
-                    'message': 'Sample status data exists for this barcode'
-                }, status=200)
-            else:
-                return JsonResponse({
-                    'exists': False,
-                    'message': 'No sample status data found for this barcode'
-                }, status=200)
-                
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
-    
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
-
-@api_view(['GET'])
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def hms_get_sample_status_data(request, barcode):
-    """
-    Get sample status data for a specific barcode
-    """
-    if request.method == 'GET':
-        try:
-            # Find the sample status entry for this barcode
-            sample_status = Hmssamplestatus.objects.filter(barcode=barcode).first()
-            
-            if not sample_status:
-                return JsonResponse({
-                    'error': 'No sample status data found for this barcode'
-                }, status=404)
-            
-            # Convert model instance to dictionary
-            sample_data = model_to_dict(sample_status)
-            
-            # Format the date for frontend
-            if sample_data.get('date'):
-                sample_data['date'] = sample_data['date'].isoformat()
-            
-            # Format created_date and lastmodified_date if they exist
-            if sample_data.get('created_date'):
-                sample_data['created_date'] = sample_data['created_date'].isoformat()
-            if sample_data.get('lastmodified_date'):
-                sample_data['lastmodified_date'] = sample_data['lastmodified_date'].isoformat()
-            
-            # Ensure testdetails is properly formatted (parse if it's a JSON string)
-            if isinstance(sample_data.get('testdetails'), str):
-                try:
-                    sample_data['testdetails'] = json.loads(sample_data['testdetails'])
-                except json.JSONDecodeError:
-                    sample_data['testdetails'] = []
-            
-            return JsonResponse({
-                'data': sample_data,
-                'message': 'Sample status data retrieved successfully'
-            }, status=200)
-                
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-    
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
-
 @api_view(['PATCH'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -381,8 +301,8 @@ def hms_patch_sample_status(request, barcode):
             
             updates = data['testdetails']
             
-            if not isinstance(updates, list):
-                return JsonResponse({'error': 'testdetails must be an array'}, status=400)
+            if not isinstance(updates, list) or len(updates) == 0:
+                return JsonResponse({'error': 'testdetails must be a non-empty array'}, status=400)
             
             # Find the patient document
             patient_doc = collection.find_one({"barcode": barcode})
@@ -402,59 +322,30 @@ def hms_patch_sample_status(request, barcode):
             if not isinstance(testdetails, list):
                 return JsonResponse({'error': 'testdetails is not in the correct format'}, status=400)
             
-            # First, validate if any changes are needed
-            changes_needed = False
-            for update in updates:
-                for existing_test in testdetails:
-                    if not isinstance(existing_test, dict):
-                        continue
-                    
-                    # Find matching test
-                    if (existing_test.get('test_id') == update.get('test_id') or 
-                        existing_test.get('testname') == update.get('testname')):
-                        
-                        new_status = update.get('samplestatus')
-                        current_status = existing_test.get('samplestatus')
-                        
-                        # Check if status change is needed
-                        if new_status != current_status:
-                            # Special validation: if trying to change to Pending but already Pending
-                            if new_status == 'Pending' and current_status == 'Pending':
-                                continue  # No change needed
-                            changes_needed = True
-                            break
-                
-                if changes_needed:
-                    break
-            
-            # If no changes are needed, return early
-            if not changes_needed:
-                return JsonResponse({'error': 'No changes were made'}, status=400)
-            
-            # Process updates
+            # Process updates based on test_id
             updated_testdetails = []
             updated_count = 0
+            test_ids_updated = []
             
             for existing_test in testdetails:
                 if not isinstance(existing_test, dict):
                     updated_testdetails.append(existing_test)
                     continue
                 
-                # Find matching update
+                # Find matching update by test_id
                 matching_update = None
                 for update in updates:
-                    if (existing_test.get('test_id') == update.get('test_id') or 
-                        existing_test.get('testname') == update.get('testname')):
+                    if existing_test.get('test_id') == update.get('test_id'):
                         matching_update = update
                         break
                 
                 if matching_update:
-                    # Update the test status and related fields
-                    new_status = matching_update.get('samplestatus', existing_test.get('samplestatus'))
+                    test_id = existing_test.get('test_id')
+                    new_status = matching_update.get('samplestatus')
                     current_status = existing_test.get('samplestatus')
                     
                     # Only update if status actually changes
-                    if new_status != current_status:
+                    if new_status and new_status != current_status:
                         # Update fields based on new status
                         if new_status == 'Sample Collected':
                             # Set collected time in IST format
@@ -462,24 +353,26 @@ def hms_patch_sample_status(request, barcode):
                             formatted_time = ist_time.strftime('%Y-%m-%d %H:%M:%S')
                             
                             existing_test['samplestatus'] = new_status
-                            existing_test['samplecollected_time'] = formatted_time
+                            existing_test['samplecollected_time'] = matching_update.get('samplecollected_time', formatted_time)
                             existing_test['collectd_by'] = matching_update.get('collectd_by')
+                            
                             updated_count += 1
+                            test_ids_updated.append(test_id)
+                            
                         elif new_status == 'Pending':
                             # Reset to pending status
                             existing_test['samplestatus'] = new_status
                             existing_test['samplecollected_time'] = None
                             existing_test['collectd_by'] = None
+                            
                             updated_count += 1
-                        else:
-                            existing_test['samplestatus'] = new_status
-                            updated_count += 1
+                            test_ids_updated.append(test_id)
                 
                 updated_testdetails.append(existing_test)
             
             # Check if any updates were actually made after processing
             if updated_count == 0:
-                return JsonResponse({'error': 'No changes were made'}, status=400)
+                return JsonResponse({'error': 'No matching test_id found or no changes were made'}, status=400)
             
             # Prepare update data
             update_data = {
@@ -498,26 +391,32 @@ def hms_patch_sample_status(request, barcode):
             
             if result.modified_count > 0:
                 return JsonResponse({
-                    'message': f'Successfully updated {updated_count} tests for barcode {barcode}',
-                    'updated_count': updated_count
+                    'message': f'Successfully updated {updated_count} test(s) for barcode {barcode}',
+                    'updated_count': updated_count,
+                    'test_ids_updated': test_ids_updated
                 }, status=200)
             else:
-                return JsonResponse({'error': 'No changes were made'}, status=400)
+                return JsonResponse({'error': 'No changes were made to the database'}, status=400)
                 
         except KeyError as e:
             print(f"KeyError: {str(e)}")
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except Exception as e:
             print(f"Unexpected error: {str(e)}")
-            return JsonResponse({'error': str(e)}, status=400)
+            return JsonResponse({'error': str(e)}, status=500)
     
     return JsonResponse({'error': 'Invalid request method'}, status=405)
+
 
 from django.utils.timezone import make_aware
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def hms_get_sample_collected(request):
+    """
+    Get sample collected patients from Hmssamplestatus.
+    Fetches patient details directly from Hmsbarcode model and test details from core_testdetails.
+    """
     if request.method == "GET":
         try:
             # Get date parameters from query string
@@ -547,10 +446,10 @@ def hms_get_sample_collected(request):
             # Fetch filtered samples
             samples = samples_query
             
-            # Connect to MongoDB to get patient details
+            # Connect to MongoDB to get test details from core_testdetails
             client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
             db = client.Diagnostics
-            collection = db.core_hmspatientbilling
+            test_details_collection = db.core_testdetails
             
             patient_data = {}
             
@@ -565,66 +464,82 @@ def hms_get_sample_collected(request):
                 # Filter test details based on samplestatus only
                 for detail in test_details:
                     if detail.get("samplestatus") == "Sample Collected":
-                        # Fetch additional patient data from MongoDB using barcode
-                        barcode_details = None
-                        try:
-                            # Find patient by barcode in Hmsbarcode
-                            hms_barcode = Hmsbarcode.objects.get(barcode=sample.barcode)
-                            # Get patient details from MongoDB using billnumber
-                            barcode_details = collection.find_one(
-                                {"billnumber": hms_barcode.billnumber},
-                                {
-                                    "_id": 0,
-                                    "patient_id": 1,
-                                    "patientname": 1,
-                                    "age": 1,
-                                    "age_type": 1,
-                                    "gender": 1,
-                                    "segment": 1
-                                }
-                            )
-                        except Hmsbarcode.DoesNotExist:
-                            pass
-                        
                         # Create unique key for patient
                         patient_key = sample.barcode
                         
-                        # If patient is not already in the dictionary, add them
+                        # If patient is not already in the dictionary, fetch from Hmsbarcode
                         if patient_key not in patient_data:
-                            if barcode_details:
+                            try:
+                                # Find patient by barcode in Hmsbarcode model
+                                hms_barcode = Hmsbarcode.objects.get(barcode=sample.barcode)
+                                
                                 patient_data[patient_key] = {
                                     "date": sample.date,
-                                    "patient_id": barcode_details.get("patient_id", ""),
-                                    "patientname": barcode_details.get("patientname", ""),
-                                    "barcode": sample.barcode,
-                                    "age": barcode_details.get("age", ""),
-                                    "gender": barcode_details.get("gender", "N/A"),
-                                    "segment": barcode_details.get("segment", ""),
+                                    "patient_id": hms_barcode.patient_id or '',
+                                    "ipnumber": hms_barcode.ipnumber or '',
+                                    "patientname": hms_barcode.patientname or '',
+                                    "barcode": hms_barcode.barcode or '',
+                                    "age": hms_barcode.age or 0,
+                                    "age_type": hms_barcode.age_type or '',
+                                    "gender": hms_barcode.gender or '',
+                                    "billnumber": hms_barcode.billnumber or '',
+                                    "opiptype": hms_barcode.IPOPType or '',
+                                    "ref_doctor": hms_barcode.ref_doctor or '',
+                                    "location_id": hms_barcode.location_id or '',
                                     "testdetails": []
                                 }
-                            else:
-                                # Fallback to existing sample data
+                            except Hmsbarcode.DoesNotExist:
+                                # Fallback if barcode not found in Hmsbarcode
                                 patient_data[patient_key] = {
                                     "date": sample.date,
                                     "patient_id": "",
+                                    "ipnumber": "",
                                     "patientname": "",
                                     "barcode": sample.barcode,
-                                    "age": "",
-                                    "gender": "N/A",
-                                    "segment": "",
+                                    "age": 0,
+                                    "age_type": "",
+                                    "gender": "",
+                                    "billnumber": "",
+                                    "opiptype": "",
+                                    "ref_doctor": "",
+                                    "location_id": "",
                                     "testdetails": []
                                 }
                         
-                        # Append the test details
-                        patient_data[patient_key]["testdetails"].append({
-                            "test_id": detail.get("test_id", "N/A"),
-                            "testname": detail.get("testname", "N/A"),
-                            "container": detail.get("container", "N/A"),
-                            "department": detail.get("department", "N/A"),
-                            "collectd_by": detail.get("collectd_by", "N/A"),
-                            "samplestatus": detail.get("samplestatus", "N/A"),
-                            "samplecollected_time": detail.get("samplecollected_time", "N/A"),
-                        })
+                        # Get enriched test details from MongoDB core_testdetails
+                        test_id = detail.get("test_id")
+                        enriched_test = None
+                        
+                        if test_id:
+                            # Query core_testdetails by test_id
+                            test_detail = test_details_collection.find_one(
+                                {"test_id": test_id},
+                                {
+                                    "_id": 0,
+                                    "test_id": 1,
+                                    "test_name": 1,
+                                    "department": 1,
+                                    "collection_container": 1,
+                                    "parameters": 1,
+                                    "device_id": 1
+                                }
+                            )
+                            
+                            if test_detail:
+                                                               
+                                enriched_test = {
+                                    "test_id": test_id,
+                                    "test_name": test_detail.get('test_name', "N/A"),
+                                    "container": test_detail.get('collection_container', "N/A"),
+                                    "department": test_detail.get('department', "N/A"),
+                                    "collectd_by": detail.get("collectd_by", "N/A"),
+                                    "samplestatus": detail.get("samplestatus", "N/A"),
+                                    "samplecollected_time": detail.get("samplecollected_time", "N/A"),
+                                }
+                                
+                           
+                        # Append the enriched test details
+                        patient_data[patient_key]["testdetails"].append(enriched_test)
             
             # Convert the dictionary to a list
             data = list(patient_data.values())
@@ -648,7 +563,7 @@ def hms_get_sample_collected(request):
 def hms_update_sample_collected(request, barcode):
     """
     Update sample status in MongoDB:
-    - Find record by barcode + samplecollected_time
+    - Find record by barcode
     - Find correct test within testdetails using test_id
     - Update only that test entry
     """
@@ -662,30 +577,19 @@ def hms_update_sample_collected(request, barcode):
         body = request.data if hasattr(request, 'data') else json.loads(request.body)
         updates = body.get("updates", [])
         barcode = body.get("barcode")
-        samplecollected_time = body.get("samplecollected_time")  # string 'YYYY-MM-DD HH:MM:SS'
         
         if not updates:
             return JsonResponse({"error": "Updates are required"}, status=400)
-        if not barcode or not samplecollected_time:
-            return JsonResponse({"error": "barcode and samplecollected_time are required"}, status=400)
+        if not barcode:
+            return JsonResponse({"error": "barcode is required"}, status=400)
         
         # ===== Find the correct patient record =====
-        candidate_records = list(collection.find({"barcode": barcode}))
-        if not candidate_records:
+        record = collection.find_one({"barcode": barcode})
+        if not record:
             return JsonResponse({"error": "Sample not found"}, status=404)
         
-        preferred_record = None
-        for rec in candidate_records:
-            testdetails = json.loads(rec.get("testdetails", "[]"))
-            if any(t.get("samplecollected_time") == samplecollected_time for t in testdetails):
-                preferred_record = rec
-                break
-        
-        if not preferred_record:
-            return JsonResponse({"error": "Sample with matching collected time not found"}, status=404)
-        
-        record_id = preferred_record["_id"]
-        testdetails = json.loads(preferred_record.get("testdetails", "[]"))
+        record_id = record["_id"]
+        testdetails = json.loads(record.get("testdetails", "[]"))
         
         # ===== Apply updates =====
         from django.utils import timezone
@@ -700,19 +604,20 @@ def hms_update_sample_collected(request, barcode):
             received_by = update.get("received_by")
             rejected_by = update.get("rejected_by")
             outsourced_by = update.get("outsourced_by")
+            outsource_lab = update.get("outsource_lab")
             remarks = update.get("remarks")
             
             if test_id is None or new_status is None:
                 return JsonResponse({"error": "test_id and samplestatus are required"}, status=400)
             
-            # Find the test by test_id AND samplecollected_time
+            # Find the test by test_id only
             test_entry = next(
-                (t for t in testdetails if t.get("test_id") == test_id and t.get("samplecollected_time") == samplecollected_time),
+                (t for t in testdetails if t.get("test_id") == test_id),
                 None
             )
             
             if not test_entry:
-                return JsonResponse({"error": f"Test with id {test_id} not found for given collected time"}, status=404)
+                return JsonResponse({"error": f"Test with id {test_id} not found"}, status=404)
             
             # Update sample status and timestamps
             test_entry['samplestatus'] = new_status
@@ -726,6 +631,7 @@ def hms_update_sample_collected(request, barcode):
             elif new_status == "Outsource":
                 test_entry['outsourced_time'] = formatted_time
                 test_entry['outsourced_by'] = outsourced_by
+                test_entry['outsource_lab'] = outsource_lab
         
         # ===== Save back to DB =====
         collection.update_one(
@@ -736,6 +642,4 @@ def hms_update_sample_collected(request, barcode):
         return JsonResponse({"message": "Sample status updated successfully"}, status=200)
         
     except Exception as e:
-
         return JsonResponse({"error": str(e)}, status=500)
-

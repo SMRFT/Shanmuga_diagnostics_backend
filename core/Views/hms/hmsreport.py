@@ -71,31 +71,23 @@ def hms_overall_report(request):
             print("Invalid date format received")
             return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-        # Query HMS Patient Billing
-        billing_query = {"date__gte": from_date, "date__lt": to_date}
+        # Query Hmsbarcode as the primary source
+        barcode_query = {"date__gte": from_date, "date__lt": to_date}
         if patient_id:
-            billing_query["patient_id"] = patient_id
-        print(f"HMS billing query: {billing_query}")
-       
-        billing_records = list(HmspatientBilling.objects.filter(**billing_query).values())
-        print(f"Found {len(billing_records)} HMS billing records")
-        if billing_records:
-            print("Sample HMS billing record:", billing_records[0])
-
-        if not billing_records:
-            return JsonResponse([], safe=False)
-
-        # Fetch barcode from Hmsbarcode
-        bill_nos = [record['billnumber'] for record in billing_records if record['billnumber']]
-        barcode_query = {"billnumber__in": bill_nos} if bill_nos else {}
+            barcode_query["patient_id"] = patient_id
         print(f"HMS Barcode query: {barcode_query}")
-        barcode_records = Hmsbarcode.objects.filter(**barcode_query).values(
-            'billnumber', 'barcode', 'date', 'testdetails'
-        )
-        barcode_map = {record['billnumber']: record for record in barcode_records}
+        
+        barcode_records = list(Hmsbarcode.objects.filter(**barcode_query).values(
+            'billnumber', 'barcode', 'date', 'testdetails',
+            'patient_id', 'patientname', 'age', 'age_type', 'gender', 
+            'IPOPType', 'ref_doctor', 'ipnumber', 'location_id'
+        ))
         print(f"Found {len(barcode_records)} HMS barcode records")
         if barcode_records:
             print("Sample HMS barcode record:", barcode_records[0])
+
+        if not barcode_records:
+            return JsonResponse([], safe=False)
 
         # Fetch status and test data
         barcodes = [record['barcode'] for record in barcode_records if record['barcode']]
@@ -151,24 +143,23 @@ def hms_overall_report(request):
 
         # Format response
         formatted_data = []
-        for record in billing_records:
-            pid = record.get("patient_id", "N/A")
-            barcode_data = barcode_map.get(record.get("billnumber", ""), {})
+        for record in barcode_records:
+            billnumber = record.get("billnumber", "N/A")
+            barcode = record.get("barcode", "N/A")
 
-            # Patient details from HMS billing record
+            # Patient details from Hmsbarcode only
             patient_data = {
-                "patient_id": pid,
+                "patient_id": record.get("patient_id", "N/A"),
                 "patientname": record.get("patientname", "N/A"),
                 "age": record.get("age", "N/A"),
                 "age_type": record.get("age_type", ""),
                 "gender": record.get("gender", "N/A"),
-                "phone": record.get("phone", "N/A"),
                 "ipnumber": record.get("ipnumber", "N/A")
             }
 
-            # Billing details
+            # Get opiptype and ref_doctor from Hmsbarcode only
+            opiptype = record.get("IPOPType", "N/A")
             refby = record.get("ref_doctor", "N/A")
-            billnumber = record.get("billnumber", "N/A")
             branch = record.get("location_id", "N/A")
 
             # Test list from HMS billing record
@@ -186,8 +177,7 @@ def hms_overall_report(request):
             testnames = ", ".join([test.get("testname", "") for test in test_list if isinstance(test, dict)])
             no_of_tests = len(test_list)
 
-            # STATUS DETERMINATION
-            barcode = barcode_data.get("barcode", None)
+            # STATUS DETERMINATION (using test_id instead of test_name)
             status = "Registered"  # Default status
             sample_tests = sample_status_map.get(barcode, []) if barcode else []
 
@@ -224,7 +214,7 @@ def hms_overall_report(request):
             elif partially_received:
                 status = "Partially Received"
 
-            # Test value status logic
+            # Test value status logic (using test_id for comparison)
             if valid_test_values:
                 # Check testing status
                 def has_test_values(test):
@@ -239,31 +229,29 @@ def hms_overall_report(request):
                 all_tested = all(has_test_values(t) for t in valid_test_values)
                 partially_tested = any(has_test_values(t) for t in valid_test_values)
                
-                # Normalize test names for comparison
-                def normalize_test_name(name):
-                    if not name:
-                        return ""
-                    name = re.sub(r'\s+', ' ', name.strip())
-                    name = name.lower()
-                    name = re.sub(r'[^\w\s-]', '', name)
-                    name = name.split('[')[0].strip()
-                    return name
-
-                # Get test names from billing record
-                all_ordered_tests = {normalize_test_name(test.get("testname", "")) for test in test_list if isinstance(test, dict)}
+                # Get test_ids from billing record
+                all_ordered_test_ids = {
+                    str(test.get("test_id", "")).strip() 
+                    for test in test_list 
+                    if isinstance(test, dict) and test.get("test_id")
+                }
                
-                # Get approved test names from ALL test value records
-                approved_test_names = {normalize_test_name(t.get("testname", "")) for t in valid_test_values if t.get("approve", False)}
+                # Get approved test_ids from ALL test value records
+                approved_test_ids = {
+                    str(t.get("test_id", "")).strip() 
+                    for t in valid_test_values 
+                    if t.get("approve", False) and t.get("test_id")
+                }
                
-                # Check approval status
+                # Check approval status based on test_id
                 all_approved = False
                 partially_approved = False
                
-                if len(all_ordered_tests) > 0:
-                    # Compare test names
-                    if all_ordered_tests.issubset(approved_test_names) and len(approved_test_names) == len(all_ordered_tests):
+                if len(all_ordered_test_ids) > 0:
+                    # Compare test IDs
+                    if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
                         all_approved = True
-                    elif len(approved_test_names) > 0:
+                    elif len(approved_test_ids) > 0:
                         partially_approved = True
                    
                     # Fallback - check if all individual tests are approved
@@ -282,6 +270,7 @@ def hms_overall_report(request):
                 all_dispatched = all(t.get("dispatch", False) for t in approved_tests) if approved_tests else False
                
                 print(f"Approval status for {barcode}: all_approved={all_approved}, partially_approved={partially_approved}")
+                print(f"Ordered test IDs: {all_ordered_test_ids}, Approved test IDs: {approved_test_ids}")
                 print(f"Testing status: all_tested={all_tested}, partially_tested={partially_tested}")
                 print(f"Dispatch status: all_dispatched={all_dispatched}")
 
@@ -323,8 +312,8 @@ def hms_overall_report(request):
                 "patient_name": patient_data["patientname"],
                 "gender": patient_data["gender"],
                 "age": f"{patient_data['age']} {patient_data['age_type']}",
-                "phone": patient_data["phone"],
                 "ipnumber": patient_data["ipnumber"],
+                "opiptype": opiptype,
                 "refby": refby,
                 "branch": branch,
                 "test_names": testnames,
@@ -341,7 +330,8 @@ def hms_overall_report(request):
         print(f"Critical Error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
-    
+        
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def get_hms_patient_test_details(request):
@@ -352,70 +342,122 @@ def get_hms_patient_test_details(request):
         return JsonResponse({'error': 'Barcode is required'}, status=400)
     
     try:
-        # Get barcode details from Hmsbarcode using barcode
-        barcode_details = Hmsbarcode.objects.filter(barcode=barcode).first()
-        if not barcode_details:
-            return JsonResponse({'error': 'No barcode details found for the given barcode'}, status=404)
-        
-        billnumber = barcode_details.billnumber
-        
         # Get TestValue records using barcode
         test_values = TestValue.objects.filter(barcode=barcode)
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
         
-        # Get patient details from HmspatientBilling using billnumber
-        patient = HmspatientBilling.objects.filter(billnumber=billnumber).first()
-        if not patient:
-            return JsonResponse({'error': 'No patient details found for the given bill number'}, status=404)
+        # Get patient details from Hmsbarcode using barcode
+        barcode_details = Hmsbarcode.objects.filter(barcode=barcode).first()
+        if not barcode_details:
+            return JsonResponse({'error': 'No patient details found for the given barcode'}, status=404)
         
         # Get sample status from Hmssamplestatus using barcode
         sample_status = Hmssamplestatus.objects.filter(barcode=barcode)
+   
+        mongo_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        mongo_db = mongo_client.Diagnostics
+        core_testdetails_collection = mongo_db.core_testdetails
         
-        # Get barcodes information - collect all unique barcodes for this bill
-        barcodes = []
-        try:
-            # Get all barcodes associated with this bill number
-            all_barcodes_for_bill = Hmsbarcode.objects.filter(billnumber=billnumber)
-            barcodes = [bc.barcode for bc in all_barcodes_for_bill if bc.barcode]
-            # Remove duplicates while preserving order
-            barcodes = list(dict.fromkeys(barcodes))
-        except Exception:
-            barcodes = []
+        # Helper function to get parameter details by index or test_code
+        def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
+            """
+            Get parameter details from core_testdetails
+            Supports both dict (device_id-keyed) and list formats
+            Uses param_index for accurate matching when available
+            """
+            core_parameters = core_test.get("parameters", {})
+            params_list = []
+            
+            # Case 1: parameters is a dictionary with device_id keys
+            if isinstance(core_parameters, dict):
+                # Try to get parameters for the specific device_id
+                if device_id and device_id != "N/A" and device_id in core_parameters:
+                    params_list = core_parameters[device_id]
+                else:
+                    # Use first available device's parameters
+                    if len(core_parameters) > 0:
+                        first_device = list(core_parameters.keys())[0]
+                        params_list = core_parameters[first_device]
+            
+            # Case 2: parameters is a list (like PT test)
+            elif isinstance(core_parameters, list):
+                params_list = core_parameters
+            
+            # Ensure params_list is actually a list
+            if not isinstance(params_list, list):
+                return None
+            
+            # If param_index is provided, use it directly (most accurate)
+            if param_index is not None and 0 <= param_index < len(params_list):
+                return params_list[param_index]
+            
+            # Fallback: Find by test_code (may not be unique)
+            if test_code:
+                matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
+                if matching_params:
+                    return matching_params[0]
+            
+            return None
         
         all_results = []
         
         # Process each TestValue record
         for test_value_record in test_values:
-            # Filter for approved tests only
             approved_tests = []
             
-            # Ensure testdetails is a list
-            test_details_list = test_value_record.testdetails if isinstance(test_value_record.testdetails, list) else []
+            # Parse testdetails if it's a string
+            test_details_list = test_value_record.testdetails
+            if isinstance(test_details_list, str):
+                try:
+                    test_details_list = json.loads(test_details_list)
+                except:
+                    test_details_list = []
+            
+            if not isinstance(test_details_list, list):
+                test_details_list = []
             
             for test in test_details_list:
                 # Check if the test is approved
-                if test.get("approve") == True:  # Only include approved tests
-                    testname = test.get("testname")
-                    department = test.get("department", "N/A")
-                    NABL = test.get("NABL", "N/A")
+                if test.get("approve") == True:
+                    test_id = test.get("test_id")
+                    device_id = test.get("device_id")
+                    parameters = test.get("parameters", [])
+                    
+                    # Fetch test details from core_testdetails
+                    core_test = core_testdetails_collection.find_one({"test_id": test_id})
+                    
+                    if not core_test:
+                        continue
+                    
+                    testname = core_test.get("test_name")
+                    department = core_test.get("department", "N/A")
+                    NABL = core_test.get("NABL", False)
                     outsourced = test.get("outsourced", False)
-                    comment = test.get("comment", False)
+                    comment = test.get("comment", "")
                     verified_by = test.get("verified_by", "N/A")
                     approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
-                    parameters = test.get("parameters", [])
+                    specimen_type = core_test.get("specimen_type", "N/A")
                     
                     # Get sample status information
                     status = None
                     if sample_status.exists():
                         for sample_status_record in sample_status:
-                            status_details_list = sample_status_record.testdetails if isinstance(sample_status_record.testdetails, list) else []
-                            status = next(
-                                (status for status in status_details_list
-                                 if status.get("testname") == testname), None)
-                            if status:
-                                break
+                            status_details_list = sample_status_record.testdetails
+                            if isinstance(status_details_list, str):
+                                try:
+                                    status_details_list = json.loads(status_details_list)
+                                except:
+                                    status_details_list = []
+                            
+                            if isinstance(status_details_list, list):
+                                status = next(
+                                    (s for s in status_details_list if s.get("test_id") == test_id),
+                                    None
+                                )
+                                if status:
+                                    break
                     
                     samplecollected_time = status.get("samplecollected_time") if status else None
                     received_time = status.get("received_time") if status else None
@@ -430,18 +472,65 @@ def get_hms_patient_test_details(request):
                         "approve_by": approve_by,
                         "approve_time": approve_time,
                         "samplecollected_time": samplecollected_time,
-                        "received_time": received_time
+                        "received_time": received_time,
                     }
                     
-                    if parameters:
-                        test_detail["parameters"] = parameters
+                    # Handle parameters - match with core_testdetails using INDEX
+                    if parameters and len(parameters) > 0:
+                        enriched_parameters = []
+                        
+                        # Use index-based matching for accurate parameter retrieval
+                        for param_index, param_value in enumerate(parameters):
+                            test_code = param_value.get("test_code")
+                            value = param_value.get("value", "")
+                            param_comment = param_value.get("comment", "")
+                            
+                            # Get parameter definition using INDEX (most accurate)
+                            param_def = get_parameter_from_core(
+                                core_test, 
+                                device_id, 
+                                test_code=test_code, 
+                                param_index=param_index
+                            )
+                            
+                            if param_def:
+                                enriched_param = {
+                                    "name": param_def.get("test_name", ""),
+                                    "test_code": test_code,
+                                    "value": value,
+                                    "unit": param_def.get("unit", ""),
+                                    "reference_range": param_def.get("reference_range", ""),
+                                    "method": param_def.get("method", ""),
+                                    "specimen_type": specimen_type,
+                                    "sub_title": param_def.get("sub_title", ""),
+                                    "value_option": param_def.get("value_option", []),
+                                    "comment": param_comment
+                                }
+                                enriched_parameters.append(enriched_param)
+                            else:
+                                # Fallback if parameter definition not found
+                                enriched_param = {
+                                    "name": "N/A",
+                                    "test_code": test_code,
+                                    "value": value,
+                                    "unit": "N/A",
+                                    "reference_range": "N/A",
+                                    "method": "N/A",
+                                    "specimen_type": specimen_type,
+                                    "sub_title": "",
+                                    "value_option": [],
+                                    "comment": param_comment
+                                }
+                                enriched_parameters.append(enriched_param)
+                        
+                        test_detail["parameters"] = enriched_parameters
                     else:
+                        # No parameters - single test with value
                         test_detail.update({
-                            "method": test.get("method", ""),
-                            "specimen_type": test.get("specimen_type", ""),
+                            "method": core_test.get("method", ""),
                             "value": test.get("value", ""),
-                            "unit": test.get("unit", ""),
-                            "reference_range": test.get("reference_range", ""),
+                            "unit": core_test.get("unit", ""),
+                            "reference_range": core_test.get("reference_range", ""),
                             "sub_title": test.get("sub_title", "")
                         })
                     
@@ -450,18 +539,18 @@ def get_hms_patient_test_details(request):
             # Only add patient details if there are approved tests
             if approved_tests:
                 patient_details = {
-                    "patient_id": patient.patient_id,  # Fixed: use patient object
-                    "patientname": patient.patientname,  # Fixed: use patient object
-                    "age": patient.age,  # Fixed: use patient object
-                    "age_type": patient.age_type,  # Fixed: use patient object
-                    "gender": patient.gender,  # Fixed: use patient object
+                    "patient_id": barcode_details.patient_id,
+                    "patientname": barcode_details.patientname,
+                    "age": barcode_details.age,
+                    "age_type": barcode_details.age_type if hasattr(barcode_details, 'age_type') else "Years",
+                    "gender": barcode_details.gender,
                     "date": test_value_record.date,
                     "barcode": test_value_record.barcode,
-                    "bill_no": billnumber,
-                    "barcodes": barcodes,
+                    "bill_no": barcode_details.billnumber,
+                    "barcodes": [barcode],  # Just the current barcode
                     "testdetails": approved_tests,
-                    "refby": patient.ref_doctor,  # Fixed: use patient object
-                    "branch": patient.location_id,  # Fixed: use patient object
+                    "refby": barcode_details.ref_doctor if hasattr(barcode_details, 'ref_doctor') else "SELF",
+                    "branch": barcode_details.location_id if hasattr(barcode_details, 'location_id') else "N/A",
                 }
                 all_results.append(patient_details)
         
@@ -475,8 +564,10 @@ def get_hms_patient_test_details(request):
             return JsonResponse(all_results, safe=False)
             
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-    
+        import traceback
+        print(traceback.format_exc())
+        return JsonResponse({'error': str(e)}, status=500)   
+
 @csrf_exempt
 def hms_send_email(request):
     try:
@@ -685,52 +776,76 @@ IST = pytz.timezone(TIME_ZONE)
 @api_view(['PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 def hms_update_dispatch_status(request, barcode):
+    """
+    Update dispatch status for tests in core_testvalue collection.
+    Uses test_id instead of testname for accurate tracking.
+    """
     # MongoDB connection
     password = quote_plus('Smrft@2024')
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics  # Database name
     collection = db.core_testvalue
+    
     try:
         # Get auth-user-id from request data
         auth_user_id = request.data.get('auth-user-id')
         auth_user_name = request.data.get('auth-user-name')
+        
         if not auth_user_id:
-            return Response({"error": "auth-user-id parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "auth-user-id parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
         # Build the query filter with only barcode
         query_filter = {
             "barcode": barcode
         }
+        
         # Find ALL documents with the same barcode, sorted by created_date descending (latest first)
         test_value_records = list(collection.find(query_filter).sort("created_date", -1))
+        
         if not test_value_records:
             return Response({
                 "error": f"No TestValue records found for barcode: {barcode}"
             }, status=status.HTTP_404_NOT_FOUND)
-        # Dictionary to track the latest document for each testname
-        latest_documents_by_testname = {}
-        # Process each document to find the latest one for each testname
+        
+        # Dictionary to track the latest document for each test_id
+        latest_documents_by_test_id = {}
+        
+        # Process each document to find the latest one for each test_id
         for record in test_value_records:
             # Parse the testdetails field
             test_details = json.loads(record.get("testdetails", "[]"))
+            
             for test in test_details:
-                testname = test.get("testname", "Unknown")
-                # If this testname hasn't been seen yet, or this document is newer
-                if testname not in latest_documents_by_testname:
-                    latest_documents_by_testname[testname] = {
+                test_id = test.get("test_id")
+                
+                # Skip if test_id is missing
+                if not test_id:
+                    continue
+                
+                # If this test_id hasn't been seen yet, or this document is newer
+                if test_id not in latest_documents_by_test_id:
+                    latest_documents_by_test_id[test_id] = {
                         "document": record,
                         "test_details": test_details,
-                        "created_date": record.get("created_date")
+                        "created_date": record.get("created_date"),
+                        "testname": test.get("testname", "Unknown")
                     }
                 # Since records are sorted by created_date descending,
                 # the first occurrence is the latest
+        
         updated_count = 0
         total_tests_updated = 0
         updated_records = []
-        # Update dispatch status for the latest document of each testname
-        for testname, doc_info in latest_documents_by_testname.items():
+        
+        # Update dispatch status for the latest document of each test_id
+        for test_id, doc_info in latest_documents_by_test_id.items():
             document = doc_info["document"]
             test_details = doc_info["test_details"]
             tests_updated_in_doc = 0
+            
             # Update dispatch status for all tests in this document
             for test in test_details:
                 # Only update if dispatch is currently false
@@ -739,8 +854,10 @@ def hms_update_dispatch_status(request, barcode):
                     test["dispatched_by"] = auth_user_name
                     test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
                     tests_updated_in_doc += 1
+            
             # Convert the updated testdetails back to a JSON string
             updated_test_details = json.dumps(test_details)
+            
             # Update the document in MongoDB using the document's _id
             result = collection.update_one(
                 {"_id": document["_id"]},
@@ -750,29 +867,40 @@ def hms_update_dispatch_status(request, barcode):
                     "lastmodified_date": datetime.now(IST)
                 }}
             )
+            
             if result.matched_count > 0:
                 updated_count += 1
                 total_tests_updated += tests_updated_in_doc
                 updated_records.append({
                     "document_id": str(document["_id"]),
                     "created_date": document.get("created_date"),
-                    "testname": testname,
+                    "test_id": test_id,
+                    "testname": doc_info["testname"],
                     "tests_updated": tests_updated_in_doc,
-                    "all_test_names": [t.get("testname", "Unknown") for t in test_details]
+                    "all_tests": [
+                        {
+                            "test_id": t.get("test_id", "Unknown"),
+                            "testname": t.get("testname", "Unknown")
+                        } 
+                        for t in test_details
+                    ]
                 })
+        
         if updated_count == 0:
             return Response({
                 "message": f"No records were updated for barcode: {barcode}. All tests may already be dispatched."
             }, status=status.HTTP_200_OK)
+        
         return Response({
-            "message": "Dispatch status updated successfully for latest documents of each testname.",
+            "message": "Dispatch status updated successfully for latest documents of each test.",
             "barcode": barcode,
-            "unique_testnames_processed": len(latest_documents_by_testname),
+            "unique_test_ids_processed": len(latest_documents_by_test_id),
             "documents_updated": updated_count,
             "total_tests_updated": total_tests_updated,
             "modified_by": auth_user_id,
             "updated_records": updated_records
         }, status=status.HTTP_200_OK)
+        
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     finally:
