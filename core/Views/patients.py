@@ -1016,9 +1016,13 @@ def dashboard_data(request):
 
 @api_view(['PATCH'])
 @permission_classes([HasRoleAndDataPermission])
-def update_credit_amount(request, bill_no):
+def update_credit_amount(request):
     try:
         data = request.data
+        bill_no = data.get("bill_no")
+        
+        if not bill_no:
+             return Response({"error": "bill_no is required in payload"}, status=400)
         
         # 1. Update Django Billing Model
         billing = Billing.objects.filter(bill_no=bill_no).first()
@@ -1108,3 +1112,4 @@ def safe_parse_list(data):
             except:
                 pass
     return []
+
