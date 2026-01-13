@@ -2,7 +2,7 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime
-from ...models import Hmsbarcode, HmspatientBilling
+from ...models import Hmsbarcode
 import json
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
@@ -15,222 +15,270 @@ def save_hms_barcodes(request):
     if request.method == "POST":
         try:
             data = request.data
-            billnumber = data.get('billnumber')
+            billnumber = data.get('billnumber') or data.get('billnumber')
 
             # Check if bill_no already exists
             if Hmsbarcode.objects.filter(billnumber=billnumber).exists():
                 return JsonResponse({'error': 'Bill number already exists!'}, status=400)
 
-            # Extract employee ID from request (same as your other function)
+            # Extract employee ID from request
             employee_id = data.get('auth-user-id')
+            
+            # Get all fields from the payload
+            patient_id = data.get('patient_id', '')
+            ipnumber = data.get('ipnumber', '')
+            patientname = data.get('patientname', '')
+            age = data.get('age', 0)
+            age_type = data.get('age_type', '')
+            billnumber = data.get('billnumber', '')
+            gender = data.get('gender', '')
+            barcode = data.get('barcode', '')
+            IPOPType = data.get('IPOPType', '')
+            ref_doctor = data.get('ref_doctor', '')
+            
+            
+            date = data.get('date')
+            testdetails = data.get('testdetails', [])
+            
 
-                    
-            barcode = data.get('barcode')
-            date = data.get('date')  # Date as a string
-            testdetails = data.get('testdetails')
-
-            # Convert string to date object if needed
+            # Convert string to datetime object if needed
             if date:
                 try:
-                    date = datetime.strptime(date, "%d/%m/%Y %H:%M").date()
+                    # Try parsing with time first
+                    date = datetime.strptime(date, "%d/%m/%Y %H:%M")
                 except ValueError:
-                    date = datetime.strptime(date, "%d/%m/%Y").date()
+                    try:
+                        date = datetime.strptime(date, "%d/%m/%Y")
+                    except ValueError:
+                        # If it's already in ISO format from frontend
+                        date = datetime.fromisoformat(date.replace('Z', '+00:00'))
 
-            # Save patient details with created_by field
+            # Save all patient details
             Hmsbarcode.objects.create(
-                
-                date=date,                
-                barcode=barcode,
+                patient_id=patient_id,
+                ipnumber=ipnumber,
+                patientname=patientname,
+                age=age,
+                age_type=age_type,
                 billnumber=billnumber,
+                gender=gender,
+                barcode=barcode,
+                IPOPType=IPOPType,
+                ref_doctor=ref_doctor,          
+                date=date,
                 testdetails=testdetails,
-                created_by=employee_id,  # Add the created_by field
+                created_by=employee_id,
             )
+            
             return JsonResponse({'message': 'Barcodes saved successfully!'}, status=201)
 
         except Exception as e:
             return JsonResponse({'error': str(e)}, status=400)
         
+
+from rest_framework.decorators import api_view, permission_classes
+from django.http import JsonResponse
+from datetime import datetime, time
+from pymongo import MongoClient
+import pytz
+import json
+import os
+
 @api_view(["GET"])
 @permission_classes([HasRoleAndDataPermission])
 def get_hms_barcode_by_date(request):
-    import pymongo
-    from pymongo import MongoClient
-    import os
 
-    from_date = request.GET.get('from_date')
-    to_date = request.GET.get('to_date')
-    
-    # Maintain backward compatibility with single 'date' parameter
-    single_date = request.GET.get('date')
-    
+    from_date = request.GET.get("from_date")
+    to_date = request.GET.get("to_date")
+    single_date = request.GET.get("date")
+
     if single_date and not (from_date and to_date):
-        # Handle legacy single date parameter
         from_date = single_date
         to_date = single_date
-    elif not (from_date and to_date):
-        return JsonResponse({'error': 'from_date and to_date parameters are required.'}, status=400)
-    
+
+    if not from_date or not to_date:
+        return JsonResponse(
+            {"error": "from_date and to_date parameters are required."},
+            status=400
+        )
+
     try:
-        # Parse the provided dates
-        parsed_from_date = datetime.strptime(from_date, '%Y-%m-%d')
-        parsed_to_date = datetime.strptime(to_date, '%Y-%m-%d')
-        
-        # Validate date range
-        if parsed_from_date > parsed_to_date:
-            return JsonResponse({'error': 'from_date cannot be later than to_date.'}, status=400)
-        
-        # Create start and end datetime objects
-        start_of_range = datetime.combine(parsed_from_date, datetime.min.time())  # from_date 00:00:00
-        end_of_range = datetime.combine(parsed_to_date, datetime.max.time())    # to_date 23:59:59.999999
-       
-        # Query Billing records for the date range using date field
-        billing_records = HmspatientBilling.objects.filter(
-            date__gte=start_of_range, 
-            date__lte=end_of_range
-        ).order_by('-date')  # Order by most recent first
-       
-        processed_bills = set()
-        patient_data = []
+        # ------------------------------------------------
+        # IST → UTC CONVERSION (CORRECT)
+        # ------------------------------------------------
+        ist = pytz.timezone("Asia/Kolkata")
+        utc = pytz.UTC
 
-        # Process existing billing records
-        for billing in billing_records:
-            try:
-                if billing.billnumber in processed_bills:
-                    continue
-                    
-                processed_bills.add(billing.billnumber)
-                
-                tests = billing.testdetails
-                if isinstance(tests, str):
-                    try:
-                        tests = json.loads(tests)
-                    except json.JSONDecodeError:
-                        continue
-                
-                if not isinstance(tests, list):
-                    tests = []
-                
-                valid_tests = []
-                for test in tests:
-                    if not test.get('refund', False) and not test.get('cancellation', False):
-                        valid_tests.append(test)
-                
-                if not valid_tests:
-                    continue
-                
-                patient_dict = {
-                    'patient_id': billing.patient_id,
-                    'patientname': billing.patientname,
-                    'age': billing.age,
-                    'age_type': billing.age_type,
-                    'gender': billing.gender,
-                    'phone': billing.phone,
-                    'bill_no': billing.billnumber,
-                    'date': billing.date,
-                    'location_id': billing.location_id,
-                    'ref_doctor': billing.ref_doctor,
-                    'testdetails': valid_tests,
-                }
-                
-                patient_data.append(patient_dict)
-                
-            except Exception as e:
-                print(f"Error processing billing record {billing.billnumber}: {str(e)}")
-                continue
+        start_ist = ist.localize(datetime.strptime(from_date, "%Y-%m-%d"))
+        end_ist = ist.localize(
+            datetime.combine(
+                datetime.strptime(to_date, "%Y-%m-%d"),
+                time(23, 59, 59)
+            )
+        )
 
-        # Now, try fetching from machine_hmsmi collection directly using pymongo
-        try:
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-            db = client.Diagnostics
-            machine_collection = db.machine_hmsmi
-            
-            # Query Logic for machine data
-            # machine_hmsmi uses 'BillDate' as date field usually
-            
-            machine_query = {
-                "BillDate": {
-                    "$gte": start_of_range,
-                    "$lte": end_of_range
-                }
-            }
-            
-            machine_records = list(machine_collection.find(machine_query))
-            
-            # Group machine records by BillNumber
-            machine_data_grouped = {}
-            for rec in machine_records:
-                bill_no = rec.get("BillNumber")
-                if not bill_no:
-                    continue
-                
-                if bill_no not in machine_data_grouped:
-                    machine_data_grouped[bill_no] = []
-                machine_data_grouped[bill_no].append(rec)
-            
-            # Create patient objects from machine data if not already processed
-            for bill_no, records in machine_data_grouped.items():
-                if bill_no in processed_bills:
-                    continue # Skip if we already have it from HmspatientBilling
-                
-                processed_bills.add(bill_no)
-                
-                # Use the first record for patient info
-                first_rec = records[0]
-                
-                # Construct testdetails list
-                test_details = []
-                for r in records:
-                   test_details.append({
-                       "testname": r.get("SubTestName") or r.get("TestName"),
-                       "test_code": r.get("SubTestcode") or r.get("TestCode"),
-                       "price": 0, # Placeholder
-                       "status": "Pending", # Default
-                       "sub_title": r.get("SubTestName", ""),
-                   })
-                
-                patient_dict = {
-                    'patient_id': first_rec.get('IPOPNumber', ''),
-                    'patientname': first_rec.get('PatientName', ''),
-                    'age': first_rec.get('PatientAge', ''),
-                    'age_type': 'Y', # Default
-                    'gender': first_rec.get('Gender', ''),
-                    'phone': first_rec.get('mobilenumber', ''),
-                    'bill_no': bill_no,
-                    'date': first_rec.get('BillDate'),
-                    'location_id': '',
-                    'ref_doctor': first_rec.get('RefDoctor', ''),
-                    'testdetails': test_details,
-                    'source': 'machine_hmsmi'
-                }
-                
-                patient_data.append(patient_dict)
+        start_utc = start_ist.astimezone(utc)
+        end_utc = end_ist.astimezone(utc)
 
-        except Exception as e:
-            print(f"Error fetching machine data: {str(e)}")
-            # Don't fail the whole request, just log
-        
-        # Add summary information to the response
-        response_data = {
-            'data': patient_data,
-            'summary': {
-                'total_patients': len(patient_data),
-                'date_range': {
-                    'from': from_date,
-                    'to': to_date
-                },
-                'total_records_processed': len(patient_data) # Approximate
+        # ------------------------------------------------
+        # MongoDB Connection
+        # ------------------------------------------------
+        client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+        db = client.Diagnostics
+
+        billing_collection = db.core_hmspatientbilling
+        machine_collection = db.machine_hmsmi
+        test_collection = db.core_testdetails
+
+        # ------------------------------------------------
+        # DATE RANGE FILTERS (CORRECT)
+        # ------------------------------------------------
+        billing_filter = {
+            "date": {
+                "$gte": start_utc,
+                "$lte": end_utc
             }
         }
-        
-        # Return the filtered patient data with summary
-        return JsonResponse(response_data, safe=False)
-        
-    except ValueError as e:
+
+        machine_filter = {
+            "BillDate": {
+                "$gte": start_utc,
+                "$lte": end_utc
+            }
+        }
+
+        bill_map = {}
+        billing_test_ids = set()
+        machine_test_codes = set()
+
+        # ------------------------------------------------
+        # STEP 1: BILLING DATA
+        # ------------------------------------------------
+        for rec in billing_collection.find(billing_filter):
+            bill_no = rec.get("billnumber")
+            if not bill_no:
+                continue
+
+            tests = rec.get("testdetails", [])
+            if isinstance(tests, str):
+                tests = json.loads(tests)
+
+            test_ids = [t["test_id"] for t in tests if t.get("test_id")]
+            if not test_ids:
+                continue
+
+            billing_test_ids.update(test_ids)
+
+            bill_map[bill_no] = {
+                "source": "core_hmspatientbilling",
+                "patient_id": rec.get("patient_id", ""),
+                "patientname": rec.get("patientname", ""),
+                "age": rec.get("age", ""),
+                "gender": rec.get("gender", ""),
+                "IPOPType": rec.get("IPOPType", ""),
+                "phone": rec.get("phone", ""),
+                "date": rec.get("date"),
+                "ref_doctor": rec.get("ref_doctor", ""),
+                "test_ids": test_ids
+            }
+
+        # ------------------------------------------------
+        # STEP 2: MACHINE DATA
+        # ------------------------------------------------
+        for rec in machine_collection.find(machine_filter):
+            bill_no = rec.get("BillNumber")
+            test_code = rec.get("TestCode")
+
+            if not bill_no or bill_no in bill_map or not test_code:
+                continue
+
+            machine_test_codes.add(test_code)
+
+            bill_map[bill_no] = {
+                "source": "machine_hmsmi",
+                "patient_id": rec.get("IPOPNumber", ""),
+                "patientname": rec.get("PatientName", ""),
+                "age": rec.get("PatientAge", ""),
+                "gender": rec.get("Gender", ""),
+                "IPOPType": rec.get("IPOPType", ""),
+                "phone": rec.get("mobilenumber", ""),
+                "date": rec.get("BillDate"),
+                "ref_doctor": rec.get("RefDoctor", ""),
+                "test_codes": [test_code]
+            }
+
+        # ------------------------------------------------
+        # STEP 3: TEST MASTER LOOKUP
+        # ------------------------------------------------
+        test_lookup_by_id = {}
+        test_lookup_by_code = {}
+
+        for t in test_collection.find({
+            "$or": [
+                {"test_id": {"$in": list(billing_test_ids)}},
+                {"hms_testcode": {"$in": list(machine_test_codes)}}
+            ]
+        }):
+            if t.get("test_id"):
+                test_lookup_by_id[t["test_id"]] = t
+            if t.get("hms_testcode"):
+                test_lookup_by_code[t["hms_testcode"]] = t
+
+        # ------------------------------------------------
+        # STEP 4: RESPONSE
+        # ------------------------------------------------
+        patient_data = []
+
+        for bill_no, rec in bill_map.items():
+            testdetails = []
+
+            if rec["source"] == "core_hmspatientbilling":
+                for tid in rec["test_ids"]:
+                    t = test_lookup_by_id.get(tid, {})
+                    testdetails.append({
+                        "test_id": tid,
+                        "testname": t.get("test_name", "Unknown Test"),
+                        "collection_container": t.get("collection_container", ""),
+                        "shortcut": t.get("shortcut", ""),
+
+                    })
+            else:
+                for code in rec["test_codes"]:
+                    t = test_lookup_by_code.get(code, {})
+                    testdetails.append({
+                    "test_id": t.get("test_id"),              # ✅ internal test_id
+                    "hms_testcode": code,                     # ✅ keep HMS code separately
+                    "testname": t.get("test_name", "Unknown Test"),
+                    "collection_container": t.get("collection_container", ""),
+                    "shortcut": t.get("shortcut", ""),
+                })
+
+
+            patient_data.append({
+                "patient_id": rec["patient_id"],
+                "patientname": rec["patientname"],
+                "age": rec["age"],
+                "age_type": "Y",
+                "gender": rec["gender"],
+                "IPOPType": rec["IPOPType"],
+                "phone": rec["phone"],
+                "bill_no": bill_no,
+                "date": rec["date"],
+                "ref_doctor": rec["ref_doctor"],
+                "testdetails": testdetails,
+                "source": rec["source"]
+            })
+
         return JsonResponse({
-            'error': f'Invalid date format. Use YYYY-MM-DD format. Details: {str(e)}'
-        }, status=400)
+            "data": patient_data,
+            "summary": {
+                "total_patients": len(patient_data),
+                "date_range": {"from": from_date, "to": to_date}
+            }
+        }, safe=False)
+
     except Exception as e:
-        # Handle any other unexpected errors
-        return JsonResponse({
-            'error': f'An unexpected error occurred: {str(e)}'
-        }, status=500)
+        return JsonResponse(
+            {"error": str(e)},
+            status=500
+        )
