@@ -285,6 +285,7 @@ def get_samplestatus_testvalue(request):
                         patient_id = barcode_details.patient_id
                         age = barcode_details.age
                         gender = barcode_details.gender
+                        location_id = barcode_details.location_id
                         IPOPType = barcode_details.IPOPType
                 elif hasattr(sample_status, 'patient_id'):
                     patient_id = sample_status.patient_id
@@ -306,6 +307,7 @@ def get_samplestatus_testvalue(request):
                     'patientname': patient_name,
                     'age': age,
                     'gender': gender,
+                    'location_id': location_id,
                     'opiptype': IPOPType,
                     'barcode': barcode,
                     'date': safe_datetime_to_string(sample_status.date),
@@ -432,7 +434,7 @@ def get_samplestatus_testvalue(request):
                         'lastmodified_by': record.get('lastmodified_by', ''),
                         'lastmodified_date': safe_datetime_to_string(record.get('lastmodified_date')),
                         'barcode': barcode,
-                        'company_id': record.get('company_id', ''),
+                        'location_id': record.get('company_id', ''),
                         'patient_id': employee_id or 'Unknown ID',
                         'patientname': patient.get("employee_name", "Unknown Patient"),
                         'date': safe_datetime_to_string(record.get('date')),
@@ -515,7 +517,7 @@ def get_samplestatus_testvalue(request):
                         'pincode': patient.get('pincode', ''),
                         'dateOfBirth': patient.get('dateOfBirth', ''),
                         'barcode': barcode,
-                        'company_id': record.get('franchise_id', ''),
+                        'location_id': record.get('franchise_id', ''),
                         'date': safe_datetime_to_string(record.get('created_date')),
                         'testdetails': updated_tests,
                         'data_source': 'mongodb'
