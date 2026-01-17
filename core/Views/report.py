@@ -678,7 +678,7 @@ def get_patient_test_details(request):
             for test in test_details_list:
                 # Check if the test is approved
                 if test.get("approve") == True:  # Only include approved tests
-                    test_id = test.get("test_id")
+                    test_id = test.get("test_id")  # IMPORTANT: Get test_id
                     device_id = test.get("device_id")
                     parameters = test.get("parameters", [])
                     
@@ -725,7 +725,9 @@ def get_patient_test_details(request):
                     samplecollected_time = status.get("samplecollected_time") if status else None
                     received_time = status.get("received_time") if status else None
                     
+                    # CHANGED: Include test_id in the test_detail dictionary
                     test_detail = {
+                        "test_id": test_id,  # ADDED: Include test_id
                         "department": department,
                         "NABL": NABL,
                         "outsourced": outsourced,
@@ -844,7 +846,6 @@ def get_patient_test_details(request):
         import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)   
-    
 
 @csrf_exempt
 def send_email(request):

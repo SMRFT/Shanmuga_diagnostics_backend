@@ -420,7 +420,7 @@ def get_hms_patient_test_details(request):
             for test in test_details_list:
                 # Check if the test is approved
                 if test.get("approve") == True:
-                    test_id = test.get("test_id")
+                    test_id = test.get("test_id")  # IMPORTANT: Get test_id
                     device_id = test.get("device_id")
                     parameters = test.get("parameters", [])
                     
@@ -462,7 +462,9 @@ def get_hms_patient_test_details(request):
                     samplecollected_time = status.get("samplecollected_time") if status else None
                     received_time = status.get("received_time") if status else None
                     
+                    # CHANGED: Include test_id in the test_detail dictionary
                     test_detail = {
+                        "test_id": test_id,  # ADDED: Include test_id
                         "department": department,
                         "NABL": NABL,
                         "outsourced": outsourced,
@@ -528,6 +530,7 @@ def get_hms_patient_test_details(request):
                         # No parameters - single test with value
                         test_detail.update({
                             "method": core_test.get("method", ""),
+                            "specimen_type": specimen_type,
                             "value": test.get("value", ""),
                             "unit": core_test.get("unit", ""),
                             "reference_range": core_test.get("reference_range", ""),
@@ -566,7 +569,7 @@ def get_hms_patient_test_details(request):
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        return JsonResponse({'error': str(e)}, status=500)   
+        return JsonResponse({'error': str(e)}, status=500)
 
 @csrf_exempt
 def hms_send_email(request):
