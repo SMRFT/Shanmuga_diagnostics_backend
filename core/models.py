@@ -304,5 +304,19 @@ class CommunicationLog(AuditModel):
     
     def __str__(self):
         return f"{self.type} to {self.recipient}"
+<<<<<<< Updated upstream
 
+=======
+    
+class MBTestValue(AuditModel):
+    _id = models.CharField(max_length=50, primary_key=True)  
+    date = models.DateField()
+    barcode= models.CharField(max_length=50)
+    locationId= models.CharField(max_length=50)
+    testdetails = models.JSONField()  # Store all test details in JSON format   
+    def save(self, *args, **kwargs):
+        if not self._id:
+            self._id = str(ObjectId())  # Convert ObjectId to string
+        super().save(*args, **kwargs)
+>>>>>>> Stashed changes
 

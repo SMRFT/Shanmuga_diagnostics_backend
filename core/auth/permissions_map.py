@@ -98,7 +98,16 @@ PAGE_MAPPING = {
     #O/S Test Values:
     r'^/_b_a_c_k_e_n_d/LIS/os-samplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       
     r'^/_b_a_c_k_e_n_d/LIS/os-compare_test_details/?(\?.*)?$':'SD-P-TD',  
-    '/_b_a_c_k_e_n_d/LIS/os-test-value/save/':'SD-P-TD',
+
+    #M/B Test Values:
+    r'^/_b_a_c_k_e_n_d/LIS/micro_biology_testvalue/?(\?.*)?$':'SD-P-MBPD',       
+    r'^/_b_a_c_k_e_n_d/LIS/mb-compare_test_details/?(\?.*)?$':'SD-API-MBTD',  
+    '/_b_a_c_k_e_n_d/LIS/mb-test-value/save/':'SD-API-MBTD',
+
+    #M/B Test Approval:
+    r'^/_b_a_c_k_e_n_d/LIS/mb-test-values/?(\?.*)?$':'SD-P-MBTV',       
+    r'^/_b_a_c_k_e_n_d/LIS/mb-test-approval(?:/[^/]+)+/$':'SD-P-MBDF',
+    r'^/_b_a_c_k_e_n_d/LIS/mb-test-rerun(?:/[^/]+)+/$':'SD-P-MBDF',
 
     #Test Approval:
     r'^/_b_a_c_k_e_n_d/LIS/test-values/?(\?.*)?$':'SD-API-TV',       

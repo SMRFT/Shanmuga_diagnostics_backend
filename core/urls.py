@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
@@ -81,7 +81,17 @@ urlpatterns = [
     #Test Values:
     path('samplestatus-testvalue/', testvalue.get_samplestatus_testvalue, name='sample-status-list'), 
     path('compare_test_details/', testvalue.compare_test_details, name='compare_test_details'),
-    path('test-value/save/', testvalue.save_test_value, name='save_test_value'),    
+    path('test-value/save/', testvalue.save_test_value, name='save_test_value'),   
+
+    #M/B Test Values:
+    path('micro_biology_testvalue/', microbiology.micro_biology_testvalue, name='micro_biology_testvalue'),  
+    path('mb-compare_test_details/', microbiology.mb_compare_test_details, name='mb_compare_test_details'),
+    path('mb-test-value/save/', microbiology.mb_save_test_value, name='mb_save_test_value'),
+
+    #M/B Test Approval:y
+    path('mb-test-values/', microbiology.mb_get_test_values, name='mb_get_test_values'),
+    path('mb-test-approval/<str:barcode>/approve/', microbiology.mb_approve_test_detail, name='mb_approve_test_detail'),
+    path('mb-test-rerun/<str:barcode>/rerun/', microbiology.mb_rerun_test_detail, name='mb_rerun_test_detail'),
 
     #Out source Test Values:
     path('os-samplestatus-testvalue/', os_management.get_os_samplestatus_testvalue, name='os_sample-status-list'), 
