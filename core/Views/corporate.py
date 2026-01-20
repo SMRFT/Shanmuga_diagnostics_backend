@@ -1752,7 +1752,7 @@ def corporate_health_report(request):
 
 # Add new endpoint to fetch individual files
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def get_investigation_file(request):
     file_id = request.GET.get('file_id')
     if not file_id:
