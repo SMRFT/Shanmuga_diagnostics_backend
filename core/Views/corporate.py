@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def get_corporate_sample(request, batch_number):
     """
     Get all sample details for a specific batch number with employee information
@@ -215,7 +215,7 @@ def get_corporate_sample(request, batch_number):
                 client.close()
 @api_view(['PUT'])
 @csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def update_corporate_sample(request,barcode):
     """
     Bulk update sample status for multiple samples/tests
@@ -365,7 +365,7 @@ def update_corporate_sample(request,barcode):
 
 @api_view(['GET'])
 @csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def get_corporate_batch_generation_data(request):
     """
     Get all batch generation data where received=false with optional date filtering
@@ -483,7 +483,7 @@ def get_corporate_batch_generation_data(request):
 
 @api_view(['PATCH'])
 @csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def update_corporate_batch_received_status(request, batch_no):
     """
     Update the received status and optionally remarks for a specific batch using batch_no
