@@ -93,6 +93,13 @@ urlpatterns = [
     path('mb-test-approval/<str:barcode>/approve/', microbiology.mb_approve_test_detail, name='mb_approve_test_detail'),
     path('mb-test-rerun/<str:barcode>/rerun/', microbiology.mb_rerun_test_detail, name='mb_rerun_test_detail'),
 
+    #M/B Reports:   
+    path('mb_patient_test_sorting/', microbiology.mb_patient_test_sorting, name='mb_patient_test_sorting'),
+    path('mb_get_patient_test_details/', microbiology.mb_get_patient_test_details, name='mb_get_patient_test_details'),
+    path('hms_mb_get_patient_test_details/', microbiology.hms_mb_get_patient_test_details, name='hms_mb_get_patient_test_details'),
+    path('mb_update_dispatch_status/<str:barcode>/', microbiology.mb_update_dispatch_status, name='mb_update_dispatch_status'),
+
+
     #Out source Test Values:
     path('os-samplestatus-testvalue/', os_management.get_os_samplestatus_testvalue, name='os_sample-status-list'), 
     path('os-compare_test_details/', os_management.os_compare_test_details, name='os_compare_test_details'),
@@ -152,7 +159,6 @@ urlpatterns = [
     #HMS Report:
     path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
     path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_hms_patient_test_details'),
-    path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
     path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
     path("test-summary/", dashboard.test_summary, name="test-summary"),
     path("m-dashboard-stats/", m_dashboard.m_dashboard_stats, name="m_dashboard_stats"),
@@ -206,7 +212,6 @@ urlpatterns = [
     #HMS Report:
     path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
     path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_patient_test_details'),
-    path('hms_send-email/', hmsreport.hms_send_email, name='send_email'),
     path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
 
     #MIS:

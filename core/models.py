@@ -304,9 +304,6 @@ class CommunicationLog(AuditModel):
     
     def __str__(self):
         return f"{self.type} to {self.recipient}"
-<<<<<<< Updated upstream
-
-=======
     
 class MBTestValue(AuditModel):
     _id = models.CharField(max_length=50, primary_key=True)  
@@ -318,5 +315,3 @@ class MBTestValue(AuditModel):
         if not self._id:
             self._id = str(ObjectId())  # Convert ObjectId to string
         super().save(*args, **kwargs)
->>>>>>> Stashed changes
-

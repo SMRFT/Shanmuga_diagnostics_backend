@@ -23,22 +23,112 @@ from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from ..models import Patient
 from ..models import SampleStatus,Billing
-from ..models import TestValue
+from ..models import TestValue, MBTestValue
 from ..models import BarcodeTestDetails
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
-from ..models import SampleStatus, TestValue
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django.core.mail import EmailMessage
 import os
 from dotenv import load_dotenv
 import pytz
+from datetime import datetime
+from django.utils.dateparse import parse_datetime
 load_dotenv()
+# Define IST timezone
+TIME_ZONE = 'Asia/Kolkata'
+IST = pytz.timezone(TIME_ZONE)
 
-
+def get_department_status(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map):
+    """
+    Determine status for each department based on test details
+    Returns dict: {department_name: status}
+    """
+    department_status = {}
+    
+    # Group tests by department
+    tests_by_dept = {}
+    for test in test_list:
+        dept = test.get('department', 'N/A')
+        if dept and dept != 'N/A':  # Skip N/A departments
+            if dept not in tests_by_dept:
+                tests_by_dept[dept] = []
+            tests_by_dept[dept].append(test)
+    
+    # If no valid departments found, return empty dict
+    if not tests_by_dept:
+        return {}
+    
+    # Determine status for each department
+    for dept, tests in tests_by_dept.items():
+        dept_test_ids = {t.get('test_id') for t in tests if t.get('test_id')}
+        
+        # Get test values for this barcode
+        all_test_values = []
+        if barcode in test_value_map:
+            all_test_values.extend(test_value_map[barcode].get('testdetails', []))
+        if barcode in mb_test_value_map:
+            all_test_values.extend(mb_test_value_map[barcode].get('testdetails', []))
+        
+        # Filter test values for this department - match by test_id
+        dept_test_values = [tv for tv in all_test_values 
+                           if tv.get('test_id') in dept_test_ids and not tv.get('rerun', False)]
+        
+        # Check sample collection status
+        sample_tests = sample_status_map.get(barcode, [])
+        dept_samples = [st for st in sample_tests 
+                       if st.get('test_id') in dept_test_ids]
+        
+        # Determine department status
+        if not dept_samples:
+            department_status[dept] = 'Pending'
+        else:
+            all_collected = all(t.get('samplestatus') == 'Sample Collected' for t in dept_samples)
+            all_received = all(t.get('samplestatus') == 'Received' for t in dept_samples)
+            
+            if not dept_test_values:
+                if all_received:
+                    department_status[dept] = 'Received'
+                elif all_collected:
+                    department_status[dept] = 'Collected'
+                else:
+                    department_status[dept] = 'Pending'
+            else:
+                # Check if tests have values
+                def has_test_values(test):
+                    parameters = test.get("parameters", [])
+                    if not parameters:
+                        return bool(test.get("value"))
+                    return any(
+                        param.get("value") is not None and str(param.get("value")).strip() != ""
+                        for param in parameters
+                    )
+                
+                all_tested = all(has_test_values(tv) for tv in dept_test_values)
+                
+                # Check approval status
+                approved_test_ids = {tv.get('test_id') for tv in dept_test_values if tv.get('approve', False)}
+                all_approved = dept_test_ids.issubset(approved_test_ids) and len(approved_test_ids) > 0
+                
+                # Check dispatch status
+                approved_dept_tests = [tv for tv in dept_test_values if tv.get('approve', False)]
+                all_dispatched = all(tv.get('dispatch', False) for tv in approved_dept_tests) if approved_dept_tests else False
+                
+                if all_dispatched and all_approved:
+                    department_status[dept] = 'Dispatched'
+                elif all_approved:
+                    department_status[dept] = 'Approved'
+                elif all_tested:
+                    department_status[dept] = 'Tested'
+                elif all_received:
+                    department_status[dept] = 'Received'
+                else:
+                    department_status[dept] = 'In Progress'
+    
+    return department_status
 @api_view(['GET', 'PATCH'])
 @csrf_exempt
 def overall_report(request):
@@ -145,6 +235,13 @@ def overall_report(request):
         ).values("barcode", "testdetails", "created_date")
         print(f"Fetched {len(test_value_records)} TestValue records")
 
+        # Fetch MBTestValue records using Django ORM
+        mb_test_value_records = MBTestValue.objects.filter(
+            barcode__in=barcodes,
+            date__range=(make_aware(from_date), make_aware(to_date))
+        ).values("barcode", "testdetails", "created_date")
+        print(f"Fetched {len(mb_test_value_records)} MBTestValue records")
+
         # Organize status data
         sample_status_map = {}
         for record in sample_status_records:
@@ -180,6 +277,37 @@ def overall_report(request):
                 test_value_map[barcode]["created_date"] = created_date
 
         print(f"Processed test value map with {len(test_value_map)} unique barcodes")
+
+        # Organize MBTestValue data - COMBINE ALL RECORDS FOR SAME BARCODE
+        mb_test_value_map = {}
+        for record in mb_test_value_records:
+            barcode = record["barcode"]
+            created_date = record["created_date"]
+            testdetails = record["testdetails"]
+           
+            # Parse testdetails if it's a string
+            if isinstance(testdetails, str):
+                try:
+                    testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError:
+                    testdetails = []
+           
+            if barcode not in mb_test_value_map:
+                mb_test_value_map[barcode] = {
+                    "barcode": barcode,
+                    "testdetails": [],
+                    "created_date": created_date
+                }
+           
+            # Add all test details from this record
+            if isinstance(testdetails, list):
+                mb_test_value_map[barcode]["testdetails"].extend(testdetails)
+           
+            # Update to latest created_date
+            if created_date and (not mb_test_value_map[barcode]["created_date"] or created_date > mb_test_value_map[barcode]["created_date"]):
+                mb_test_value_map[barcode]["created_date"] = created_date
+
+        print(f"Processed MB test value map with {len(mb_test_value_map)} unique barcodes")
 
         # Format response
         formatted_data = []
@@ -252,45 +380,65 @@ def overall_report(request):
                 except json.JSONDecodeError:
                     pass
 
-            # Test list - Get test_ids and enrich with test names from MongoDB
+            # Test list - Get test_ids and enrich with test names and departments from MongoDB
             test_list = []
             test_ids = []
-            
+            departments_set = set()
+
             # Try to get test_ids from barcode_data or billing record
             test_field = barcode_data.get("testdetails", []) or record.get("testdetails", [])
-            
+
             if isinstance(test_field, str):
                 try:
                     test_field = json.loads(test_field.strip('"'))
                 except json.JSONDecodeError:
                     test_field = []
-            
+
             if isinstance(test_field, list):
                 test_ids = [test.get("test_id") for test in test_field if test.get("test_id")]
-            
-            # Enrich test details from MongoDB core_testdetails
+
+            # Enrich test details from MongoDB core_testdetails with department
             if test_ids:
                 for test_id in test_ids:
                     test_detail = test_details_collection.find_one(
                         {"test_id": test_id},
-                        {"_id": 0, "test_id": 1, "test_name": 1}
+                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1}
                     )
                     if test_detail:
+                        dept = test_detail.get("department", "N/A")
                         test_list.append({
                             "test_id": test_id,
-                            "testname": test_detail.get("test_name", "N/A")
+                            "testname": test_detail.get("test_name", "N/A"),
+                            "department": dept  # ADD THIS LINE
                         })
-            
+                        # Collect department
+                        if dept and dept != "N/A":
+                            departments_set.add(dept)
+
             # Fallback to test_names if available in billing record
             if not test_list:
                 test_names_str = record.get("test_names", "")
                 if test_names_str:
                     print(f"Using test_names fallback for barcode {barcode_data.get('barcode')}: {test_names_str}")
-                    test_list = [{"testname": name.strip()} for name in test_names_str.split(",") if name.strip()]
+                    test_list = [{"testname": name.strip(), "department": "N/A"} for name in test_names_str.split(",") if name.strip()]
 
             testnames = ", ".join([test.get("testname", "") for test in test_list])
             no_of_tests = len(test_list) or record.get("no_of_tests", 0)
 
+            # Format departments as comma-separated string
+            department = ", ".join(sorted(departments_set)) if departments_set else "N/A"
+
+            # Get department-wise status
+            barcode = barcode_data.get("barcode", None)
+            department_statuses = {}
+            if barcode and test_list:
+                department_statuses = get_department_status(
+                    test_list, 
+                    barcode, 
+                    sample_status_map, 
+                    test_value_map, 
+                    mb_test_value_map
+                )
             # Amounts
             try:
                 total_amount = int(float(record.get("totalAmount", 0) or 0))
@@ -312,10 +460,25 @@ def overall_report(request):
             status = record.get("status", "Registered")
             sample_tests = sample_status_map.get(barcode, []) if barcode else []
 
-            # Get combined test value data
+            # Get combined test value data from BOTH TestValue and MBTestValue
             latest_test_data = test_value_map.get(barcode, {}) if barcode else {}
-            all_test_values = latest_test_data.get("testdetails", [])
+            all_test_values = latest_test_data.get("testdetails", []).copy()
             test_created_date = latest_test_data.get("created_date", None)
+
+            # Add MBTestValue data
+            mb_test_data = mb_test_value_map.get(barcode, {}) if barcode else {}
+            mb_test_values = mb_test_data.get("testdetails", [])
+            mb_created_date = mb_test_data.get("created_date", None)
+            
+            # Combine test values from both sources
+            if mb_test_values:
+                all_test_values.extend(mb_test_values)
+                print(f"Added {len(mb_test_values)} MB test values for barcode {barcode}")
+                
+                # Update to latest created_date between both sources
+                if mb_created_date:
+                    if not test_created_date or mb_created_date > test_created_date:
+                        test_created_date = mb_created_date
 
             # Filter out rerun records
             valid_test_values = []
@@ -488,6 +651,8 @@ def overall_report(request):
                 "discount": discount,
                 "payment_method": payment_details,
                 "test_names": testnames,
+                "department": department,  
+                "department_statuses": department_statuses,
                 "no_of_tests": no_of_tests,
                 "bill_no": bill_no,
                 "registeredby": registeredby,
@@ -503,7 +668,8 @@ def overall_report(request):
     except Exception as e:
         print(f"Critical Error: {str(e)}")
         print(traceback.format_exc())
-        return JsonResponse({"error": str(e)}, status=500)   
+        return JsonResponse({"error": str(e)}, status=500)
+    
 
 @api_view(['GET'])
 @csrf_exempt
@@ -528,11 +694,13 @@ def patient_test_sorting(request):
         db = client.Diagnostics
         core_testdetails_collection = db["core_testdetails"]
         
-        # Filter test values by barcode
-        tests = TestValue.objects.filter(barcode=barcode, date=formatted_date).values("testdetails")
+        # Filter test values by barcode and include created_date
+        tests = TestValue.objects.filter(barcode=barcode, date=formatted_date).values("testdetails", "created_date")
         test_list = []
         
         for test in tests:
+            test_created_date = test.get("created_date")
+            
             testdetails_data = test["testdetails"]
             if isinstance(testdetails_data, str):
                 try:
@@ -544,24 +712,47 @@ def patient_test_sorting(request):
             else:
                 continue
             
-            # Filter only approved tests and enrich with test_name from core_testdetails
+            # Filter only approved tests and enrich with test_code and test_name from core_testdetails
             for test_item in testdetails_list:
                 if test_item.get('approve') is True:
                     test_id = test_item.get('test_id')
+                    test_code = test_item.get('test_code')
                     
-                    # Fetch test_name from core_testdetails collection
+                    # Fetch test_code and test_name from core_testdetails collection
                     if test_id:
+                        # Build query to match both test_id and test_code if available
+                        query = {"test_id": test_id}
+                        if test_code:
+                            query["test_code"] = test_code
+                        
                         core_test = core_testdetails_collection.find_one(
-                            {"test_id": test_id},
-                            {"test_name": 1, "_id": 0}
+                            query,
+                            {"test_code": 1, "test_name": 1, "_id": 0}
                         )
                         
                         if core_test:
-                            test_item['test_name'] = core_test.get('test_name', 'N/A')
+                            # Update test_code and test_name from core_testdetails
+                            test_item['test_code'] = core_test.get('test_code', 'N/A')
+                            test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
                         else:
-                            test_item['test_name'] = 'N/A'
+                            # If no match found, try with just test_id
+                            core_test = core_testdetails_collection.find_one(
+                                {"test_id": test_id},
+                                {"test_code": 1, "test_name": 1, "_id": 0}
+                            )
+                            
+                            if core_test:
+                                test_item['test_code'] = core_test.get('test_code', 'N/A')
+                                test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
+                            else:
+                                test_item['test_code'] = test_item.get('test_code', 'N/A')
+                                test_item['test_name'] = test_item.get('test_name', 'N/A')
                     else:
-                        test_item['test_name'] = 'N/A'
+                        test_item['test_code'] = test_item.get('test_code', 'N/A')
+                        test_item['test_name'] = test_item.get('test_name', 'N/A')
+                    
+                    # Add created_date to each test item
+                    test_item['created_date'] = test_created_date.isoformat() if test_created_date else None
                     
                     test_list.append(test_item)
         
@@ -1048,27 +1239,25 @@ def send_approval_email(request):
     print("Invalid request method for send_approval_email")
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
-# Define IST timezone
-TIME_ZONE = 'Asia/Kolkata'
-IST = pytz.timezone(TIME_ZONE)
+
 
 @api_view(['PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 def update_dispatch_status(request, barcode):
     """
-    Update dispatch status for tests in core_testvalue collection.
-    Uses test_id instead of testname for accurate tracking.
+    Update dispatch status for a specific test in core_testvalue collection.
+    Uses barcode, test_id, and created_date for accurate targeting.
     """
-    # MongoDB connection
-    password = quote_plus('Smrft@2024')
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics  # Database name
     collection = db.core_testvalue
     
     try:
-        # Get auth-user-id from request data
+        # Get parameters from request data
         auth_user_id = request.data.get('auth-user-id')
         auth_user_name = request.data.get('auth-user-name')
+        test_id = request.data.get('test_id')
+        created_date_str = request.data.get('created_date')
         
         if not auth_user_id:
             return Response(
@@ -1076,115 +1265,125 @@ def update_dispatch_status(request, barcode):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Build the query filter with only barcode
+        if not test_id:
+            return Response(
+                {"error": "test_id parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        if not created_date_str:
+            return Response(
+                {"error": "created_date parameter is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Parse the created_date string to datetime object
+        try:
+            # Parse ISO format datetime string (e.g., "2026-01-07T07:36:50.214000+00:00")
+            created_date = parse_datetime(created_date_str)
+            if not created_date:
+                # Try alternative parsing if parse_datetime fails
+                created_date = datetime.fromisoformat(created_date_str.replace('Z', '+00:00'))
+        except (ValueError, AttributeError) as e:
+            return Response(
+                {"error": f"Invalid created_date format: {created_date_str}. Expected ISO format."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Build the query filter with barcode and created_date
         query_filter = {
-            "barcode": barcode
+            "barcode": barcode,
+            "created_date": created_date
         }
         
-        # Find ALL documents with the same barcode, sorted by created_date descending (latest first)
-        test_value_records = list(collection.find(query_filter).sort("created_date", -1))
+        # Find the specific document
+        test_value_record = collection.find_one(query_filter)
         
-        if not test_value_records:
+        if not test_value_record:
             return Response({
-                "error": f"No TestValue records found for barcode: {barcode}"
+                "error": f"No TestValue record found for barcode: {barcode} and created_date: {created_date}",
+                "debug_info": {
+                    "barcode": barcode,
+                    "created_date_str": created_date_str,
+                    "parsed_created_date": str(created_date)
+                }
             }, status=status.HTTP_404_NOT_FOUND)
         
-        # Dictionary to track the latest document for each test_id
-        latest_documents_by_test_id = {}
+        # Parse the testdetails field
+        test_details = test_value_record.get("testdetails")
         
-        # Process each document to find the latest one for each test_id
-        for record in test_value_records:
-            # Parse the testdetails field
-            test_details = json.loads(record.get("testdetails", "[]"))
-            
-            for test in test_details:
-                test_id = test.get("test_id")
-                
-                # Skip if test_id is missing
-                if not test_id:
-                    continue
-                
-                # If this test_id hasn't been seen yet, or this document is newer
-                if test_id not in latest_documents_by_test_id:
-                    latest_documents_by_test_id[test_id] = {
-                        "document": record,
-                        "test_details": test_details,
-                        "created_date": record.get("created_date"),
-                        "testname": test.get("testname", "Unknown")
-                    }
-                # Since records are sorted by created_date descending,
-                # the first occurrence is the latest
+        # Handle both string and list formats
+        if isinstance(test_details, str):
+            test_details = json.loads(test_details)
+        elif not isinstance(test_details, list):
+            return Response({
+                "error": "Invalid testdetails format"
+            }, status=status.HTTP_400_BAD_REQUEST)
         
-        updated_count = 0
-        total_tests_updated = 0
-        updated_records = []
+        # Find and update the specific test
+        test_found = False
+        tests_updated = 0
         
-        # Update dispatch status for the latest document of each test_id
-        for test_id, doc_info in latest_documents_by_test_id.items():
-            document = doc_info["document"]
-            test_details = doc_info["test_details"]
-            tests_updated_in_doc = 0
-            
-            # Update dispatch status for all tests in this document
-            for test in test_details:
-                # Only update if dispatch is currently false
+        for test in test_details:
+            if test.get("test_id") == test_id:
+                test_found = True
+                # Only update if not already dispatched
                 if not test.get("dispatch", False):
                     test["dispatch"] = True
                     test["dispatched_by"] = auth_user_name
                     test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
-                    tests_updated_in_doc += 1
-            
-            # Convert the updated testdetails back to a JSON string
-            updated_test_details = json.dumps(test_details)
-            
-            # Update the document in MongoDB using the document's _id
-            result = collection.update_one(
-                {"_id": document["_id"]},
-                {"$set": {
-                    "testdetails": updated_test_details,
-                    "lastmodified_by": auth_user_id,
-                    "lastmodified_date": datetime.now(IST)
-                }}
-            )
-            
-            if result.matched_count > 0:
-                updated_count += 1
-                total_tests_updated += tests_updated_in_doc
-                updated_records.append({
-                    "document_id": str(document["_id"]),
-                    "created_date": document.get("created_date"),
-                    "test_id": test_id,
-                    "testname": doc_info["testname"],
-                    "tests_updated": tests_updated_in_doc,
-                    "all_tests": [
-                        {
-                            "test_id": t.get("test_id", "Unknown"),
-                            "testname": t.get("testname", "Unknown")
-                        } 
-                        for t in test_details
-                    ]
-                })
+                    tests_updated += 1
+                break
         
-        if updated_count == 0:
+        if not test_found:
             return Response({
-                "message": f"No records were updated for barcode: {barcode}. All tests may already be dispatched."
+                "error": f"Test with test_id {test_id} not found in the document"
+            }, status=status.HTTP_404_NOT_FOUND)
+        
+        if tests_updated == 0:
+            return Response({
+                "message": f"Test is already dispatched",
+                "test_id": test_id,
+                "barcode": barcode,
+                "created_date": created_date_str
             }, status=status.HTTP_200_OK)
         
-        return Response({
-            "message": "Dispatch status updated successfully for latest documents of each test.",
-            "barcode": barcode,
-            "unique_test_ids_processed": len(latest_documents_by_test_id),
-            "documents_updated": updated_count,
-            "total_tests_updated": total_tests_updated,
-            "modified_by": auth_user_id,
-            "updated_records": updated_records
-        }, status=status.HTTP_200_OK)
+        # Convert the updated testdetails back to a JSON string
+        updated_test_details = json.dumps(test_details)
+        
+        # Update the document in MongoDB
+        result = collection.update_one(
+            {"_id": test_value_record["_id"]},
+            {"$set": {
+                "testdetails": updated_test_details,
+                "lastmodified_by": auth_user_id,
+                "lastmodified_date": datetime.now(IST)
+            }}
+        )
+        
+        if result.matched_count > 0:
+            return Response({
+                "message": "Dispatch status updated successfully",
+                "barcode": barcode,
+                "created_date": created_date_str,
+                "test_id": test_id,
+                "tests_updated": tests_updated,
+                "modified_by": auth_user_id,
+                "document_id": str(test_value_record["_id"])
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({
+                "error": "Failed to update the document"
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
     except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        import traceback
+        return Response({
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     finally:
         client.close()
-
 
         
 @api_view(['GET'])
