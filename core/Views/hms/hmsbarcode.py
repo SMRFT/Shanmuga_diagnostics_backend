@@ -267,7 +267,7 @@ def get_hms_barcode_by_date(request):
                         "test_id": t.get("test_id"),
                         "hms_testcode": code,
                         "testname": t.get("test_name", "Unknown Test"),
-                        "container": t.get("collection_container", ""),
+                        "collection_container": t.get("collection_container", ""),
                         "shortcut": t.get("shortcut", ""),
                     })
 
@@ -296,3 +296,4 @@ def get_hms_barcode_by_date(request):
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
