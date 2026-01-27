@@ -131,6 +131,63 @@ def clinical_name(request):
         serializer = ClinicalNameSerializer(clinical_names, many=True)
         return Response(serializer.data)
 
+@permission_classes([HasRoleAndDataPermission])
+class ClinicalNameViewSet(viewsets.ModelViewSet):
+    queryset = ClinicalName.objects.all()
+    serializer_class = ClinicalNameSerializer
+    
+    def get_queryset(self):
+        queryset = ClinicalName.objects.all()
+        status_filter = self.request.query_params.get('status', None)
+        
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+
+        return queryset
+    
+    @action(detail=False, methods=['patch'], url_path='(?P<referrerCode>[^/.]+)/first_approve')
+    def first_approve(self, request, referrerCode=None):
+        try:
+            clinical_name = get_object_or_404(ClinicalName, referrerCode=referrerCode)
+            
+            if clinical_name.status != 'PENDING_APPROVAL':
+                return Response({"error": "This clinical name is not pending first approval."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Update approval status
+            clinical_name.first_approved = True
+            clinical_name.first_approved_timestamp = timezone.now()
+            clinical_name.status = 'PENDING_FINAL'
+            clinical_name.save()
+            
+            return Response(
+                {"message": "First approval completed successfully", "referrerCode": clinical_name.referrerCode},
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+    @action(detail=False, methods=['patch'], url_path='(?P<referrerCode>[^/.]+)/final_approve')
+    def final_approve(self, request, referrerCode=None):
+        try:
+            clinical_name = get_object_or_404(ClinicalName, referrerCode=referrerCode)
+            
+            if clinical_name.status != 'PENDING_FINAL':
+                return Response({"error": "This clinical name is not pending final approval."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Update final approval status
+            clinical_name.final_approved = True
+            clinical_name.final_approved_timestamp = timezone.now()
+            clinical_name.status = 'APPROVED'
+            clinical_name.save()
+            
+            return Response(
+                {"message": "Final approval completed successfully", "referrerCode": clinical_name.referrerCode},
+                status=status.HTTP_200_OK
+            )
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])

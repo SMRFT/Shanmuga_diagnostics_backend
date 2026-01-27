@@ -62,6 +62,10 @@ urlpatterns = [
     path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
+    path('clinical-names/', clinicalname.ClinicalNameViewSet.as_view({'get': 'list'}), name='clinical-names-list'),
+    path('clinical-names/<str:referrerCode>/', clinicalname.ClinicalNameViewSet.as_view({'get': 'retrieve'}), name='clinical-name-detail'),
+    path('clinical-names/<str:referrerCode>/first_approve/', clinicalname.ClinicalNameViewSet.as_view({'patch': 'first_approve'}), name='clinical-name-first-approve'),
+    path('clinical-names/<str:referrerCode>/final_approve/', clinicalname.ClinicalNameViewSet.as_view({'patch': 'final_approve'}), name='clinical-name-final-approve'),
     path('mou-preview/<str:file_id>/',clinicalname.preview_mou_file, name='preview_mou_file'),
     #Logistics
     path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),
@@ -249,7 +253,8 @@ urlpatterns = [
 
     path('get_devices/', testdetails.get_devices, name='get_devices'),
     path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
-
+    path('preetham_billing_dashboard/', preetham_hospital_report.preetham_billing_dashboard, name='preetham_billing_dashboard'),
+    path('get_preethampatient_test_details/', preetham_hospital_report.get_preethampatient_test_details, name='get_preethampatient_test_detailss'),
     
     path("test-summary/", dashboard.test_summary, name="test-summary"),
 

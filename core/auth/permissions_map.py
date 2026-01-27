@@ -50,7 +50,11 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/salesexecutive_report/': 'SD-P-SIR',
     r'^/_b_a_c_k_e_n_d/LIS/salesexecutive_report/?(\?.*)?$': 'SD-P-SIR',
     '/_b_a_c_k_e_n_d/LIS/get_clinicalname/':'SD-P-SCU',
-
+    '/_b_a_c_k_e_n_d/LIS/clinical-names/':'SD-P-SCU',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical-names/?(\?.*)?$':'SD-P-SCU',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/first_approve/?(\?.*)?$':'SD-P-SCU',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/final_approve/?(\?.*)?$':'SD-P-SCU',
+ 
     #Logistics
     '/_b_a_c_k_e_n_d/LIS/get_sample_collectors/':'SD-P-LGSC',
     '/_b_a_c_k_e_n_d/LIS/get_logistic_data/':'SD-P-LGLD',
@@ -191,6 +195,12 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
+
+
+    r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',
+    r'^/_b_a_c_k_e_n_d/LIS/preetham_billing_dashboard/?(\?.*)?$':'SD-P-PHD',
+    r'^/_b_a_c_k_e_n_d/LIS/get_preethampatient_test_details/?(\?.*)?$':'SD-P-GPT',
+
 }
 
 PAGE_ACTION_MAPPING = {
