@@ -260,9 +260,9 @@ class HmspatientBilling(AuditModel):
     age_type = models.CharField(max_length=10, blank=True)
     gender = models.CharField(max_length=10)
     phone = models.CharField(max_length=15, blank=True)
-    IPOPType=models.CharField(max_length=15, blank=True)
     location_id=models.CharField(max_length=15, blank=True,default="hms")
     billnumber= models.CharField(max_length=15, blank=True,primary_key=True)
+    IPOPType=models.CharField(max_length=15, blank=True)
     date=models.DateTimeField()
     ref_doctor= models.CharField(max_length=500, blank=True)
     testdetails = models.JSONField(blank=True, null=True)
@@ -304,4 +304,14 @@ class CommunicationLog(AuditModel):
     
     def __str__(self):
         return f"{self.type} to {self.recipient}"
-
+    
+class MBTestValue(AuditModel):
+    _id = models.CharField(max_length=50, primary_key=True)  
+    date = models.DateField()
+    barcode= models.CharField(max_length=50)
+    locationId= models.CharField(max_length=50)
+    testdetails = models.JSONField()  # Store all test details in JSON format   
+    def save(self, *args, **kwargs):
+        if not self._id:
+            self._id = str(ObjectId())  # Convert ObjectId to string
+        super().save(*args, **kwargs)

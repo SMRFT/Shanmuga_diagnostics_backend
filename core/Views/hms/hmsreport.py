@@ -22,14 +22,13 @@ import json
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from ...models import Hmssamplestatus,HmspatientBilling
-from ...models import TestValue
+from ...models import TestValue, MBTestValue
 from ...models import Hmsbarcode
 from django.http import JsonResponse
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
-from ...models import SampleStatus, TestValue
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django.core.mail import EmailMessage
@@ -38,12 +37,104 @@ from dotenv import load_dotenv
 import pytz
 load_dotenv()
 
+def get_department_status(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map):
+    """
+    Determine status for each department based on test details
+    Returns dict: {department_name: status}
+    """
+    department_status = {}
+    
+    # Group tests by department
+    tests_by_dept = {}
+    for test in test_list:
+        dept = test.get('department', 'N/A')
+        if dept and dept != 'N/A':  # Skip N/A departments
+            if dept not in tests_by_dept:
+                tests_by_dept[dept] = []
+            tests_by_dept[dept].append(test)
+    
+    # If no valid departments found, return empty dict
+    if not tests_by_dept:
+        return {}
+    
+    # Determine status for each department
+    for dept, tests in tests_by_dept.items():
+        dept_test_ids = {t.get('test_id') for t in tests if t.get('test_id')}
+        
+        # Get test values for this barcode
+        all_test_values = []
+        if barcode in test_value_map:
+            all_test_values.extend(test_value_map[barcode].get('testdetails', []))
+        if barcode in mb_test_value_map:
+            all_test_values.extend(mb_test_value_map[barcode].get('testdetails', []))
+        
+        # Filter test values for this department - match by test_id
+        dept_test_values = [tv for tv in all_test_values 
+                           if tv.get('test_id') in dept_test_ids and not tv.get('rerun', False)]
+        
+        # Check sample collection status
+        sample_tests = sample_status_map.get(barcode, [])
+        dept_samples = [st for st in sample_tests 
+                       if st.get('test_id') in dept_test_ids]
+        
+        # Determine department status
+        if not dept_samples:
+            department_status[dept] = 'Pending'
+        else:
+            all_collected = all(t.get('samplestatus') == 'Sample Collected' for t in dept_samples)
+            all_received = all(t.get('samplestatus') == 'Received' for t in dept_samples)
+            
+            if not dept_test_values:
+                if all_received:
+                    department_status[dept] = 'Received'
+                elif all_collected:
+                    department_status[dept] = 'Collected'
+                else:
+                    department_status[dept] = 'Pending'
+            else:
+                # Check if tests have values
+                def has_test_values(test):
+                    parameters = test.get("parameters", [])
+                    if not parameters:
+                        return bool(test.get("value"))
+                    return any(
+                        param.get("value") is not None and str(param.get("value")).strip() != ""
+                        for param in parameters
+                    )
+                
+                all_tested = all(has_test_values(tv) for tv in dept_test_values)
+                
+                # Check approval status
+                approved_test_ids = {tv.get('test_id') for tv in dept_test_values if tv.get('approve', False)}
+                all_approved = dept_test_ids.issubset(approved_test_ids) and len(approved_test_ids) > 0
+                
+                # Check dispatch status
+                approved_dept_tests = [tv for tv in dept_test_values if tv.get('approve', False)]
+                all_dispatched = all(tv.get('dispatch', False) for tv in approved_dept_tests) if approved_dept_tests else False
+                
+                if all_dispatched and all_approved:
+                    department_status[dept] = 'Dispatched'
+                elif all_approved:
+                    department_status[dept] = 'Approved'
+                elif all_tested:
+                    department_status[dept] = 'Tested'
+                elif all_received:
+                    department_status[dept] = 'Received'
+                else:
+                    department_status[dept] = 'In Progress'
+    
+    return department_status
 
 @api_view(['GET', 'PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 @csrf_exempt
 def hms_overall_report(request):
     try:
+        # MongoDB setup for test details
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        test_details_collection = db.core_testdetails
+
         # Date filters
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
@@ -105,6 +196,13 @@ def hms_overall_report(request):
         ).values("barcode", "testdetails", "created_date")
         print(f"Fetched {len(test_value_records)} TestValue records")
 
+        # Fetch MBTestValue records using Django ORM
+        mb_test_value_records = MBTestValue.objects.filter(
+            barcode__in=barcodes,
+            date__range=(make_aware(from_date), make_aware(to_date))
+        ).values("barcode", "testdetails", "created_date")
+        print(f"Fetched {len(mb_test_value_records)} MBTestValue records")
+
         # Organize status data
         sample_status_map = {}
         for record in sample_status_records:
@@ -141,6 +239,37 @@ def hms_overall_report(request):
 
         print(f"Processed test value map with {len(test_value_map)} unique barcodes")
 
+        # Organize MBTestValue data - COMBINE ALL RECORDS FOR SAME BARCODE
+        mb_test_value_map = {}
+        for record in mb_test_value_records:
+            barcode = record["barcode"]
+            created_date = record["created_date"]
+            testdetails = record["testdetails"]
+           
+            # Parse testdetails if it's a string
+            if isinstance(testdetails, str):
+                try:
+                    testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError:
+                    testdetails = []
+           
+            if barcode not in mb_test_value_map:
+                mb_test_value_map[barcode] = {
+                    "barcode": barcode,
+                    "testdetails": [],
+                    "created_date": created_date
+                }
+           
+            # Add all test details from this record
+            if isinstance(testdetails, list):
+                mb_test_value_map[barcode]["testdetails"].extend(testdetails)
+           
+            # Update to latest created_date
+            if created_date and (not mb_test_value_map[barcode]["created_date"] or created_date > mb_test_value_map[barcode]["created_date"]):
+                mb_test_value_map[barcode]["created_date"] = created_date
+
+        print(f"Processed MB test value map with {len(mb_test_value_map)} unique barcodes")
+
         # Format response
         formatted_data = []
         for record in barcode_records:
@@ -162,29 +291,93 @@ def hms_overall_report(request):
             refby = record.get("ref_doctor", "N/A")
             branch = record.get("location_id", "N/A")
 
-            # Test list from HMS billing record
+            # Test list from HMS billing record - ENRICH WITH DEPARTMENT FROM MONGODB
             test_list = []
+            test_ids = []
+            departments_set = set()
+            
             test_field = record.get("testdetails", [])
             if isinstance(test_field, str):
                 try:
-                    test_list = json.loads(test_field.strip('"'))
+                    test_field = json.loads(test_field.strip('"'))
                 except json.JSONDecodeError as e:
                     print(f"Error parsing test_field for billnumber {billnumber}: {e}")
-                    test_list = []
+                    test_field = []
             elif isinstance(test_field, list):
-                test_list = test_field
+                test_field = test_field
+            else:
+                test_field = []
+
+            # Extract test_ids
+            if isinstance(test_field, list):
+                test_ids = [test.get("test_id") for test in test_field if isinstance(test, dict) and test.get("test_id")]
+
+            # Enrich test details from MongoDB core_testdetails with department
+            if test_ids:
+                for test_id in test_ids:
+                    test_detail = test_details_collection.find_one(
+                        {"test_id": test_id},
+                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1}
+                    )
+                    if test_detail:
+                        dept = test_detail.get("department", "N/A")
+                        test_list.append({
+                            "test_id": test_id,
+                            "testname": test_detail.get("test_name", "N/A"),
+                            "department": dept
+                        })
+                        # Collect department
+                        if dept and dept != "N/A":
+                            departments_set.add(dept)
+                    else:
+                        # Fallback if not found in MongoDB
+                        original_test = next((t for t in test_field if t.get("test_id") == test_id), {})
+                        test_list.append({
+                            "test_id": test_id,
+                            "testname": original_test.get("testname", "N/A"),
+                            "department": "N/A"
+                        })
+
+            # Format departments as comma-separated string
+            department = ", ".join(sorted(departments_set)) if departments_set else "N/A"
 
             testnames = ", ".join([test.get("testname", "") for test in test_list if isinstance(test, dict)])
             no_of_tests = len(test_list)
+
+            # Get department-wise status
+            department_statuses = {}
+            if barcode and test_list:
+                department_statuses = get_department_status(
+                    test_list, 
+                    barcode, 
+                    sample_status_map, 
+                    test_value_map,
+                    mb_test_value_map  # Include MBTestValue data
+                )
 
             # STATUS DETERMINATION (using test_id instead of test_name)
             status = "Registered"  # Default status
             sample_tests = sample_status_map.get(barcode, []) if barcode else []
 
-            # Get combined test value data
+            # Get combined test value data from BOTH TestValue and MBTestValue
             latest_test_data = test_value_map.get(barcode, {}) if barcode else {}
-            all_test_values = latest_test_data.get("testdetails", [])
+            all_test_values = latest_test_data.get("testdetails", []).copy()
             test_created_date = latest_test_data.get("created_date", None)
+
+            # Add MBTestValue data
+            mb_test_data = mb_test_value_map.get(barcode, {}) if barcode else {}
+            mb_test_values = mb_test_data.get("testdetails", [])
+            mb_created_date = mb_test_data.get("created_date", None)
+            
+            # Combine test values from both sources
+            if mb_test_values:
+                all_test_values.extend(mb_test_values)
+                print(f"Added {len(mb_test_values)} MB test values for barcode {barcode}")
+                
+                # Update to latest created_date between both sources
+                if mb_created_date:
+                    if not test_created_date or mb_created_date > test_created_date:
+                        test_created_date = mb_created_date
 
             # Filter out rerun records
             valid_test_values = []
@@ -317,6 +510,8 @@ def hms_overall_report(request):
                 "refby": refby,
                 "branch": branch,
                 "test_names": testnames,
+                "department": department,  # Department field with actual values from MongoDB
+                "department_statuses": department_statuses,  # Department-wise status
                 "no_of_tests": no_of_tests,
                 "billnumber": billnumber,
                 "barcode": barcode,
@@ -330,7 +525,7 @@ def hms_overall_report(request):
         print(f"Critical Error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
-        
+
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -420,7 +615,7 @@ def get_hms_patient_test_details(request):
             for test in test_details_list:
                 # Check if the test is approved
                 if test.get("approve") == True:
-                    test_id = test.get("test_id")
+                    test_id = test.get("test_id")  # IMPORTANT: Get test_id
                     device_id = test.get("device_id")
                     parameters = test.get("parameters", [])
                     
@@ -462,7 +657,9 @@ def get_hms_patient_test_details(request):
                     samplecollected_time = status.get("samplecollected_time") if status else None
                     received_time = status.get("received_time") if status else None
                     
+                    # CHANGED: Include test_id in the test_detail dictionary
                     test_detail = {
+                        "test_id": test_id,  # ADDED: Include test_id
                         "department": department,
                         "NABL": NABL,
                         "outsourced": outsourced,
@@ -528,6 +725,7 @@ def get_hms_patient_test_details(request):
                         # No parameters - single test with value
                         test_detail.update({
                             "method": core_test.get("method", ""),
+                            "specimen_type": specimen_type,
                             "value": test.get("value", ""),
                             "unit": core_test.get("unit", ""),
                             "reference_range": core_test.get("reference_range", ""),
@@ -566,208 +764,8 @@ def get_hms_patient_test_details(request):
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        return JsonResponse({'error': str(e)}, status=500)   
+        return JsonResponse({'error': str(e)}, status=500)
 
-@csrf_exempt
-def hms_send_email(request):
-    try:
-        subject = request.POST.get('subject', 'No Subject')
-        message = request.POST.get('message', 'No Message')
-        recipient_list = request.POST.getlist('recipients') or ['shanmugainnovations@gmail.com']
-        from_email = request.POST.get('from_email', settings.DEFAULT_FROM_EMAIL)
-        signature = (
-            "Contact Us,\nShanmuga Hospital,\n24, Saradha College Road,\n"
-            "Salem-636007 Tamil Nadu,\n\n6369131631, 0427 270 6666,\n"
-            "info@shanmugahospital.com,\nhttps://shanmugahospital.com/"
-        )
-        files = request.FILES.getlist('attachments')
-        if not recipient_list:
-            return JsonResponse({'status': 'error', 'message': 'At least one recipient is required to send the email.'}, status=400)
-        email = EmailMessage(
-            subject=subject,
-            body=message + "\n\n" + signature,
-            from_email=from_email,
-            to=recipient_list,
-        )
-        for file in files:
-            email.attach(file.name, file.read(), file.content_type)
-        email.send()
-        return JsonResponse({'status': 'success', 'message': 'Email sent successfully!'})
-    except Exception as e:
-        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)    
-
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def hms_send_approval_email(request):
-    if request.method == 'POST':
-        try:
-            print("Received approval email request")
-            # Parse JSON request data
-            try:
-                data = json.loads(request.body.decode('utf-8'))
-                test_name = data.get('test_name')
-                recipient_email = data.get('recipient_email')
-                print(f"Test name from request: {test_name}")
-                print(f"Recipient email from request: {recipient_email}")
-                if not test_name:
-                    print("Error: Test name is missing")
-                    return JsonResponse({'error': 'Test name is required'}, status=400)
-            except json.JSONDecodeError as e:
-                print(f"JSON decode error: {e}")
-                return JsonResponse({'error': 'Invalid JSON'}, status=400)
-            # Connect to MongoDB to verify the test exists
-            try:
-                password = quote_plus('Smrft@2024')
-                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-                db = client.Diagnosttics
-                collection = db.core_testdetails
-                # Check if test exists and get all test details
-                test = collection.find_one({'test_name': test_name})
-                if not test:
-                    print(f"Test not found: {test_name}")
-                    return JsonResponse({'error': 'Test not found'}, status=404)
-                # Convert ObjectId to string for JSON serialization if needed
-                if '_id' in test:
-                    test['_id'] = str(test['_id'])
-                print(f"Test found: {test_name}")
-            except Exception as mongo_err:
-                print(f"MongoDB connection error: {mongo_err}")
-                return JsonResponse({'error': f'Database error: {str(mongo_err)}'}, status=500)
-            # Generate approval URL
-
-            # For local development, override the URL if needed
-            base_url = 'https://shinova.in1.cloudlets.co.in/'
-            approval_url = f"{base_url}_b_a_c_k_e_n_d/Diagnostics/approve_test/?test_name={test_name}"
-            # Format test details for email
-            test_details_str = ""
-            for key, value in test.items():
-                if key != '_id' and key != 'parameters':
-                    test_details_str += f"{key.replace('_', ' ').title()}: {value}\n"
-            # Handle parameters separately if they exist and are in JSON format
-            if 'parameters' in test:
-                try:
-                    parameters = json.loads(test['parameters']) if isinstance(test['parameters'], str) else test['parameters']
-                    if parameters:
-                        test_details_str += "\nParameters:\n"
-                        for i, param in enumerate(parameters, 1):
-                            test_details_str += f"  Parameter {i}:\n"
-                            for param_key, param_value in param.items():
-                                test_details_str += f"    {param_key.replace('_', ' ').title()}: {param_value}\n"
-                except (json.JSONDecodeError, TypeError):
-                    test_details_str += f"\nParameters: {test.get('parameters', 'Not available')}\n"
-            # Compose email with HTML for better formatting and button
-            subject = f'Approval Request: Test {test_name}'
-            # HTML email template with direct approval button - improved for spam prevention
-            html_message = f"""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Test Approval Request</title>
-                <style>
-                    body {{ font-family: Arial, sans-serif; margin: 20px; color: #333333; }}
-                    .container {{ max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
-                    .header {{ background-color: #F5F5F5; padding: 10px; border-radius: 5px; margin-bottom: 20px; }}
-                    .test-details {{ white-space: pre-line; margin-bottom: 20px; }}
-                    .button {{ display: inline-block; padding: 10px 20px; background-color: #4CAF50; color: white;
-                               text-decoration: none; border-radius: 5px; font-weight: bold; }}
-                    .footer {{ font-size: 12px; color: #666; margin-top: 30px; border-top: 1px solid #ddd; padding-top: 10px; }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <div class="header">
-                        <h2>Lab Test Approval Request</h2>
-                    </div>
-                    <p>Hello,</p>
-                    <p>A new lab test has been submitted and requires your approval. Here are the details:</p>
-                    <div class="test-details">
-                        {test_details_str}
-                    </div>
-                    <p>To approve this test, please click the button below:</p>
-                    <p><a href="{approval_url}" class="button">Approve Test</a></p>
-                    <div class="footer">
-                        <p>This is an automated message from Shanmuga Diagnostics Laboratory System. If you did not request this approval, please ignore this email.</p>
-                        <p>© 2025 Shanmuga Diagnostics. All rights reserved.</p>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-            # Plain text version for email clients that don't support HTML
-            plain_message = f"""
-            Lab Test Approval Request
-            Hello,
-            A new lab test has been submitted and requires your approval. Here are the details:
-            {test_details_str}
-            To approve this test, please click on the following link:
-            {approval_url}
-            This is an automated message from Shanmuga Diagnostics System. If you did not request this approval, please ignore this email.
-            © 2025 Shanmuga Diagnostics. All rights reserved.
-            """
-            # Create the recipient list
-            # Use provided email if available, otherwise use default
-            recipient_list = []
-            if recipient_email:
-                recipient_list.append(recipient_email)
-
-            # Always include default emails
-            default_emails = ['drprabusankar@smrft.org', 'drpriya@smrft.org']
-            for email in default_emails:
-                if email not in recipient_list:
-                    recipient_list.append(email)
-
-            # Send email using smtplib directly for more control
-            try:
-                print(f"Sending email to: {recipient_list}")
-                import smtplib
-                from email.mime.multipart import MIMEMultipart
-                from email.mime.text import MIMEText
-                from email.utils import formatdate, make_msgid
-                # Set up the SMTP server
-                smtp_server = "smtp.gmail.com"
-                smtp_port = 587
-                smtp_username = settings.EMAIL_HOST_USER
-                smtp_password = settings.EMAIL_HOST_PASSWORD  # Make sure this is an app password if using Gmail
-                # Create message container
-                msg = MIMEMultipart('alternative')
-                msg['Subject'] = subject
-                msg['From'] = f"Shanmuga Diagnostics<{smtp_username}>"
-                msg['To'] = ", ".join(recipient_list)
-                msg['Date'] = formatdate(localtime=True)
-                msg['Message-ID'] = make_msgid(domain='shinovadatabase.in')
-                # Add custom headers to reduce chance of being marked as spam
-                msg.add_header('X-Priority', '1')  # 1 = High priority
-                msg.add_header('X-MSMail-Priority', 'High')
-                msg.add_header('Importance', 'High')
-                msg.add_header('X-Mailer', 'Shanmuga Diagnostics Approval System')
-                # Record-Route might help with deliverability
-                msg.add_header('Return-Path', smtp_username)
-                # Attach parts
-                part1 = MIMEText(plain_message, 'plain')
-                part2 = MIMEText(html_message, 'html')
-                msg.attach(part1)
-                msg.attach(part2)
-                # Create SMTP session
-                server = smtplib.SMTP(smtp_server, smtp_port)
-                server.ehlo()
-                server.starttls()
-                server.ehlo()
-                server.login(smtp_username, smtp_password)
-                # Send email
-                server.sendmail(smtp_username, recipient_list, msg.as_string())
-                server.quit()
-                print("Email sent successfully using direct SMTP")
-                return JsonResponse({'message': 'Approval email sent successfully'}, status=200)
-            except Exception as email_err:
-                print(f"Email sending error: {email_err}")
-                return JsonResponse({'error': f'Email sending failed: {str(email_err)}'}, status=500)
-        except Exception as e:
-            print(f"General error sending approval email: {e}")
-            return JsonResponse({'error': str(e)}, status=500)
-    print("Invalid request method for send_approval_email")
-    return JsonResponse({'error': 'Invalid request method'}, status=405)
 
 # Define IST timezone
 TIME_ZONE = 'Asia/Kolkata'

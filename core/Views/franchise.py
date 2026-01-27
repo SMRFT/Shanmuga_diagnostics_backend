@@ -513,33 +513,50 @@ def franchise_overall_report(request):
 
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
+        selected_date = request.GET.get("selected_date")
         patient_id = request.GET.get("patient_id")
         
+        print("Received query parameters:", request.GET)
+        print(f"from_date: {from_date}, to_date: {to_date}, selected_date: {selected_date}, patient_id: {patient_id}")
+        
         try:
-            if from_date:
+            if selected_date:
+                selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
+                from_date = selected_date_parsed
+                to_date = selected_date_parsed + timedelta(days=1)
+                print(f"Using selected_date: {selected_date}, parsed from_date: {from_date}, to_date: {to_date}")
+            elif from_date and to_date:
                 from_date = datetime.strptime(from_date, "%Y-%m-%d")
-            if to_date:
                 to_date = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+                print(f"Using date range - parsed from_date: {from_date}, to_date: {to_date}")
+            else:
+                print("Missing date parameters")
+                return JsonResponse({"error": "Either 'selected_date' or both 'from_date' and 'to_date' are required"}, status=400)
         except ValueError:
+            print("Invalid date format received")
             return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
         
         # Build MongoDB query - using created_date for consistency
         query = {}
         if patient_id:
             query["patient_id"] = patient_id
-        if from_date and to_date:
-            query["created_date"] = {"$gte": from_date, "$lt": to_date}
-        elif from_date:
-            query["created_date"] = {"$gte": from_date}
-        elif to_date:
-            query["created_date"] = {"$lt": to_date}
+        query["created_date"] = {"$gte": from_date, "$lt": to_date}
+        
+        print(f"Franchise billing query: {query}")
         
         patients = list(patients_collection.find(query))
+        print(f"Found {len(patients)} franchise billing records")
+        if patients:
+            print("Sample franchise billing record:", patients[0])
+        
         if not patients:
             return JsonResponse([], safe=False)
         
         patient_ids = [p.get("patient_id") for p in patients if p.get("patient_id")]
         barcodes = [p.get("barcode") for p in patients if p.get("barcode")]
+        
+        print(f"Patient IDs for querying: {patient_ids}")
+        print(f"Barcodes for querying: {barcodes}")
         
         # Get patient details from franchise_patient collection
         patient_details_map = {}
@@ -547,6 +564,8 @@ def franchise_overall_report(request):
             patient_details = franchise_patient_collection.find({"patient_id": {"$in": patient_ids}})
             for patient_detail in patient_details:
                 patient_details_map[patient_detail.get("patient_id")] = patient_detail
+        
+        print(f"Fetched {len(patient_details_map)} patient detail records")
         
         # Status data: bulk fetch from MongoDB - use patient_id
         sample_status_records = sample_status_colletion.find({
@@ -560,18 +579,15 @@ def franchise_overall_report(request):
             if record and isinstance(record, dict)  # Ensure record is a dict
         ]
         
+        print(f"Fetched {len(sample_status_records)} franchise sample status records")
+        
         # For TestValue objects, use barcode to link with franchise_billing
-        if from_date and to_date:
-            from_datetime = make_aware(from_date)
-            to_datetime = make_aware(to_date - timedelta(days=1))
-            test_value_records = TestValue.objects.filter(
-                barcode__in=barcodes,
-                date__range=(from_datetime, to_datetime)
-            ).values("barcode", "testdetails")
-        else:
-            test_value_records = TestValue.objects.filter(
-                barcode__in=barcodes
-            ).values("barcode", "testdetails")
+        test_value_records = TestValue.objects.filter(
+            barcode__in=barcodes,
+            date__range=(from_date.date(), to_date.date())
+        ).values("barcode", "testdetails", "created_date")
+        
+        print(f"Fetched {len(test_value_records)} TestValue records")
         
         # Create a mapping from barcode to patient_id from billing records
         barcode_to_patient_map = {}
@@ -587,16 +603,47 @@ def franchise_overall_report(request):
                 if patient_id_key:
                     sample_status_map.setdefault(patient_id_key, []).extend(record["testdetails"])
         
-        # Organize test value data using barcode mapping
+        # Organize test value data using barcode mapping - COMBINE ALL RECORDS FOR SAME BARCODE
         test_value_map = {}
         for record in test_value_records:
-            if record and isinstance(record, dict):
-                barcode = record.get("barcode")
-                if barcode and barcode in barcode_to_patient_map:
-                    patient_id = barcode_to_patient_map[barcode]
-                    test_value_map.setdefault(patient_id, {"barcode": barcode, "testdetails": []})
-                    if record.get("testdetails"):
-                        test_value_map[patient_id]["testdetails"].extend(record["testdetails"])
+            if not isinstance(record, dict):
+                continue
+                
+            barcode = record.get("barcode")
+            created_date = record.get("created_date")
+            testdetails = record.get("testdetails")
+            
+            if not barcode or barcode not in barcode_to_patient_map:
+                continue
+                
+            patient_id = barcode_to_patient_map[barcode]
+            
+            # Parse testdetails if it's a string
+            if isinstance(testdetails, str):
+                try:
+                    testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError:
+                    testdetails = []
+            
+            if patient_id not in test_value_map:
+                test_value_map[patient_id] = {
+                    "barcode": barcode,
+                    "testdetails": [],
+                    "created_date": created_date
+                }
+            
+            # Add all test details from this record
+            if isinstance(testdetails, list):
+                test_value_map[patient_id]["testdetails"].extend(testdetails)
+            
+            # Update to latest created_date
+            if created_date and test_value_map[patient_id]["created_date"]:
+                if created_date > test_value_map[patient_id]["created_date"]:
+                    test_value_map[patient_id]["created_date"] = created_date
+            elif created_date:
+                test_value_map[patient_id]["created_date"] = created_date
+        
+        print(f"Processed test value map with {len(test_value_map)} unique patient IDs")
         
         # Final result
         formatted_data = []
@@ -703,17 +750,33 @@ def franchise_overall_report(request):
             elif isinstance(credit_details_raw, list):
                 credit_details = credit_details_raw
             
-            # Status determination
+            # STATUS DETERMINATION (using test_id instead of testname)
             barcode = patient.get("barcode")
-            status = "Registered"
+            status = "Registered"  # Default status
             sample_tests = sample_status_map.get(pid, [])
-            test_values = test_value_map.get(pid, {}).get("testdetails", [])
             
-            # Use barcode from test_value_map if available, similar to first document
-            if not barcode and test_value_map.get(pid, {}).get("barcode"):
-                barcode = test_value_map.get(pid, {}).get("barcode")
+            # Get combined test value data
+            latest_test_data = test_value_map.get(pid, {})
+            all_test_values = latest_test_data.get("testdetails", [])
+            test_created_date = latest_test_data.get("created_date", None)
             
-            # SAFETY CHECKS for sample_tests
+            # Use barcode from test_value_map if available
+            if not barcode and latest_test_data.get("barcode"):
+                barcode = latest_test_data.get("barcode")
+            
+            # Filter out rerun records
+            valid_test_values = []
+            unapproved_tests = []
+            if all_test_values:
+                for test_record in all_test_values:
+                    if not test_record.get("rerun", False):
+                        valid_test_values.append(test_record)
+                        if not test_record.get("approve", False):
+                            unapproved_tests.append(test_record)
+            
+            print(f"Patient ID: {pid}, Barcode: {barcode}, Total test records: {len(all_test_values)}, Valid (non-rerun) tests: {len(valid_test_values)}, Unapproved tests: {len(unapproved_tests)}")
+            
+            # Sample collection status
             all_collected = all(
                 t.get("samplestatus") == "Sample Collected" if isinstance(t, dict) else False
                 for t in sample_tests
@@ -744,61 +807,114 @@ def franchise_overall_report(request):
             elif partially_received:
                 status = "Partially Received"
             
-            # SAFETY CHECKS for test_values
-            if test_values:
-                all_tested = all(
-                    t.get("value") is not None if isinstance(t, dict) else False
-                    for t in test_values
-                )
-                partially_tested = any(
-                    t.get("value") is not None if isinstance(t, dict) else False
-                    for t in test_values
-                )
-                approve_all = all(
-                    t.get("approve") if isinstance(t, dict) else False
-                    for t in test_values
-                )
-                approve_partial = any(
-                    t.get("approve") if isinstance(t, dict) else False
-                    for t in test_values
-                )
-                dispatch_all = all(
-                    t.get("dispatch") if isinstance(t, dict) else False
-                    for t in test_values
-                )
+            # Test value status logic (using test_id for comparison)
+            if valid_test_values:
+                # Check testing status
+                def has_test_values(test):
+                    parameters = test.get("parameters", [])
+                    if not parameters:
+                        return bool(test.get("value"))
+                    return any(
+                        param.get("value") is not None and str(param.get("value")).strip() != ""
+                        for param in parameters
+                    )
                 
-                if all_received or partially_received:
-                    if all_tested:
-                        status = "Tested"
-                    elif partially_tested:
-                        status = "Partially Tested"
+                all_tested = all(has_test_values(t) for t in valid_test_values)
+                partially_tested = any(has_test_values(t) for t in valid_test_values)
                 
-                if approve_all:
+                # Get test_ids from billing record
+                all_ordered_test_ids = {
+                    str(test.get("test_id", "")).strip() 
+                    for test in test_list 
+                    if isinstance(test, dict) and test.get("test_id")
+                }
+                
+                # Get approved test_ids from ALL test value records
+                approved_test_ids = {
+                    str(t.get("test_id", "")).strip() 
+                    for t in valid_test_values 
+                    if t.get("approve", False) and t.get("test_id")
+                }
+                
+                # Check approval status based on test_id
+                all_approved = False
+                partially_approved = False
+                
+                if len(all_ordered_test_ids) > 0:
+                    # Compare test IDs
+                    if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
+                        all_approved = True
+                    elif len(approved_test_ids) > 0:
+                        partially_approved = True
+                    
+                    # Fallback - check if all individual tests are approved
+                    if not all_approved and valid_test_values:
+                        approved_count = sum(1 for t in valid_test_values if t.get("approve", False))
+                        total_expected = no_of_tests
+                        
+                        if approved_count == total_expected and approved_count > 0:
+                            all_approved = True
+                            partially_approved = False
+                        elif approved_count > 0:
+                            partially_approved = True
+                
+                # Check dispatch status
+                approved_tests = [t for t in valid_test_values if t.get("approve", False)]
+                all_dispatched = all(t.get("dispatch", False) for t in approved_tests) if approved_tests else False
+                
+                print(f"Approval status for Patient {pid}: all_approved={all_approved}, partially_approved={partially_approved}")
+                print(f"Ordered test IDs: {all_ordered_test_ids}, Approved test IDs: {approved_test_ids}")
+                print(f"Testing status: all_tested={all_tested}, partially_tested={partially_tested}")
+                print(f"Dispatch status: all_dispatched={all_dispatched}")
+                
+                # Set status based on testing progress
+                if all_tested:
+                    status = "Tested"
+                elif partially_tested:
+                    status = "Partially Tested"
+                
+                # Set status based on approval
+                if all_approved:
                     status = "Approved"
-                elif approve_partial:
+                elif partially_approved:
                     status = "Partially Approved"
                 
-                if dispatch_all:
+                # Set status based on dispatch
+                if all_dispatched and approved_tests:
                     status = "Dispatched"
+            
+            print(f"Final status for Patient {pid}: {status}")
             
             # Handle date formatting - use created_date consistently
             created_date = patient.get("created_date")
+            formatted_date = "N/A"
+            registration_date = "N/A"
+            
             if created_date:
                 if isinstance(created_date, datetime):
                     formatted_date = created_date.strftime("%Y-%m-%d")
+                    registration_date = created_date.isoformat()
                 else:
                     # Handle string dates
                     try:
                         parsed_date = datetime.strptime(str(created_date), "%Y-%m-%d")
                         formatted_date = parsed_date.strftime("%Y-%m-%d")
+                        registration_date = parsed_date.isoformat()
                     except:
                         formatted_date = str(created_date)
-            else:
-                formatted_date = "N/A"
+                        registration_date = str(created_date)
             
-            # Final patient object - matching structure with first document
+            test_created_date_formatted = None
+            if test_created_date:
+                if isinstance(test_created_date, datetime):
+                    test_created_date_formatted = test_created_date.isoformat()
+                else:
+                    test_created_date_formatted = str(test_created_date)
+            
+            # Final patient object - matching structure with HMS document
             formatted_data.append({
                 "date": formatted_date,
+                "registration_date": registration_date,
                 "patient_id": pid,
                 "patient_name": patient_detail.get("patientname", "N/A"),  # From franchise_patient
                 "gender": patient_detail.get("gender", "N/A"),  # From franchise_patient
@@ -818,6 +934,7 @@ def franchise_overall_report(request):
                 "registeredby": patient.get("registeredBy", "N/A"),
                 "barcode": barcode,
                 "status": status,
+                "test_created_date": test_created_date_formatted,
             })
         
         return JsonResponse(formatted_data, safe=False)
@@ -825,8 +942,7 @@ def franchise_overall_report(request):
     except Exception as e:
         print("Critical Error:", str(e))
         print(traceback.format_exc())
-        return JsonResponse({"error": str(e)}, status=500)
-    
+        return JsonResponse({"error": str(e)}, status=500)    
 
 
 @api_view(['GET'])
@@ -843,6 +959,10 @@ def franchise_patient_test_details(request):
         franchise_billing_collection = db.franchise_billing
         franchise_sample_collection = db.franchise_sample
         franchise_patient_collection = db.franchise_patient
+        
+        # Connect to Diagnostics database for core_testdetails
+        mongo_db = client.Diagnostics
+        core_testdetails_collection = mongo_db.core_testdetails
         
         # Get franchise billing data using barcode
         franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
@@ -879,6 +999,47 @@ def franchise_patient_test_details(request):
         # Get test values from Django model for additional details
         test_values = TestValue.objects.filter(barcode=barcode)
         
+        # Helper function to get parameter details by index or test_code
+        def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
+            """
+            Get parameter details from core_testdetails
+            Supports both dict (device_id-keyed) and list formats
+            Uses param_index for accurate matching when available
+            """
+            core_parameters = core_test.get("parameters", {})
+            params_list = []
+            
+            # Case 1: parameters is a dictionary with device_id keys
+            if isinstance(core_parameters, dict):
+                # Try to get parameters for the specific device_id
+                if device_id and device_id != "N/A" and device_id in core_parameters:
+                    params_list = core_parameters[device_id]
+                else:
+                    # Use first available device's parameters
+                    if len(core_parameters) > 0:
+                        first_device = list(core_parameters.keys())[0]
+                        params_list = core_parameters[first_device]
+            
+            # Case 2: parameters is a list (like PT test)
+            elif isinstance(core_parameters, list):
+                params_list = core_parameters
+            
+            # Ensure params_list is actually a list
+            if not isinstance(params_list, list):
+                return None
+            
+            # If param_index is provided, use it directly (most accurate)
+            if param_index is not None and 0 <= param_index < len(params_list):
+                return params_list[param_index]
+            
+            # Fallback: Find by test_code (may not be unique)
+            if test_code:
+                matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
+                if matching_params:
+                    return matching_params[0]
+            
+            return None
+        
         # Parse testdetails from franchise_billing
         try:
             billing_testdetails = json.loads(franchise_billing.get('testdetails', '[]'))
@@ -898,10 +1059,12 @@ def franchise_patient_test_details(request):
             "patient_id": patient_id,
             "patientname": franchise_patient.get("patientname", "N/A"),
             "age": franchise_patient.get("age", "N/A"),
+            "age_type": franchise_patient.get("age_type", "Years"),
             "gender": franchise_patient.get("gender", "N/A"),
             "date": franchise_billing.get("created_date"),
             "barcode": franchise_billing.get("barcode", "N/A"),
-            "barcodes": barcodes,  # Added barcodes field
+            "bill_no": franchise_billing.get("bill_no", "N/A"),
+            "barcodes": barcodes,
             "refby": franchise_billing.get("referredDoctor", "N/A"),
             "branch": franchise_billing.get("franchise_id", "N/A"),
             "testdetails": []
@@ -909,33 +1072,60 @@ def franchise_patient_test_details(request):
         
         # Process test details
         for billing_test in billing_testdetails:
-            # Use test_name from billing (matches your document structure)
+            # Get test_id and test_name from billing
+            test_id = billing_test.get("test_id")
             testname = billing_test.get("test_name")
+            
+            # Fetch test details from core_testdetails using test_id
+            core_test = core_testdetails_collection.find_one({"test_id": test_id})
+            
+            if not core_test:
+                continue
             
             # Find corresponding sample status
             sample_status = None
             for sample_test in sample_testdetails:
-                if sample_test.get("testname") == testname:
+                if sample_test.get("testname") == testname or sample_test.get("test_id") == test_id:
                     sample_status = sample_test
                     break
             
             # Find corresponding test value details
             test_value_details = None
+            device_id = "N/A"
             if test_values.exists():
                 for test_value in test_values:
-                    for test_detail in test_value.testdetails:
-                        if test_detail.get("testname") == testname:
+                    # Parse testdetails if it's a string
+                    test_details_list = test_value.testdetails
+                    if isinstance(test_details_list, str):
+                        try:
+                            test_details_list = json.loads(test_details_list)
+                        except:
+                            test_details_list = []
+                    
+                    if not isinstance(test_details_list, list):
+                        test_details_list = []
+                    
+                    for test_detail in test_details_list:
+                        if test_detail.get("test_id") == test_id:
                             test_value_details = test_detail
+                            device_id = test_detail.get("device_id", "N/A")
                             break
                     if test_value_details:
                         break
             
-            # Build test detail object
+            # Get core test details
+            department = core_test.get("department", "N/A")
+            NABL = core_test.get("NABL", False)
+            specimen_type = core_test.get("specimen_type", "N/A")
+            
+            # Build test detail object with core test information
             test_detail = {
-                "testname": testname,
-                "test_id": billing_test.get("test_id", "N/A"),
+                "test_id": test_id,
+                "testname": core_test.get("test_name", testname),
+                "department": department,
+                "NABL": NABL,
                 "MRP": billing_test.get("MRP", "N/A"),
-                "department": sample_status.get("department", "N/A") if sample_status else "N/A",
+                "specimen_type": specimen_type,
                 "samplestatus": sample_status.get("samplestatus", "N/A") if sample_status else "N/A",
                 "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
                 "collected_by": sample_status.get("collected_by", "N/A") if sample_status else "N/A",
@@ -949,17 +1139,91 @@ def franchise_patient_test_details(request):
             
             # Add test value details if available
             if test_value_details:
+                outsourced = test_value_details.get("outsourced", False)
+                comment = test_value_details.get("comment", "")
+                verified_by = test_value_details.get("verified_by", "N/A")
+                approve_by = test_value_details.get("approve_by", "N/A")
+                approve_time = test_value_details.get("approve_time", "N/A")
+                
                 test_detail.update({
-                    "verified_by": test_value_details.get("verified_by", "N/A"),
-                    "NABL": test_value_details.get("NABL", ""),
-                    "outsourced": test_value_details.get("outsourced", False),
-                    "comment": test_value_details.get("comment", False),
-                    "method": test_value_details.get("method", "N/A"),
-                    "specimen_type": test_value_details.get("specimen_type", "N/A"),
-                    "value": test_value_details.get("value", "N/A"),
-                    "unit": test_value_details.get("unit", "N/A"),
-                    "reference_range": test_value_details.get("reference_range", "N/A"),
-                    "parameters": test_value_details.get("parameters", [])
+                    "outsourced": outsourced,
+                    "comment": comment,
+                    "verified_by": verified_by,
+                    "approve_by": approve_by,
+                    "approve_time": approve_time,
+                })
+                
+                # Handle parameters - match with core_testdetails using INDEX
+                parameters = test_value_details.get("parameters", [])
+                if parameters and len(parameters) > 0:
+                    enriched_parameters = []
+                    
+                    # Use index-based matching for accurate parameter retrieval
+                    for param_index, param_value in enumerate(parameters):
+                        test_code = param_value.get("test_code")
+                        value = param_value.get("value", "")
+                        param_comment = param_value.get("comment", "")
+                        
+                        # Get parameter definition using INDEX (most accurate)
+                        param_def = get_parameter_from_core(
+                            core_test, 
+                            device_id, 
+                            test_code=test_code, 
+                            param_index=param_index
+                        )
+                        
+                        if param_def:
+                            enriched_param = {
+                                "name": param_def.get("test_name", ""),
+                                "test_code": test_code,
+                                "value": value,
+                                "unit": param_def.get("unit", ""),
+                                "reference_range": param_def.get("reference_range", ""),
+                                "method": param_def.get("method", ""),
+                                "specimen_type": specimen_type,
+                                "sub_title": param_def.get("sub_title", ""),
+                                "value_option": param_def.get("value_option", []),
+                                "comment": param_comment
+                            }
+                            enriched_parameters.append(enriched_param)
+                        else:
+                            # Fallback if parameter definition not found
+                            enriched_param = {
+                                "name": "N/A",
+                                "test_code": test_code,
+                                "value": value,
+                                "unit": "N/A",
+                                "reference_range": "N/A",
+                                "method": "N/A",
+                                "specimen_type": specimen_type,
+                                "sub_title": "",
+                                "value_option": [],
+                                "comment": param_comment
+                            }
+                            enriched_parameters.append(enriched_param)
+                    
+                    test_detail["parameters"] = enriched_parameters
+                else:
+                    # No parameters - single test with value
+                    test_detail.update({
+                        "method": core_test.get("method", ""),
+                        "value": test_value_details.get("value", ""),
+                        "unit": core_test.get("unit", ""),
+                        "reference_range": core_test.get("reference_range", ""),
+                        "sub_title": test_value_details.get("sub_title", "")
+                    })
+            else:
+                # No test value details available, use core test defaults
+                test_detail.update({
+                    "method": core_test.get("method", "N/A"),
+                    "unit": core_test.get("unit", "N/A"),
+                    "reference_range": core_test.get("reference_range", "N/A"),
+                    "value": "N/A",
+                    "verified_by": "N/A",
+                    "approve_by": "N/A",
+                    "approve_time": "N/A",
+                    "outsourced": False,
+                    "comment": ""
                 })
             
             patient_details["testdetails"].append(test_detail)
@@ -970,8 +1234,9 @@ def franchise_patient_test_details(request):
         return JsonResponse(patient_details, safe=False)
         
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
-
 
 from rest_framework.decorators import api_view, permission_classes
 from django.http import JsonResponse

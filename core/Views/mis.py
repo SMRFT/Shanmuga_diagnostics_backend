@@ -14,7 +14,6 @@ load_dotenv()
 import logging
 
 logger = logging.getLogger(__name__)
-IST = pytz.timezone('Asia/Kolkata')
 @permission_classes([HasRoleAndDataPermission])
 class ConsolidatedDataView(APIView):
     def get(self, request):
@@ -219,51 +218,70 @@ class ConsolidatedDataView(APIView):
                         test_data['approval_time'] = tv.get('approve_time', 'pending')
                         test_data['dispatch_time'] = tv.get('dispatch_time', 'pending')
                 
-                # Format bill_date for calculations - CONVERT TO IST
+                # Format bill_date - RETURN ISO 8601 UTC FORMAT
                 if billing.bill_date:
                     if hasattr(billing.bill_date, 'astimezone'):
-                        # If timezone-aware, convert to IST
+                        # If timezone-aware, convert to IST first, then to UTC for ISO format
                         bill_date_ist = billing.bill_date.astimezone(ist)
-                        registered_time = bill_date_ist.strftime('%Y-%m-%d %H:%M:%S')
+                        bill_date_utc = bill_date_ist.astimezone(pytz.UTC)
+                        registered_time = bill_date_utc.isoformat()
                     elif hasattr(billing.bill_date, 'strftime'):
-                        # If timezone-naive, assume it's already in IST
-                        registered_time = billing.bill_date.strftime('%Y-%m-%d %H:%M:%S')
+                        # If timezone-naive, assume it's already in IST, convert to UTC for ISO format
+                        bill_date_ist = ist.localize(billing.bill_date)
+                        bill_date_utc = bill_date_ist.astimezone(pytz.UTC)
+                        registered_time = bill_date_utc.isoformat()
                     else:
                         registered_time = str(billing.bill_date)
                 else:
                     registered_time = 'N/A'
                 
+                def convert_to_iso_if_needed(time_str):
+                    """Convert IST time strings to ISO 8601 UTC format"""
+                    if not time_str or time_str == 'pending' or time_str == 'null':
+                        return time_str
+                    
+                    try:
+                        # Try parsing as IST datetime string
+                        dt_ist = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                        # Localize to IST and convert to UTC
+                        dt_ist_aware = ist.localize(dt_ist)
+                        dt_utc = dt_ist_aware.astimezone(pytz.UTC)
+                        return dt_utc.isoformat()
+                    except (ValueError, TypeError):
+                        return time_str
+                
                 # Process each unique test
                 for test_id, test_data in consolidated_test_data.items():
-                    collected_time = test_data['collected_time']
-                    received_time = test_data['received_time']
-                    approval_time = test_data['approval_time']
-                    dispatch_time = test_data['dispatch_time']
+                    collected_time = convert_to_iso_if_needed(test_data['collected_time'])
+                    received_time = convert_to_iso_if_needed(test_data['received_time'])
+                    approval_time = convert_to_iso_if_needed(test_data['approval_time'])
+                    dispatch_time = convert_to_iso_if_needed(test_data['dispatch_time'])
                     
                     # Calculate TAT time (approval_time - registered_time)
                     tat_time = 'pending'
                     if registered_time != 'N/A' and approval_time != 'pending' and approval_time != 'null':
                         try:
-                            registered_dt = datetime.strptime(registered_time, '%Y-%m-%d %H:%M:%S')
-                            approval_dt = datetime.strptime(approval_time, '%Y-%m-%d %H:%M:%S')
+                            # Parse ISO 8601 format with timezone
+                            registered_dt = datetime.fromisoformat(registered_time.replace('Z', '+00:00'))
+                            approval_dt = datetime.fromisoformat(approval_time.replace('Z', '+00:00'))
                             
                             time_diff = approval_dt - registered_dt
                             total_seconds = int(time_diff.total_seconds())
                             tat_time = str(timedelta(seconds=total_seconds))
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError, AttributeError):
                             tat_time = 'pending'
                     
                     # Calculate total processing time (dispatch_time - collected_time)
                     total_processing_time = 'pending'
                     if collected_time != 'pending' and dispatch_time != 'pending' and dispatch_time != 'null':
                         try:
-                            collected_dt = datetime.strptime(collected_time, '%Y-%m-%d %H:%M:%S')
-                            dispatch_dt = datetime.strptime(dispatch_time, '%Y-%m-%d %H:%M:%S')
+                            collected_dt = datetime.fromisoformat(collected_time.replace('Z', '+00:00'))
+                            dispatch_dt = datetime.fromisoformat(dispatch_time.replace('Z', '+00:00'))
                             
                             time_diff = dispatch_dt - collected_dt
                             total_seconds = int(time_diff.total_seconds())
                             total_processing_time = str(timedelta(seconds=total_seconds))
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError, AttributeError):
                             total_processing_time = 'pending'
                     
                     response_data.append({

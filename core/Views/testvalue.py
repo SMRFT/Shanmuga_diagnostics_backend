@@ -285,16 +285,27 @@ def get_samplestatus_testvalue(request):
                         patient_id = barcode_details.patient_id
                         age = barcode_details.age
                         gender = barcode_details.gender
+                        location_id = barcode_details.location_id
                         IPOPType = barcode_details.IPOPType
                 elif hasattr(sample_status, 'patient_id'):
                     patient_id = sample_status.patient_id
                 
+                ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology"]
                 # Enrich tests with MongoDB details and match test values
                 updated_tests = []
                 for test in filtered_tests:
                     enriched_test = enrich_test_with_details(test)
+
+                    # FILTER: Only allow Microbiology
+                    if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
+                        continue
+
+
                     matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
                     updated_tests.append(matched_test)
+                # Skip patient if no microbiology
+                if not updated_tests:
+                    continue
                 
                 combined_results.append({
                     'id': sample_status.id,
@@ -306,6 +317,7 @@ def get_samplestatus_testvalue(request):
                     'patientname': patient_name,
                     'age': age,
                     'gender': gender,
+                    'location_id': location_id,
                     'opiptype': IPOPType,
                     'barcode': barcode,
                     'date': safe_datetime_to_string(sample_status.date),
@@ -345,12 +357,22 @@ def get_samplestatus_testvalue(request):
                     age = "Unknown"
                     gender = "Unknown"
                 
+                ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology"]
                 # Enrich tests with MongoDB details and match test values
                 updated_tests = []
                 for test in filtered_tests:
                     enriched_test = enrich_test_with_details(test)
+
+                    # FILTER: Only allow Microbiology
+                    if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
+                        continue
+
+
                     matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
                     updated_tests.append(matched_test)
+                # Skip patient if no microbiology
+                if not updated_tests:
+                    continue
                 
                 combined_results.append({
                     'id': sample_status.id,
@@ -418,12 +440,22 @@ def get_samplestatus_testvalue(request):
                     employee_id = billing.get("employee_id")
                     patient = patient_map.get(employee_id, {})
                     
-                    # Enrich tests with MongoDB details and match test values
+                    ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology"]
+                # Enrich tests with MongoDB details and match test values
                     updated_tests = []
                     for test in filtered_tests:
                         enriched_test = enrich_test_with_details(test)
-                        matched_test = match_test_values(enriched_test, barcode, chc_test_values_by_barcode)
+
+                        # FILTER: Only allow Microbiology
+                        if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
+                            continue
+
+
+                        matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
                         updated_tests.append(matched_test)
+                    # Skip patient if no microbiology
+                    if not updated_tests:
+                        continue
                     
                     combined_results.append({
                         'id': str(record.get('_id')),
@@ -432,7 +464,7 @@ def get_samplestatus_testvalue(request):
                         'lastmodified_by': record.get('lastmodified_by', ''),
                         'lastmodified_date': safe_datetime_to_string(record.get('lastmodified_date')),
                         'barcode': barcode,
-                        'company_id': record.get('company_id', ''),
+                        'location_id': record.get('company_id', ''),
                         'patient_id': employee_id or 'Unknown ID',
                         'patientname': patient.get("employee_name", "Unknown Patient"),
                         'date': safe_datetime_to_string(record.get('date')),
@@ -491,12 +523,22 @@ def get_samplestatus_testvalue(request):
                     patient_id = billing_map.get(barcode, {}).get('patient_id')
                     patient = patient_map.get(patient_id, {})
                     
+                    ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology"]
                     # Enrich tests with MongoDB details and match test values
                     updated_tests = []
                     for test in filtered_tests:
                         enriched_test = enrich_test_with_details(test)
-                        matched_test = match_test_values(enriched_test, barcode, mongo_test_values_by_barcode)
+
+                        # FILTER: Only allow Microbiology
+                        if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
+                            continue
+
+
+                        matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
                         updated_tests.append(matched_test)
+                    # Skip patient if no microbiology
+                    if not updated_tests:
+                        continue
                     
                     combined_results.append({
                         'id': str(record.get('_id', '')),
@@ -515,7 +557,7 @@ def get_samplestatus_testvalue(request):
                         'pincode': patient.get('pincode', ''),
                         'dateOfBirth': patient.get('dateOfBirth', ''),
                         'barcode': barcode,
-                        'company_id': record.get('franchise_id', ''),
+                        'location_id': record.get('franchise_id', ''),
                         'date': safe_datetime_to_string(record.get('created_date')),
                         'testdetails': updated_tests,
                         'data_source': 'mongodb'
