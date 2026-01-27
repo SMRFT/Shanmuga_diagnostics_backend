@@ -58,8 +58,9 @@ def hms_get_test_details(request):
 def hms_patient_billing(request):
     try:
         serializer = HmspatientBillingRegistrationSerializer(data=request.data)
+        employee_id = request.data.get('auth-user-id')
         if serializer.is_valid():
-            serializer.save()
+            serializer.save(created_by=employee_id)
             return Response({"success": True, "data": serializer.data}, status=201)
         return Response({"success": False, "errors": serializer.errors}, status=400)
     except Exception as e:

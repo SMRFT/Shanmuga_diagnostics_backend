@@ -260,7 +260,7 @@ class HmspatientBilling(AuditModel):
     age_type = models.CharField(max_length=10, blank=True)
     gender = models.CharField(max_length=10)
     phone = models.CharField(max_length=15, blank=True)
-    opiptype=models.CharField(max_length=15, blank=True)
+    IPOPType=models.CharField(max_length=15, blank=True)
     location_id=models.CharField(max_length=15, blank=True,default="hms")
     billnumber= models.CharField(max_length=15, blank=True,primary_key=True)
     date=models.DateTimeField()
