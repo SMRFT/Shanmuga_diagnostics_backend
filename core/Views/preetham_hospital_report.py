@@ -57,7 +57,7 @@ def preetham_hospital_report(request):
         billing_records = list(
             billing_col.find({
                 "date": {"$gte": from_dt, "$lt": to_dt},
-                "segment": "B2B"
+                "B2B": "PREETHAM HOSPITAL"
             })
         )
 
