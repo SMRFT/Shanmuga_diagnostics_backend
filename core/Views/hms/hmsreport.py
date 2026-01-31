@@ -35,6 +35,7 @@ from django.core.mail import EmailMessage
 import os
 from dotenv import load_dotenv
 import pytz
+import gridfs
 load_dotenv()
 
 def get_department_status(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map):
@@ -106,6 +107,7 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
                 
                 # Check approval status
                 approved_test_ids = {tv.get('test_id') for tv in dept_test_values if tv.get('approve', False)}
+                
                 all_approved = dept_test_ids.issubset(approved_test_ids) and len(approved_test_ids) > 0
                 
                 # Check dispatch status
@@ -407,6 +409,57 @@ def hms_overall_report(request):
             elif partially_received:
                 status = "Partially Received"
 
+            # Get individual test statuses
+            individual_test_statuses = []
+            if barcode and test_list:
+                for test in test_list:
+                    test_id = test.get('test_id')
+                    test_name = test.get('testname', 'N/A')
+                    
+                    # Get sample info
+                    sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
+                    
+                    # Get test value info
+                    test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
+                    
+                    # Determine individual test status
+                    test_status = "Registered"
+                    
+                    if sample_info:
+                        if sample_info.get('samplestatus') == 'Sample Collected':
+                            test_status = "Collected"
+                        if sample_info.get('samplestatus') == 'Received':
+                            test_status = "Received"
+                        if sample_info.get('samplestatus') == 'Rejected':
+                            test_status = "Rejected"
+                    
+                    if test_value_info:
+                        # Check if test has values
+                        has_values = False
+                        parameters = test_value_info.get("parameters", [])
+                        if not parameters:
+                            has_values = bool(test_value_info.get("value"))
+                        else:
+                            has_values = any(
+                                param.get("value") is not None and str(param.get("value")).strip() != ""
+                                for param in parameters
+                            )
+                        
+                        if has_values:
+                            test_status = "Tested"
+                        
+                        if test_value_info.get('approve'):
+                            test_status = "Approved"
+                        
+                        if test_value_info.get('dispatch'):
+                            test_status = "Dispatched"
+                    
+                    individual_test_statuses.append({
+                        'test_id': test_id,
+                        'test_name': test_name,
+                        'status': test_status,
+                    })
+
             # Test value status logic (using test_id for comparison)
             if valid_test_values:
                 # Check testing status
@@ -423,25 +476,18 @@ def hms_overall_report(request):
                 partially_tested = any(has_test_values(t) for t in valid_test_values)
                
                 # Get test_ids from billing record
-                all_ordered_test_ids = {
-                    str(test.get("test_id", "")).strip() 
-                    for test in test_list 
-                    if isinstance(test, dict) and test.get("test_id")
-                }
+                all_ordered_test_ids = {test.get("test_id") for test in test_list if test.get("test_id")}
                
-                # Get approved test_ids from ALL test value records
-                approved_test_ids = {
-                    str(t.get("test_id", "")).strip() 
-                    for t in valid_test_values 
-                    if t.get("approve", False) and t.get("test_id")
-                }
+                # Get approved and dispatch test_ids from test value records
+                approved_test_ids = {t.get("test_id") for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
+                dispatch_test_ids = {t.get("test_id") for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")}
                
-                # Check approval status based on test_id
+                # Check approval status
                 all_approved = False
                 partially_approved = False
                
                 if len(all_ordered_test_ids) > 0:
-                    # Compare test IDs
+                    # Compare test_ids
                     if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
                         all_approved = True
                     elif len(approved_test_ids) > 0:
@@ -457,15 +503,28 @@ def hms_overall_report(request):
                             partially_approved = False
                         elif approved_count > 0:
                             partially_approved = True
-               
+
                 # Check dispatch status
-                approved_tests = [t for t in valid_test_values if t.get("approve", False)]
-                all_dispatched = all(t.get("dispatch", False) for t in approved_tests) if approved_tests else False
+                all_dispatched = False
+                partially_dispatched = False
                
-                print(f"Approval status for {barcode}: all_approved={all_approved}, partially_approved={partially_approved}")
-                print(f"Ordered test IDs: {all_ordered_test_ids}, Approved test IDs: {approved_test_ids}")
-                print(f"Testing status: all_tested={all_tested}, partially_tested={partially_tested}")
-                print(f"Dispatch status: all_dispatched={all_dispatched}")
+                if len(all_ordered_test_ids) > 0:
+                    # Compare test_ids for dispatch
+                    if all_ordered_test_ids.issubset(dispatch_test_ids) and len(dispatch_test_ids) == len(all_ordered_test_ids):
+                        all_dispatched = True
+                    elif len(dispatch_test_ids) > 0:
+                        partially_dispatched = True
+                   
+                    # Fallback - check if all individual tests are dispatched
+                    if not all_dispatched and valid_test_values:
+                        dispatch_count = sum(1 for t in valid_test_values if t.get("dispatch", False))
+                        total_expected = no_of_tests
+                       
+                        if dispatch_count == total_expected and dispatch_count > 0:
+                            all_dispatched = True
+                            partially_dispatched = False
+                        elif dispatch_count > 0:
+                            partially_dispatched = True
 
                 # Set status based on testing progress
                 if all_tested:
@@ -480,8 +539,10 @@ def hms_overall_report(request):
                     status = "Partially Approved"
 
                 # Set status based on dispatch
-                if all_dispatched and approved_tests:
+                if all_dispatched:
                     status = "Dispatched"
+                elif partially_dispatched:
+                    status = "Partially Dispatched"
 
             print(f"Final status for {barcode}: {status}")
            
@@ -512,6 +573,7 @@ def hms_overall_report(request):
                 "test_names": testnames,
                 "department": department,  # Department field with actual values from MongoDB
                 "department_statuses": department_statuses,  # Department-wise status
+                "test_statuses": individual_test_statuses,
                 "no_of_tests": no_of_tests,
                 "billnumber": billnumber,
                 "barcode": barcode,
@@ -525,7 +587,6 @@ def hms_overall_report(request):
         print(f"Critical Error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
-
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -553,6 +614,11 @@ def get_hms_patient_test_details(request):
         mongo_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         mongo_db = mongo_client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
+        
+        # Connect to global database for employee profiles
+        global_db = mongo_client.Global
+        profile_collection = global_db.backend_diagnostics_profile
+        fs = gridfs.GridFS(global_db)
         
         # Helper function to get parameter details by index or test_code
         def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
@@ -595,7 +661,55 @@ def get_hms_patient_test_details(request):
             
             return None
         
+        # Helper function to get employee signature data
+        def get_employee_signature_data(employee_id):
+            """
+            Fetch employee profile and signature image from MongoDB
+            Returns dict with employeeName, designation, and signature base64
+            """
+            if not employee_id:
+                return None
+            
+            try:
+                # Get employee profile
+                profile = profile_collection.find_one({"employeeId": employee_id})
+                if not profile:
+                    return None
+                
+                employee_name = profile.get("employeeName", "")
+                designation = profile.get("designation", "")
+                signature_file_id = profile.get("signatureFileId")
+                
+                signature_base64 = None
+                if signature_file_id:
+                    try:
+                        # Convert string ID to ObjectId if needed
+                        from bson import ObjectId
+                        if isinstance(signature_file_id, str):
+                            signature_file_id = ObjectId(signature_file_id)
+                        
+                        # Fetch signature image from GridFS
+                        signature_file = fs.get(signature_file_id)
+                        signature_bytes = signature_file.read()
+                        
+                        # Convert to base64
+                        import base64
+                        signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
+                    except Exception as e:
+                        print(f"Error fetching signature for employee {employee_id}: {str(e)}")
+                
+                return {
+                    "employeeName": employee_name,
+                    "designation": designation,
+                    "signatureBase64": signature_base64
+                }
+            except Exception as e:
+                print(f"Error fetching employee data for {employee_id}: {str(e)}")
+                return None
+        
         all_results = []
+        # Collect all unique approvers across all test values
+        all_approvers = set()
         
         # Process each TestValue record
         for test_value_record in test_values:
@@ -618,6 +732,11 @@ def get_hms_patient_test_details(request):
                     test_id = test.get("test_id")  # IMPORTANT: Get test_id
                     device_id = test.get("device_id")
                     parameters = test.get("parameters", [])
+                    approve_by = test.get("approve_by", "")
+                    
+                    # Collect approver ID
+                    if approve_by:
+                        all_approvers.add(approve_by)
                     
                     # Fetch test details from core_testdetails
                     core_test = core_testdetails_collection.find_one({"test_id": test_id})
@@ -631,7 +750,6 @@ def get_hms_patient_test_details(request):
                     outsourced = test.get("outsourced", False)
                     comment = test.get("comment", "")
                     verified_by = test.get("verified_by", "N/A")
-                    approve_by = test.get("approve_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
                     specimen_type = core_test.get("specimen_type", "N/A")
                     
@@ -666,7 +784,7 @@ def get_hms_patient_test_details(request):
                         "comment": comment,
                         "testname": testname,
                         "verified_by": verified_by,
-                        "approve_by": approve_by,
+                        "approve_by": approve_by,  # Include approve_by in response
                         "approve_time": approve_time,
                         "samplecollected_time": samplecollected_time,
                         "received_time": received_time,
@@ -755,17 +873,25 @@ def get_hms_patient_test_details(request):
         if not all_results:
             return JsonResponse({'error': 'No approved test records found'}, status=404)
         
-        # If only one result, return it directly; otherwise return array
-        if len(all_results) == 1:
-            return JsonResponse(all_results[0], safe=False)
-        else:
-            return JsonResponse(all_results, safe=False)
+        # Fetch signature data for all approvers
+        signatures_data = []
+        for approver_id in all_approvers:
+            sig_data = get_employee_signature_data(approver_id)
+            if sig_data:
+                signatures_data.append(sig_data)
+        
+        # Prepare final response
+        response_data = {
+            "patient_data": all_results[0] if len(all_results) == 1 else all_results,
+            "signatures": signatures_data
+        }
+        
+        return JsonResponse(response_data, safe=False)
             
     except Exception as e:
         import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
-
 
 # Define IST timezone
 TIME_ZONE = 'Asia/Kolkata'

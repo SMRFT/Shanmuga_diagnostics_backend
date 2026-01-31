@@ -1500,10 +1500,12 @@ def mb_get_patient_test_details(request):
                         testname = test.get("testname")
                         department = test.get("department", "N/A")
                         specimen_type = test.get("specimen_type", "N/A")
+                        is_AG_title = test.get("is_AG_title", "N/A")
                     else:
                         testname = core_test.get("test_name")
                         department = core_test.get("department", "N/A")
                         specimen_type = core_test.get("specimen_type", "N/A")
+                        is_AG_title = core_test.get("is_AG_title", False)
                     
                     comment = test.get("comment", "")
                     remarks = test.get("remarks", "")
@@ -1541,6 +1543,7 @@ def mb_get_patient_test_details(request):
                         "testname": testname,
                         "department": department,
                         "specimen_type": specimen_type,
+                        "is_AG_title": is_AG_title,
                         "remarks": remarks,
                         "colony_count": colony_count,
                         "verified_by": verified_by,
@@ -1756,10 +1759,12 @@ def hms_mb_get_patient_test_details(request):
                         testname = test.get("testname")
                         department = test.get("department", "N/A")
                         specimen_type = test.get("specimen_type", "N/A")
+                        is_AG_title = test.get("is_AG_title", False)
                     else:
                         testname = core_test.get("test_name")
                         department = core_test.get("department", "N/A")
                         specimen_type = core_test.get("specimen_type", "N/A")
+                        is_AG_title = core_test.get("is_AG_title", False)
                     
                     comment = test.get("comment", "")
                     remarks = test.get("remarks", "")
@@ -1798,6 +1803,7 @@ def hms_mb_get_patient_test_details(request):
                         "testname": testname,
                         "department": department,
                         "specimen_type": specimen_type,
+                        "is_AG_title": is_AG_title,
                         "remarks": remarks,
                         "colony_count": colony_count,
                         "verified_by": verified_by,

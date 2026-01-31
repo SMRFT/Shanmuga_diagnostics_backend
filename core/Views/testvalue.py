@@ -451,7 +451,7 @@ def get_samplestatus_testvalue(request):
                             continue
 
 
-                        matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
+                        matched_test = match_test_values(enriched_test, barcode, chc_test_values_by_barcode)
                         updated_tests.append(matched_test)
                     # Skip patient if no microbiology
                     if not updated_tests:
@@ -534,7 +534,7 @@ def get_samplestatus_testvalue(request):
                             continue
 
 
-                        matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
+                        matched_test = match_test_values(enriched_test, barcode, mongo_test_values_by_barcode)
                         updated_tests.append(matched_test)
                     # Skip patient if no microbiology
                     if not updated_tests:

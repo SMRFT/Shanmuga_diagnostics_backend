@@ -30,6 +30,7 @@ urlpatterns = [
     path('refby/', form.refby, name='refby'),
     path("appointments/", patients.appointment_booking, name="appointment_booking"),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
+    path('logisticdashboard/',logistic.logisticdashboard, name='logisticdashboard'),
 
 
     #Barcode:
@@ -154,7 +155,6 @@ urlpatterns = [
     #Franchise Reports:     
     path('franchise_overall_report/', franchise.franchise_overall_report, name='franchise_overall_report'),
     path('franchise_patient_test_details/', franchise.franchise_patient_test_details, name='franchise_patient_test_details'),
-    path('get-test-values/', franchise.get_test_value_for_franchise, name='get_test_values_franchise'),
 
     #HMS Report:
     path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
@@ -178,7 +178,6 @@ urlpatterns = [
     path('corporate-receive/<str:batch_no>/', corporate.update_corporate_batch_received_status, name='update_corporate_batch_received_status'),
     path("get_corporate_Transferred/<str:batch_number>/", corporate.get_corporate_sample, name="get_corporate_sample"),
     path("update_corporate_sample/<str:barcode>/", corporate.update_corporate_sample, name="update_corporate_sample"),
-    path('logisticdashboard/',logistic.logisticdashboard, name='logisticdashboard'),
     #Corporate Reports:    
     path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
     path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),
