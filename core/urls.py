@@ -98,6 +98,7 @@ urlpatterns = [
     path('mb_patient_test_sorting/', microbiology.mb_patient_test_sorting, name='mb_patient_test_sorting'),
     path('mb_get_patient_test_details/', microbiology.mb_get_patient_test_details, name='mb_get_patient_test_details'),
     path('hms_mb_get_patient_test_details/', microbiology.hms_mb_get_patient_test_details, name='hms_mb_get_patient_test_details'),
+    path('franchise_mb_get_patient_test_details/', microbiology.franchise_mb_get_patient_test_details, name='franchise_mb_get_patient_test_details'),
     path('mb_update_dispatch_status/<str:barcode>/', microbiology.mb_update_dispatch_status, name='mb_update_dispatch_status'),
 
 
@@ -210,7 +211,7 @@ urlpatterns = [
 
     #HMS Report:
     path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
-    path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_patient_test_details'),
+    path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_hms_patient_test_details'),
     path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
 
     #MIS:

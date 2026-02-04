@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
-from ..models import  TestValue
+from ..models import  TestValue, MBTestValue
 load_dotenv()
 logger = logging.getLogger(__name__)
 import gridfs
@@ -499,7 +499,7 @@ def update_batch_received_status(request, batch_no):
         if client:
             client.close()
             
-def get_department_status_franchise(test_list, patient_id, sample_status_map, test_value_map):
+def get_department_status_franchise(test_list, patient_id, sample_status_map, test_value_map, mb_test_value_map=None):
     """
     Determine status for each department based on test details
     Returns dict: {department_name: status}
@@ -523,10 +523,16 @@ def get_department_status_franchise(test_list, patient_id, sample_status_map, te
     for dept, tests in tests_by_dept.items():
         dept_test_ids = {t.get('test_id') for t in tests if t.get('test_id')}
         
-        # Get test values for this patient_id
-        all_test_values = test_value_map.get(patient_id, {}).get('testdetails', [])
+        # Get test values for this patient_id from BOTH TestValue and MBTestValue
+        all_test_values = test_value_map.get(patient_id, {}).get('testdetails', []).copy()
         
-        # Filter test values for this department - match by test_id
+        # Add MBTestValue data if available
+        if mb_test_value_map:
+            mb_test_values = mb_test_value_map.get(patient_id, {}).get('testdetails', [])
+            if mb_test_values:
+                all_test_values.extend(mb_test_values)
+        
+        # Filter test values for this department - match by test_id and exclude reruns
         dept_test_values = [tv for tv in all_test_values 
                            if tv.get('test_id') in dept_test_ids and not tv.get('rerun', False)]
         
@@ -684,6 +690,14 @@ def franchise_overall_report(request):
         
         print(f"Fetched {len(test_value_records)} TestValue records")
         
+        # Fetch MBTestValue records using Django ORM
+        mb_test_value_records = MBTestValue.objects.filter(
+            barcode__in=barcodes,
+            date__range=(from_date.date(), to_date.date())
+        ).values("barcode", "testdetails", "created_date")
+        
+        print(f"Fetched {len(mb_test_value_records)} MBTestValue records")
+        
         # Create a mapping from barcode to patient_id from billing records
         barcode_to_patient_map = {}
         for patient in patients:
@@ -739,6 +753,45 @@ def franchise_overall_report(request):
                 test_value_map[patient_id]["created_date"] = created_date
         
         print(f"Processed test value map with {len(test_value_map)} unique patient IDs")
+        
+        # Organize MBTestValue data using barcode mapping - COMBINE ALL RECORDS FOR SAME BARCODE
+        mb_test_value_map = {}
+        for record in mb_test_value_records:
+            if not isinstance(record, dict):
+                continue
+                
+            barcode = record.get("barcode")
+            created_date = record.get("created_date")
+            testdetails = record.get("testdetails")
+            
+            if not barcode or barcode not in barcode_to_patient_map:
+                continue
+                
+            patient_id = barcode_to_patient_map[barcode]
+            
+            # Parse testdetails if it's a string
+            if isinstance(testdetails, str):
+                try:
+                    testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError:
+                    testdetails = []
+            
+            if patient_id not in mb_test_value_map:
+                mb_test_value_map[patient_id] = {
+                    "barcode": barcode,
+                    "testdetails": [],
+                    "created_date": created_date
+                }
+            
+            # Add all test details from this record
+            if isinstance(testdetails, list):
+                mb_test_value_map[patient_id]["testdetails"].extend(testdetails)
+            
+            # Update to latest created_date
+            if created_date and (not mb_test_value_map[patient_id]["created_date"] or created_date > mb_test_value_map[patient_id]["created_date"]):
+                mb_test_value_map[patient_id]["created_date"] = created_date
+        
+        print(f"Processed MB test value map with {len(mb_test_value_map)} unique patient IDs")
         
         # Final result
         formatted_data = []
@@ -890,10 +943,25 @@ def franchise_overall_report(request):
             # Get barcode
             barcode = patient.get("barcode")
             
-            # Get combined test value data
+            # Get combined test value data from BOTH TestValue and MBTestValue
             latest_test_data = test_value_map.get(pid, {})
-            all_test_values = latest_test_data.get("testdetails", [])
+            all_test_values = latest_test_data.get("testdetails", []).copy()
             test_created_date = latest_test_data.get("created_date", None)
+            
+            # Add MBTestValue data
+            mb_test_data = mb_test_value_map.get(pid, {})
+            mb_test_values = mb_test_data.get("testdetails", [])
+            mb_created_date = mb_test_data.get("created_date", None)
+            
+            # Combine test values from both sources
+            if mb_test_values:
+                all_test_values.extend(mb_test_values)
+                print(f"Added {len(mb_test_values)} MB test values for patient {pid}")
+                
+                # Update to latest created_date between both sources
+                if mb_created_date:
+                    if not test_created_date or mb_created_date > test_created_date:
+                        test_created_date = mb_created_date
             
             # Use barcode from test_value_map if available
             if not barcode and latest_test_data.get("barcode"):
@@ -990,7 +1058,7 @@ def franchise_overall_report(request):
                     # Get sample info
                     sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
                     
-                    # Get test value info
+                    # Get test value info from combined valid_test_values
                     test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
                     
                     # Determine individual test status
@@ -1053,7 +1121,7 @@ def franchise_overall_report(request):
                     if isinstance(test, dict) and test.get("test_id")
                 }
                 
-                # Get approved and dispatch test_ids from ALL test value records
+                # Get approved and dispatch test_ids from ALL test value records (TestValue + MBTestValue)
                 approved_test_ids = {
                     str(t.get("test_id", "")).strip() 
                     for t in valid_test_values 
@@ -1142,7 +1210,8 @@ def franchise_overall_report(request):
                     test_list, 
                     pid, 
                     sample_status_map, 
-                    test_value_map
+                    test_value_map,
+                    mb_test_value_map  # Pass MB test value map
                 )
             
             # Handle date formatting - use created_date consistently
@@ -1208,6 +1277,7 @@ def franchise_overall_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def franchise_patient_test_details(request):

@@ -996,6 +996,7 @@ def get_patient_test_details(request):
                     device_id = test.get("device_id")
                     parameters = test.get("parameters", [])
                     approve_by = test.get("approve_by", "")
+                    dispatch_time = test.get("dispatch_time", "")
                     
                     # Collect approver ID
                     if approve_by:
@@ -1053,6 +1054,7 @@ def get_patient_test_details(request):
                         "verified_by": verified_by,
                         "approve_by": approve_by,  # Include approve_by in response
                         "approve_time": approve_time,
+                        "dispatch_time": dispatch_time,
                         "samplecollected_time": samplecollected_time,
                         "received_time": received_time
                     }
