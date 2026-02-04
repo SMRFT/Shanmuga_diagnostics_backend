@@ -12,7 +12,7 @@ from django.conf import settings
 import json
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
-from ..models import TestValue,Patient,BarcodeTestDetails,Hmssamplestatus,Hmsbarcode,HmspatientBilling
+from ..models import TestValue,Patient,Hmsbarcode
 from django.http import JsonResponse
 from pymongo import MongoClient
 from datetime import datetime
@@ -172,6 +172,9 @@ def get_test_values(request):
             "department": 1, 
             "device_id": 1, 
             "parameters": 1,
+            "unit": 1,
+            "method": 1,
+            "reference_range": 1,
             "_id": 0
         }
     ))
@@ -389,45 +392,35 @@ def get_test_values(request):
                 }
                 
             else:
-                # This is a single test with test_code (not parameters array)
-                # Start with base test info from metadata
+                # This is a single test WITHOUT parameters array
+                # For these tests, unit/method/reference_range are at the TEST LEVEL, not in parameters
                 enriched_test = {
                     **test,  # Keep all existing fields from core_testvalue
                     'test_name': test_meta.get('test_name', test.get('test_name', 'N/A')),
                     'specimen_type': test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
                     'collection_container': test_meta.get('collection_container', test.get('collection_container', 'N/A')),
                     'department': test_meta.get('department', test.get('department', 'N/A')),
+                    # FIXED: Get unit, method, reference_range from test-level fields
+                    'unit': test_meta.get('unit', test.get('unit', 'N/A')),
+                    'method': test_meta.get('method', test.get('method', 'N/A')),
+                    'reference_range': test_meta.get('reference_range', test.get('reference_range', 'N/A')),
                 }
                 
-                # If test_code exists, get parameter-specific details
-                if test_code and test_code != 'N/A':
+                # Only if test_code exists AND parameters array exists in metadata, try to get parameter-specific details
+                # This handles edge cases where a test might have optional parameters
+                if test_code and test_code != 'N/A' and test_meta.get('parameters'):
                     param_details = get_parameter_details(test_id, test_code, device_id)
                     
                     if param_details:
-                        # Override with parameter-specific details
+                        # Override ONLY if parameter details are found
+                        # This handles cases where parameters array exists but is optional
                         enriched_test.update({
-                            'parameter_name': param_details.get('parameter_name'),  # Specific parameter name
-                            'unit': param_details.get('unit', 'N/A'),
-                            'reference_range': param_details.get('reference_range', 'N/A'),
-                            'method': param_details.get('method', 'N/A'),
+                            'parameter_name': param_details.get('parameter_name'),
+                            'unit': param_details.get('unit', enriched_test['unit']),
+                            'reference_range': param_details.get('reference_range', enriched_test['reference_range']),
+                            'method': param_details.get('method', enriched_test['method']),
                             'department': param_details.get('department', enriched_test['department']),
                         })
-                    else:
-                        # No matching parameter found, use defaults
-                        enriched_test.update({
-                            'parameter_name': None,
-                            'unit': test.get('unit', 'N/A'),
-                            'reference_range': test.get('reference_range', 'N/A'),
-                            'method': test.get('method', 'N/A'),
-                        })
-                else:
-                    # No test_code, this is a main test without parameters
-                    enriched_test.update({
-                        'parameter_name': None,
-                        'unit': test.get('unit', 'N/A'),
-                        'reference_range': test.get('reference_range', 'N/A'),
-                        'method': test.get('method', 'N/A'),
-                    })
             
             enriched_test_details.append(enriched_test)
         
@@ -463,6 +456,7 @@ def get_test_values(request):
             "patient_id": current_patient_id,
             "patientname": patient_name,
             "age": patient_age,
+            "locationId": patient.locationId,
             "barcode": barcode_val,
             "date": patient.date,
             "created_date": patient.created_date,
@@ -472,7 +466,6 @@ def get_test_values(request):
         })
     
     return JsonResponse(patient_data, safe=False)
-
 def normalize_testname(name):
     """Helper function for test name normalization"""
     if not name:

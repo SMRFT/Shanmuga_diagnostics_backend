@@ -125,6 +125,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/mb_patient_test_sorting/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/mb_get_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/hms_mb_get_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/franchise_mb_get_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/mb_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/upload-pdf/?(\?.*)?$':'SD-P-POV',
