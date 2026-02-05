@@ -237,11 +237,23 @@ def create_bill(request):
             "sample_collector": data.get("sample_collector", ""),
             "refby": data.get("refby", ""),
             "branch": data.get("branch", ""),
-            "testdetails": data.get("testdetails") if isinstance(data.get("testdetails"), (list, dict)) else [],
+            "testdetails": (
+                json.loads(data.get("testdetails")) if isinstance(data.get("testdetails"), str) 
+                else data.get("testdetails") if isinstance(data.get("testdetails"), (list, dict)) 
+                else []
+            ),
             "totalAmount": s(data.get("totalAmount")),
             "discount": s(data.get("discount")),
-            "payment_method": data.get("payment_method") if isinstance(data.get("payment_method"), dict) else {},
-            "MultiplePayment": data.get("MultiplePayment") if isinstance(data.get("MultiplePayment"), list) else [],
+            "payment_method": (
+                json.loads(data.get("payment_method")) if isinstance(data.get("payment_method"), str)
+                else data.get("payment_method") if isinstance(data.get("payment_method"), dict)
+                else {}
+            ),
+            "MultiplePayment": (
+                json.loads(data.get("MultiplePayment")) if isinstance(data.get("MultiplePayment"), str)
+                else data.get("MultiplePayment") if isinstance(data.get("MultiplePayment"), list)
+                else []
+            ),
             "credit_amount": s(data.get("credit_amount")),
             "status": data.get("status", "Registered"),
             "is_emergency": emergency,

@@ -189,6 +189,9 @@ class SalesVisitLog(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     lastmodified_by = models.CharField(max_length=100, blank=True, null=True)
     lastmodified_date = models.DateTimeField(blank=True, null=True)
+    visit_image_id = models.CharField(max_length=255, blank=True, null=True)
+    latitude = models.CharField(max_length=50, blank=True, null=True)
+    longitude = models.CharField(max_length=50, blank=True, null=True)
 
 
 class HospitalLab(models.Model):

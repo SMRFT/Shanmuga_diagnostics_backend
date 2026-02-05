@@ -232,6 +232,7 @@ urlpatterns = [
     path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
     path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
+    path('serve_sales_image/<str:file_id>/', sales.serve_sales_image, name='serve_sales_image'),
 
     #Logistics
     path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),

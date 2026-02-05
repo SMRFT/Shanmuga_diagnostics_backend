@@ -52,6 +52,9 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/get_clinicalname/':'SD-P-SCU',
     '/_b_a_c_k_e_n_d/LIS/clinical-names/':'SD-P-SCU',
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/?(\?.*)?$':'SD-P-SCU',
+    r'^/_b_a_c_k_e_n_d/LIS/serve_sales_image/<str:file_id>/$':'SD-P-SCU',
+    
+
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/first_approve/?(\?.*)?$':'SD-P-SCU',
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/final_approve/?(\?.*)?$':'SD-P-SCU',
  
