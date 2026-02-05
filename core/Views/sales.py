@@ -1,4 +1,6 @@
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
+from bson.objectid import ObjectId
+import gridfs
 from rest_framework.response import Response
 from rest_framework import status
 from ..models import SalesVisitLog,Billing,Patient,ClinicalName
@@ -29,23 +31,104 @@ def hospitallabform(request):
         )
 
 @csrf_exempt
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
 def salesvisitlog(request):
     if request.method == 'POST':
-        data = request.data.copy()  
-        employee_id = data.get('auth-user-id')
-        print("employee_id", employee_id)
+        try:
+            data = request.data.copy()  
+            employee_id = data.get('auth-user-id')
+            
+            # Handle Image Upload
+            visit_image = request.FILES.get('visit_image')
+            if visit_image:
+                import gridfs
+                from PIL import Image, ImageDraw, ImageFont, ImageOps
+                from io import BytesIO
 
-        # Add audit fields
-        data['created_by'] = employee_id
-        data['created_date'] = datetime.now()
+                # Open image
+                img = Image.open(visit_image)
+                
+                # Correct orientation if needed
+                img = ImageOps.exif_transpose(img)
 
-        serializer = SalesVisitLogSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                # Convert to RGB if necessary
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+
+                # Prepare text to draw
+                draw = ImageDraw.Draw(img)
+                width, height = img.size
+                
+                # Timestamp
+                timestamp_text = f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                
+                # Location
+                latitude = data.get('latitude')
+                longitude = data.get('longitude') 
+                location_text = ""
+                if latitude and longitude:
+                    location_text = f"Loc: {latitude}, {longitude}"
+
+                # Text Settings (aim for some scaling based on image size)
+                font_size = int(height * 0.03) 
+                if font_size < 15: font_size = 15
+                
+                # Try to load a font, fallback to default
+                try:
+                    font = ImageFont.truetype("arial.ttf", font_size)
+                except:
+                    font = ImageFont.load_default()
+
+                # Calculate text position (bottom right or bottom left)
+                # Let's put it at bottom left with some padding
+                x = 20
+                y = height - (font_size * 3) - 20
+                
+                # Draw text with shadow/outline for visibility
+                text_color = (255, 255, 255)
+                outline_color = (0, 0, 0)
+                
+                def draw_text_with_outline(position, text, font):
+                    x, y = position
+                    # Outline
+                    for adj in [-2, 0, 2]:
+                        for adj2 in [-2, 0, 2]:
+                            draw.text((x+adj, y+adj2), text, font=font, fill=outline_color)
+                    # Main text
+                    draw.text(position, text, font=font, fill=text_color)
+
+                draw_text_with_outline((x, y), timestamp_text, font)
+                if location_text:
+                    draw_text_with_outline((x, y + font_size + 5), location_text, font)
+
+                # Save modified image to bytes
+                output_buffer = BytesIO()
+                img.save(output_buffer, format='JPEG', quality=85)
+                output_buffer.seek(0)
+                
+                fs = gridfs.GridFS(db)
+                file_id = fs.put(
+                    output_buffer,
+                    filename=f"tagged_{visit_image.name}",
+                    content_type="image/jpeg",
+                    uploaded_by=employee_id,
+                    uploaded_date=datetime.now()
+                )
+                data['visit_image_id'] = str(file_id)
+
+            # Add audit fields
+            data['created_by'] = employee_id
+            data['created_date'] = datetime.now()
+
+            serializer = SalesVisitLogSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
 
 from rest_framework.decorators import api_view, permission_classes
@@ -308,3 +391,23 @@ def update_clinicalname(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+# @permission_classes([HasRoleAndDataPermission])
+def serve_sales_image(request, file_id):
+    try:
+        # Use the global db connection defined earlier
+        fs = gridfs.GridFS(db)
+        if not ObjectId.is_valid(file_id):
+             return HttpResponse(status=404)
+        
+        if not fs.exists(ObjectId(file_id)):
+             return HttpResponse(status=404)
+
+        grid_out = fs.get(ObjectId(file_id))
+        
+        response = HttpResponse(grid_out.read(), content_type=grid_out.content_type)
+        response['Content-Disposition'] = f'inline; filename="{grid_out.filename}"'
+        return response
+    except Exception as e:
+        return HttpResponse(status=500)
