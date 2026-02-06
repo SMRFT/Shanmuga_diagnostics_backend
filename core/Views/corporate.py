@@ -1612,6 +1612,10 @@ def corporate_approval_report(request):
         sample_status_colletion = db.core_sample # Collection name for sample 
         franchise_patient_collection = db.core_employeeregistration  # Collection for patient details
         overall_approval_collection = db.overallApproval  # NEW: Collection for approval status
+        
+        # Connect to Diagnostics database for core_testdetails
+        mongo_db = client.Diagnostics
+        core_testdetails_collection = mongo_db.core_testdetails
 
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
@@ -1691,7 +1695,7 @@ def corporate_approval_report(request):
             if patient.get("barcode") and patient.get("employee_id"):
                 barcode_to_patient_map[patient.get("barcode")] = patient.get("employee_id")
         
-        # FIXED: Organize sample status data using barcode mapping
+        # UPDATED: Organize sample status data using barcode mapping and fetch test names from core_testdetails
         sample_status_map = {}
         for record in sample_status_list:
             if record and isinstance(record, dict):
@@ -1711,8 +1715,23 @@ def corporate_approval_report(request):
                     elif isinstance(testdetails, list):
                         parsed_testdetails = testdetails
                     
-                    if parsed_testdetails:
-                        sample_status_map.setdefault(employee_id_key, []).extend(parsed_testdetails)
+                    # UPDATED: Enrich test details with names from core_testdetails
+                    enriched_testdetails = []
+                    for test in parsed_testdetails:
+                        if isinstance(test, dict):
+                            test_id = test.get("test_id")
+                            
+                            # Fetch test name from core_testdetails if test_id exists
+                            if test_id:
+                                core_test = core_testdetails_collection.find_one({"test_id": test_id})
+                                if core_test:
+                                    # Use test_name from core_testdetails
+                                    test["testname"] = core_test.get("test_name", test.get("testname", ""))
+                            
+                            enriched_testdetails.append(test)
+                    
+                    if enriched_testdetails:
+                        sample_status_map.setdefault(employee_id_key, []).extend(enriched_testdetails)
         
         # Final result
         formatted_data = []
@@ -1731,7 +1750,7 @@ def corporate_approval_report(request):
             if not isinstance(patient_detail, dict):
                 patient_detail = {}
           
-            # FIXED: Get test names from core_sample instead of core_billing
+            # FIXED: Get test names from core_sample (now enriched with core_testdetails names)
             sample_tests = sample_status_map.get(pid, [])
             testnames = ", ".join([
                 test.get("testname", "") if isinstance(test, dict) else str(test)
@@ -1789,7 +1808,7 @@ def corporate_approval_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
-
+    
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def corporate_health_report(request):
@@ -1810,6 +1829,97 @@ def corporate_health_report(request):
         franchise_ophthalmology_collection = db.core_ophthalmology
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection = db.core_company  # NEW: Company collection
+        
+        # Connect to Diagnostics database for core_testdetails
+        mongo_db = client.Diagnostics
+        core_testdetails_collection = mongo_db.core_testdetails
+        
+        # Connect to global database for employee profiles
+        global_db = client.Global
+        profile_collection = global_db.backend_diagnostics_profile
+        fs = gridfs.GridFS(global_db)
+        
+        # Helper function to get parameter details by test_code
+        def get_parameter_from_core(core_test, device_id, test_code):
+            """
+            Get parameter details from core_testdetails based on test_code
+            Supports both dict (device_id-keyed) and list formats
+            """
+            core_parameters = core_test.get("parameters", {})
+            params_list = []
+            
+            # Case 1: parameters is a dictionary with device_id keys
+            if isinstance(core_parameters, dict):
+                # Try to get parameters for the specific device_id
+                if device_id and device_id != "N/A" and device_id in core_parameters:
+                    params_list = core_parameters[device_id]
+                else:
+                    # Use first available device's parameters
+                    if len(core_parameters) > 0:
+                        first_device = list(core_parameters.keys())[0]
+                        params_list = core_parameters[first_device]
+            
+            # Case 2: parameters is a list (like PT test)
+            elif isinstance(core_parameters, list):
+                params_list = core_parameters
+            
+            # Ensure params_list is actually a list
+            if not isinstance(params_list, list):
+                return None
+            
+            # Find by test_code
+            if test_code:
+                matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
+                if matching_params:
+                    return matching_params[0]
+            
+            return None
+        
+        # Helper function to get employee signature data
+        def get_employee_signature_data(employee_id):
+            """
+            Fetch employee profile and signature image from MongoDB
+            Returns dict with employeeName, designation, and signature base64
+            """
+            if not employee_id:
+                return None
+            
+            try:
+                # Get employee profile
+                profile = profile_collection.find_one({"employeeId": employee_id})
+                if not profile:
+                    return None
+                
+                employee_name = profile.get("employeeName", "")
+                designation = profile.get("designation", "")
+                signature_file_id = profile.get("signatureFileId")
+                
+                signature_base64 = None
+                if signature_file_id:
+                    try:
+                        # Convert string ID to ObjectId if needed
+                        from bson import ObjectId
+                        if isinstance(signature_file_id, str):
+                            signature_file_id = ObjectId(signature_file_id)
+                        
+                        # Fetch signature image from GridFS
+                        signature_file = fs.get(signature_file_id)
+                        signature_bytes = signature_file.read()
+                        
+                        # Convert to base64
+                        import base64
+                        signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
+                    except Exception as e:
+                        print(f"Error fetching signature for employee {employee_id}: {str(e)}")
+                
+                return {
+                    "employeeName": employee_name,
+                    "designation": designation,
+                    "signatureBase64": signature_base64
+                }
+            except Exception as e:
+                print(f"Error fetching employee data for {employee_id}: {str(e)}")
+                return None
         
         # Get franchise billing data
         franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
@@ -2107,7 +2217,10 @@ def corporate_health_report(request):
             if final_assessment:
                 patient_details["final_assessment"] = final_assessment
         
-        # Process lab tests from TestValue model
+        # Collect all unique approvers across all test values
+        all_approvers = set()
+        
+        # UPDATED: Process lab tests from TestValue model with parameter enrichment from core_testdetails
         if test_values.exists():
             for test_value in test_values:
                 try:
@@ -2116,22 +2229,46 @@ def corporate_health_report(request):
                         continue
                     
                     for test_detail in testvalue_details:
+                        test_id = test_detail.get("test_id")
                         testname = test_detail.get("testname")
+                        device_id = test_detail.get("device_id", "N/A")
+                        
+                        if not test_id:
+                            continue
+                        
+                        # UPDATED: Fetch test details from core_testdetails using test_id
+                        core_test = core_testdetails_collection.find_one({"test_id": test_id})
+                        if core_test:
+                            testname = core_test.get("test_name", testname)
+                            # Get specimen_type from core_test
+                            specimen_type = core_test.get("specimen_type", "N/A")
+                            # UPDATED: Get department from core_test
+                            department = core_test.get("department", test_detail.get("department", ""))
+                        else:
+                            specimen_type = test_detail.get("specimen_type", "")
+                            department = test_detail.get("department", "")
+                        
                         if not testname:
                             continue
+                        
+                        # Collect approver ID
+                        approve_by = test_detail.get("approve_by", "")
+                        if approve_by:
+                            all_approvers.add(approve_by)
                         
                         # Find corresponding sample status
                         sample_status = None
                         for sample_test in sample_testdetails:
-                            if sample_test.get("testname") == testname:
+                            if sample_test.get("test_id") == test_id or sample_test.get("testname") == testname:
                                 sample_status = sample_test
                                 break
                         
                         # Build test detail object
                         test_response = {"testname": testname}
                         
-                        if test_detail.get("department"):
-                            test_response["department"] = test_detail.get("department")
+                        # UPDATED: Use department from core_testdetails (with fallback to stored data)
+                        if department:
+                            test_response["department"] = department
                         
                         if test_detail.get("verified_by"):
                             test_response["verified_by"] = test_detail.get("verified_by")
@@ -2142,32 +2279,69 @@ def corporate_health_report(request):
                         if test_detail.get("approve_time"):
                             test_response["approve_time"] = test_detail.get("approve_time")
                         
+                        # Add outsourced and comment from test_detail
+                        outsourced = test_detail.get("outsourced", False)
+                        if outsourced:
+                            test_response["outsourced"] = outsourced
+                        
+                        comment = test_detail.get("comment", "")
+                        if comment:
+                            test_response["comment"] = comment
+                        
                         if sample_status:
                             if sample_status.get("samplecollected_time"):
                                 test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
                             if sample_status.get("received_time"):
                                 test_response["received_time"] = sample_status.get("received_time")
                         
-                        # Check if test has parameters
+                        # UPDATED: Check if test has parameters and enrich from core_testdetails
                         if test_detail.get("parameters"):
                             processed_parameters = []
                             for param in test_detail.get("parameters", []):
+                                test_code = param.get("test_code")
+                                value = param.get("value", "")
+                                param_comment = param.get("comment", "")
+                                
+                                # Get parameter definition from core_testdetails based on test_code
+                                if core_test and test_code:
+                                    param_def = get_parameter_from_core(core_test, device_id, test_code)
+                                else:
+                                    param_def = None
+                                
                                 processed_param = {}
                                 
-                                if param.get("name"):
-                                    processed_param["name"] = param.get("name")
-                                if param.get("value"):
-                                    processed_param["value"] = param.get("value")
-                                if param.get("unit"):
-                                    processed_param["unit"] = param.get("unit")
-                                if param.get("specimen_type"):
-                                    processed_param["specimen_type"] = param.get("specimen_type")
-                                if param.get("reference_range"):
-                                    processed_param["reference_range"] = param.get("reference_range")
-                                if param.get("method"):
-                                    processed_param["method"] = param.get("method")
-                                if param.get("sub_title"):
-                                    processed_param["sub_title"] = param.get("sub_title")
+                                # Use core_testdetails data if available, otherwise fallback to stored data
+                                if param_def:
+                                    processed_param["name"] = param_def.get("test_name", param.get("name", ""))
+                                    processed_param["value"] = value
+                                    processed_param["unit"] = param_def.get("unit", "")
+                                    processed_param["specimen_type"] = specimen_type
+                                    processed_param["reference_range"] = param_def.get("reference_range", "")
+                                    processed_param["method"] = param_def.get("method", "")
+                                    if param_def.get("sub_title"):
+                                        processed_param["sub_title"] = param_def.get("sub_title")
+                                    # Add parameter comment if available
+                                    if param_comment:
+                                        processed_param["comment"] = param_comment
+                                else:
+                                    # Fallback to stored data
+                                    if param.get("name"):
+                                        processed_param["name"] = param.get("name")
+                                    if value:
+                                        processed_param["value"] = value
+                                    if param.get("unit"):
+                                        processed_param["unit"] = param.get("unit")
+                                    if param.get("specimen_type"):
+                                        processed_param["specimen_type"] = param.get("specimen_type")
+                                    if param.get("reference_range"):
+                                        processed_param["reference_range"] = param.get("reference_range")
+                                    if param.get("method"):
+                                        processed_param["method"] = param.get("method")
+                                    if param.get("sub_title"):
+                                        processed_param["sub_title"] = param.get("sub_title")
+                                    # Add parameter comment if available
+                                    if param_comment:
+                                        processed_param["comment"] = param_comment
                                 
                                 if processed_param:
                                     processed_parameters.append(processed_param)
@@ -2175,19 +2349,34 @@ def corporate_health_report(request):
                             if processed_parameters:
                                 test_response["parameters"] = processed_parameters
                         else:
-                            # Add individual test fields only if they exist
-                            if test_detail.get("method"):
-                                test_response["method"] = test_detail.get("method")
-                            if test_detail.get("specimen_type"):
-                                test_response["specimen_type"] = test_detail.get("specimen_type")
-                            if test_detail.get("value"):
-                                test_response["value"] = test_detail.get("value")
-                            if test_detail.get("unit"):
-                                test_response["unit"] = test_detail.get("unit")
-                            if test_detail.get("reference_range"):
-                                test_response["reference_range"] = test_detail.get("reference_range")
-                            if test_detail.get("sub_title"):
-                                test_response["sub_title"] = test_detail.get("sub_title")
+                            # Add individual test fields - prefer core_testdetails data
+                            if core_test:
+                                if core_test.get("method"):
+                                    test_response["method"] = core_test.get("method")
+                                if specimen_type:
+                                    test_response["specimen_type"] = specimen_type
+                                if test_detail.get("value"):
+                                    test_response["value"] = test_detail.get("value")
+                                if core_test.get("unit"):
+                                    test_response["unit"] = core_test.get("unit")
+                                if core_test.get("reference_range"):
+                                    test_response["reference_range"] = core_test.get("reference_range")
+                                if test_detail.get("sub_title"):
+                                    test_response["sub_title"] = test_detail.get("sub_title")
+                            else:
+                                # Fallback to stored data
+                                if test_detail.get("method"):
+                                    test_response["method"] = test_detail.get("method")
+                                if test_detail.get("specimen_type"):
+                                    test_response["specimen_type"] = test_detail.get("specimen_type")
+                                if test_detail.get("value"):
+                                    test_response["value"] = test_detail.get("value")
+                                if test_detail.get("unit"):
+                                    test_response["unit"] = test_detail.get("unit")
+                                if test_detail.get("reference_range"):
+                                    test_response["reference_range"] = test_detail.get("reference_range")
+                                if test_detail.get("sub_title"):
+                                    test_response["sub_title"] = test_detail.get("sub_title")
                         
                         patient_details["testdetails"].append(test_response)
                         
@@ -2195,15 +2384,28 @@ def corporate_health_report(request):
                     print(f"Error processing test: {str(e)}")
                     continue
         
+        # Fetch signature data for all approvers
+        signatures_data = []
+        for approver_id in all_approvers:
+            sig_data = get_employee_signature_data(approver_id)
+            if sig_data:
+                signatures_data.append(sig_data)
+        
         # Close MongoDB connection
         client.close()
         
-        return JsonResponse(patient_details, safe=False)
+        # Prepare final response with signatures
+        response_data = {
+            "patient_data": patient_details,
+            "signatures": signatures_data
+        }
+        
+        return JsonResponse(response_data, safe=False)
         
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
 
-# Add new endpoint to fetch individual files
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def get_investigation_file(request):
@@ -2531,6 +2733,97 @@ def get_batch_corporate_health_reports(request):
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection = db.core_company
         
+        # Connect to Diagnostics database for core_testdetails
+        mongo_db = client.Diagnostics
+        core_testdetails_collection = mongo_db.core_testdetails
+        
+        # Connect to global database for employee profiles
+        global_db = client.Global
+        profile_collection = global_db.backend_diagnostics_profile
+        fs = gridfs.GridFS(global_db)
+        
+        # Helper function to get parameter details by test_code
+        def get_parameter_from_core(core_test, device_id, test_code):
+            """
+            Get parameter details from core_testdetails based on test_code
+            Supports both dict (device_id-keyed) and list formats
+            """
+            core_parameters = core_test.get("parameters", {})
+            params_list = []
+            
+            # Case 1: parameters is a dictionary with device_id keys
+            if isinstance(core_parameters, dict):
+                # Try to get parameters for the specific device_id
+                if device_id and device_id != "N/A" and device_id in core_parameters:
+                    params_list = core_parameters[device_id]
+                else:
+                    # Use first available device's parameters
+                    if len(core_parameters) > 0:
+                        first_device = list(core_parameters.keys())[0]
+                        params_list = core_parameters[first_device]
+            
+            # Case 2: parameters is a list (like PT test)
+            elif isinstance(core_parameters, list):
+                params_list = core_parameters
+            
+            # Ensure params_list is actually a list
+            if not isinstance(params_list, list):
+                return None
+            
+            # Find by test_code
+            if test_code:
+                matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
+                if matching_params:
+                    return matching_params[0]
+            
+            return None
+        
+        # Helper function to get employee signature data
+        def get_employee_signature_data(employee_id):
+            """
+            Fetch employee profile and signature image from MongoDB
+            Returns dict with employeeName, designation, and signature base64
+            """
+            if not employee_id:
+                return None
+            
+            try:
+                # Get employee profile
+                profile = profile_collection.find_one({"employeeId": employee_id})
+                if not profile:
+                    return None
+                
+                employee_name = profile.get("employeeName", "")
+                designation = profile.get("designation", "")
+                signature_file_id = profile.get("signatureFileId")
+                
+                signature_base64 = None
+                if signature_file_id:
+                    try:
+                        # Convert string ID to ObjectId if needed
+                        from bson import ObjectId
+                        if isinstance(signature_file_id, str):
+                            signature_file_id = ObjectId(signature_file_id)
+                        
+                        # Fetch signature image from GridFS
+                        signature_file = fs.get(signature_file_id)
+                        signature_bytes = signature_file.read()
+                        
+                        # Convert to base64
+                        import base64
+                        signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
+                    except Exception as e:
+                        print(f"Error fetching signature for employee {employee_id}: {str(e)}")
+                
+                return {
+                    "employeeName": employee_name,
+                    "designation": designation,
+                    "signatureBase64": signature_base64
+                }
+            except Exception as e:
+                print(f"Error fetching employee data for {employee_id}: {str(e)}")
+                return None
+        
         results = {}
         
         for barcode in barcodes:
@@ -2786,7 +3079,10 @@ def get_batch_corporate_health_reports(request):
                     if final_assessment:
                         patient_details["final_assessment"] = final_assessment
                 
-                # Process lab tests from TestValue model
+                # Collect all unique approvers across all test values
+                all_approvers = set()
+                
+                # UPDATED: Process lab tests from TestValue model with parameter enrichment from core_testdetails
                 if test_values.exists():
                     for test_value in test_values:
                         try:
@@ -2795,22 +3091,46 @@ def get_batch_corporate_health_reports(request):
                                 continue
                             
                             for test_detail in testvalue_details:
+                                test_id = test_detail.get("test_id")
                                 testname = test_detail.get("testname")
+                                device_id = test_detail.get("device_id", "N/A")
+                                
+                                if not test_id:
+                                    continue
+                                
+                                # UPDATED: Fetch test details from core_testdetails using test_id
+                                core_test = core_testdetails_collection.find_one({"test_id": test_id})
+                                if core_test:
+                                    testname = core_test.get("test_name", testname)
+                                    # Get specimen_type from core_test
+                                    specimen_type = core_test.get("specimen_type", "N/A")
+                                    # UPDATED: Get department from core_test
+                                    department = core_test.get("department", test_detail.get("department", ""))
+                                else:
+                                    specimen_type = test_detail.get("specimen_type", "")
+                                    department = test_detail.get("department", "")
+                                
                                 if not testname:
                                     continue
+                                
+                                # Collect approver ID
+                                approve_by = test_detail.get("approve_by", "")
+                                if approve_by:
+                                    all_approvers.add(approve_by)
                                 
                                 # Find corresponding sample status
                                 sample_status = None
                                 for sample_test in sample_testdetails:
-                                    if sample_test.get("testname") == testname:
+                                    if sample_test.get("test_id") == test_id or sample_test.get("testname") == testname:
                                         sample_status = sample_test
                                         break
                                 
                                 # Build test detail object
                                 test_response = {"testname": testname}
                                 
-                                if test_detail.get("department"):
-                                    test_response["department"] = test_detail.get("department")
+                                # UPDATED: Use department from core_testdetails (with fallback to stored data)
+                                if department:
+                                    test_response["department"] = department
                                 
                                 if test_detail.get("verified_by"):
                                     test_response["verified_by"] = test_detail.get("verified_by")
@@ -2821,32 +3141,69 @@ def get_batch_corporate_health_reports(request):
                                 if test_detail.get("approve_time"):
                                     test_response["approve_time"] = test_detail.get("approve_time")
                                 
+                                # UPDATED: Add outsourced and comment from test_detail
+                                outsourced = test_detail.get("outsourced", False)
+                                if outsourced:
+                                    test_response["outsourced"] = outsourced
+                                
+                                comment = test_detail.get("comment", "")
+                                if comment:
+                                    test_response["comment"] = comment
+                                
                                 if sample_status:
                                     if sample_status.get("samplecollected_time"):
                                         test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
                                     if sample_status.get("received_time"):
                                         test_response["received_time"] = sample_status.get("received_time")
                                 
-                                # Check if test has parameters
+                                # UPDATED: Check if test has parameters and enrich from core_testdetails
                                 if test_detail.get("parameters"):
                                     processed_parameters = []
                                     for param in test_detail.get("parameters", []):
+                                        test_code = param.get("test_code")
+                                        value = param.get("value", "")
+                                        param_comment = param.get("comment", "")
+                                        
+                                        # Get parameter definition from core_testdetails based on test_code
+                                        if core_test and test_code:
+                                            param_def = get_parameter_from_core(core_test, device_id, test_code)
+                                        else:
+                                            param_def = None
+                                        
                                         processed_param = {}
                                         
-                                        if param.get("name"):
-                                            processed_param["name"] = param.get("name")
-                                        if param.get("value"):
-                                            processed_param["value"] = param.get("value")
-                                        if param.get("unit"):
-                                            processed_param["unit"] = param.get("unit")
-                                        if param.get("specimen_type"):
-                                            processed_param["specimen_type"] = param.get("specimen_type")
-                                        if param.get("reference_range"):
-                                            processed_param["reference_range"] = param.get("reference_range")
-                                        if param.get("method"):
-                                            processed_param["method"] = param.get("method")
-                                        if param.get("sub_title"):
-                                            processed_param["sub_title"] = param.get("sub_title")
+                                        # Use core_testdetails data if available, otherwise fallback to stored data
+                                        if param_def:
+                                            processed_param["name"] = param_def.get("test_name", param.get("name", ""))
+                                            processed_param["value"] = value
+                                            processed_param["unit"] = param_def.get("unit", "")
+                                            processed_param["specimen_type"] = specimen_type
+                                            processed_param["reference_range"] = param_def.get("reference_range", "")
+                                            processed_param["method"] = param_def.get("method", "")
+                                            if param_def.get("sub_title"):
+                                                processed_param["sub_title"] = param_def.get("sub_title")
+                                            # UPDATED: Add parameter comment if available
+                                            if param_comment:
+                                                processed_param["comment"] = param_comment
+                                        else:
+                                            # Fallback to stored data
+                                            if param.get("name"):
+                                                processed_param["name"] = param.get("name")
+                                            if value:
+                                                processed_param["value"] = value
+                                            if param.get("unit"):
+                                                processed_param["unit"] = param.get("unit")
+                                            if param.get("specimen_type"):
+                                                processed_param["specimen_type"] = param.get("specimen_type")
+                                            if param.get("reference_range"):
+                                                processed_param["reference_range"] = param.get("reference_range")
+                                            if param.get("method"):
+                                                processed_param["method"] = param.get("method")
+                                            if param.get("sub_title"):
+                                                processed_param["sub_title"] = param.get("sub_title")
+                                            # UPDATED: Add parameter comment if available
+                                            if param_comment:
+                                                processed_param["comment"] = param_comment
                                         
                                         if processed_param:
                                             processed_parameters.append(processed_param)
@@ -2854,19 +3211,34 @@ def get_batch_corporate_health_reports(request):
                                     if processed_parameters:
                                         test_response["parameters"] = processed_parameters
                                 else:
-                                    # Add individual test fields
-                                    if test_detail.get("method"):
-                                        test_response["method"] = test_detail.get("method")
-                                    if test_detail.get("specimen_type"):
-                                        test_response["specimen_type"] = test_detail.get("specimen_type")
-                                    if test_detail.get("value"):
-                                        test_response["value"] = test_detail.get("value")
-                                    if test_detail.get("unit"):
-                                        test_response["unit"] = test_detail.get("unit")
-                                    if test_detail.get("reference_range"):
-                                        test_response["reference_range"] = test_detail.get("reference_range")
-                                    if test_detail.get("sub_title"):
-                                        test_response["sub_title"] = test_detail.get("sub_title")
+                                    # Add individual test fields - prefer core_testdetails data
+                                    if core_test:
+                                        if core_test.get("method"):
+                                            test_response["method"] = core_test.get("method")
+                                        if specimen_type:
+                                            test_response["specimen_type"] = specimen_type
+                                        if test_detail.get("value"):
+                                            test_response["value"] = test_detail.get("value")
+                                        if core_test.get("unit"):
+                                            test_response["unit"] = core_test.get("unit")
+                                        if core_test.get("reference_range"):
+                                            test_response["reference_range"] = core_test.get("reference_range")
+                                        if test_detail.get("sub_title"):
+                                            test_response["sub_title"] = test_detail.get("sub_title")
+                                    else:
+                                        # Fallback to stored data
+                                        if test_detail.get("method"):
+                                            test_response["method"] = test_detail.get("method")
+                                        if test_detail.get("specimen_type"):
+                                            test_response["specimen_type"] = test_detail.get("specimen_type")
+                                        if test_detail.get("value"):
+                                            test_response["value"] = test_detail.get("value")
+                                        if test_detail.get("unit"):
+                                            test_response["unit"] = test_detail.get("unit")
+                                        if test_detail.get("reference_range"):
+                                            test_response["reference_range"] = test_detail.get("reference_range")
+                                        if test_detail.get("sub_title"):
+                                            test_response["sub_title"] = test_detail.get("sub_title")
                                 
                                 patient_details["testdetails"].append(test_response)
                                 
@@ -2874,10 +3246,23 @@ def get_batch_corporate_health_reports(request):
                             print(f"Error processing test: {str(e)}")
                             continue
                 
-                results[barcode] = patient_details
+                # Fetch signature data for all approvers
+                signatures_data = []
+                for approver_id in all_approvers:
+                    sig_data = get_employee_signature_data(approver_id)
+                    if sig_data:
+                        signatures_data.append(sig_data)
+                
+                # Store result with patient_data and signatures structure
+                results[barcode] = {
+                    "patient_data": patient_details,
+                    "signatures": signatures_data
+                }
                 
             except Exception as e:
                 print(f"Error processing barcode {barcode}: {str(e)}")
+                import traceback
+                print(traceback.format_exc())
                 results[barcode] = {'error': str(e)}
         
         client.close()
@@ -2891,5 +3276,6 @@ def get_batch_corporate_health_reports(request):
         
     except Exception as e:
         print(f"Batch processing error: {str(e)}")
+        import traceback
         print(traceback.format_exc())
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
