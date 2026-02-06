@@ -296,3 +296,4 @@ def get_hms_barcode_by_date(request):
             status=500
         )
 
+
