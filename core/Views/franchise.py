@@ -620,6 +620,7 @@ def franchise_overall_report(request):
         print("Received query parameters:", request.GET)
         print(f"from_date: {from_date}, to_date: {to_date}, selected_date: {selected_date}, patient_id: {patient_id}")
         
+        
         try:
             if selected_date:
                 selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
@@ -1277,6 +1278,7 @@ def franchise_overall_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
+
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])

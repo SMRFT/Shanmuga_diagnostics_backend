@@ -146,6 +146,28 @@ def hms_overall_report(request):
         print("Received query parameters:", request.GET)
         print(f"from_date: {from_date}, to_date: {to_date}, selected_date: {selected_date}, patient_id: {patient_id}")
 
+        # ADD THIS HELPER FUNCTION AT THE TOP
+        def parse_tat_format(tat_str):
+            """Parse TAT format like '2D 3H 45M' and return total seconds"""
+            if not tat_str or tat_str == 'N/A':
+                return None
+            try:
+                total_seconds = 0
+                days = re.search(r'(\d+)D', str(tat_str))
+                hours = re.search(r'(\d+)H', str(tat_str))
+                minutes = re.search(r'(\d+)M', str(tat_str))
+
+                if days:
+                    total_seconds += int(days.group(1)) * 86400
+                if hours:
+                    total_seconds += int(hours.group(1)) * 3600
+                if minutes:
+                    total_seconds += int(minutes.group(1)) * 60
+
+                return total_seconds if total_seconds > 0 else None
+            except:
+                return None
+
         # Validate and parse dates
         try:
             if selected_date:
@@ -409,7 +431,7 @@ def hms_overall_report(request):
             elif partially_received:
                 status = "Partially Received"
 
-            # Get individual test statuses
+            # UPDATED: Get individual test statuses WITH TAT TRACKING
             individual_test_statuses = []
             if barcode and test_list:
                 for test in test_list:
@@ -421,6 +443,64 @@ def hms_overall_report(request):
                     
                     # Get test value info
                     test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
+                    
+                    # **NEW: Get TAT from core_testdetails**
+                    test_detail = test_details_collection.find_one(
+                        {"test_id": test_id},
+                        {"_id": 0, "TAT_Time": 1}
+                    )
+                    tat_time = test_detail.get("TAT_Time") if test_detail else None
+                    
+                    # **NEW: Get timestamps**
+                    sample_collected_time = None
+                    approve_time = None
+                    
+                    if sample_info and sample_info.get('samplecollected_time'):
+                        try:
+                            if isinstance(sample_info['samplecollected_time'], str):
+                                sample_collected_time = datetime.strptime(
+                                    sample_info['samplecollected_time'], 
+                                    "%Y-%m-%d %H:%M:%S"
+                                )
+                            elif isinstance(sample_info['samplecollected_time'], datetime):
+                                sample_collected_time = sample_info['samplecollected_time']
+                        except Exception as e:
+                            print(f"Error parsing sample_collected_time for test_id {test_id}: {e}")
+                    
+                    if test_value_info and test_value_info.get('approve_time'):
+                        try:
+                            approve_time_str = test_value_info['approve_time']
+                            if approve_time_str and approve_time_str != 'null':
+                                approve_time = datetime.strptime(
+                                    approve_time_str, 
+                                    "%Y-%m-%d %H:%M:%S"
+                                )
+                        except Exception as e:
+                            print(f"Error parsing approve_time for test_id {test_id}: {e}")
+                    
+                    # **NEW: Calculate TAT status**
+                    tat_status = None
+                    seconds_left = None
+                    tat_deadline_iso = None
+                    
+                    if tat_time and sample_collected_time:
+                        # Parse TAT_Time using the helper function
+                        tat_seconds = parse_tat_format(tat_time)
+                        
+                        if tat_seconds:
+                            tat_deadline = sample_collected_time + timedelta(seconds=tat_seconds)
+                            tat_deadline_iso = tat_deadline.isoformat()
+                            
+                            if approve_time:
+                                # Test is approved - calculate time taken
+                                time_taken_seconds = (approve_time - sample_collected_time).total_seconds()
+                                seconds_left = tat_seconds - time_taken_seconds
+                                tat_status = "completed"
+                            else:
+                                # Test not approved yet - calculate remaining time
+                                now = datetime.now()
+                                seconds_left = (tat_deadline - now).total_seconds()
+                                tat_status = "pending"
                     
                     # Determine individual test status
                     test_status = "Registered"
@@ -454,10 +534,17 @@ def hms_overall_report(request):
                         if test_value_info.get('dispatch'):
                             test_status = "Dispatched"
                     
+                    # **NEW: Add TAT information to individual test status**
                     individual_test_statuses.append({
                         'test_id': test_id,
                         'test_name': test_name,
                         'status': test_status,
+                        'tat_time': tat_time,
+                        'seconds_left': int(seconds_left) if seconds_left is not None else None,
+                        'tat_status': tat_status,
+                        'tat_deadline': tat_deadline_iso,
+                        'sample_collected_time': sample_collected_time.isoformat() if sample_collected_time else None,
+                        'approve_time': approve_time.isoformat() if approve_time else None,
                     })
 
             # Test value status logic (using test_id for comparison)
@@ -571,9 +658,9 @@ def hms_overall_report(request):
                 "refby": refby,
                 "branch": branch,
                 "test_names": testnames,
-                "department": department,  # Department field with actual values from MongoDB
-                "department_statuses": department_statuses,  # Department-wise status
-                "test_statuses": individual_test_statuses,
+                "department": department,
+                "department_statuses": department_statuses,
+                "test_statuses": individual_test_statuses,  # NOW INCLUDES TAT INFO
                 "no_of_tests": no_of_tests,
                 "billnumber": billnumber,
                 "barcode": barcode,
