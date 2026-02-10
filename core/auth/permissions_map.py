@@ -59,14 +59,13 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/final_approve/?(\?.*)?$':'SD-P-SCU',
  
     #Logistics
-    '/_b_a_c_k_e_n_d/LIS/get_sample_collectors/':'SD-P-LGSC',
-    '/_b_a_c_k_e_n_d/LIS/get_logistic_data/':'SD-P-LGLD',
-    '/_b_a_c_k_e_n_d/LIS/save_logistic_data/':'SD-P-LSD',
-    '/_b_a_c_k_e_n_d/LIS/sample_collector_location/':'SD-P-LSCL',
-    '/_b_a_c_k_e_n_d/LIS/savesamplecollector/':'SD-P-LSC',
-    '/_b_a_c_k_e_n_d/LIS/updatesamplecollectordetails/':'SD-P-LUSCD',
-    r'^/_b_a_c_k_e_n_d/LIS/get_logistic_task/?(\?.*)?$':'SD-P-LGLT',
-    '/_b_a_c_k_e_n_d/LIS/logisticdashboard/':'SD-P-LGD',
+    '/_b_a_c_k_e_n_d/LIS/logistics/': 'SD-P-LTA',
+    '/_b_a_c_k_e_n_d/LIS/logistics_by_collector/': 'SD-P-LBC',
+    '/_b_a_c_k_e_n_d/LIS/logistics-dashboard/': 'SD-P-LD',
+    '/_b_a_c_k_e_n_d/LIS/logistics-tat-report/': 'SD-P-LTR',
+    r'^/_b_a_c_k_e_n_d/LIS/logistics/?(\?.*)?$': 'SD-P-LTM',
+    '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
+    '/_b_a_c_k_e_n_d/LIS/collector-route-stats/': 'SD-P-LSR',
 
 
     #Sample Status: 
@@ -221,6 +220,7 @@ GEN_ACTION_MAPPING = {
     'PATCH': 'RW',
     'OPTIONS': 'RW',
 }
+
 
 
 
