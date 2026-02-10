@@ -120,17 +120,9 @@ class SalesVisitLogSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-from .models import LogisticData
-class LogisticDataSerializer(serializers.ModelSerializer):
+from .models import Logistics
+class LogisticsSerializer(serializers.ModelSerializer):
     id = ObjectIdField(read_only=True)
     class Meta:
-        model = LogisticData
-        fields = "__all__"
-
-        
-from .models import LogisticTask
-class LogisticTaskSerializer(serializers.ModelSerializer):
-    id = ObjectIdField(read_only=True)
-    class Meta:
-        model = LogisticTask
+        model = Logistics
         fields = "__all__"
