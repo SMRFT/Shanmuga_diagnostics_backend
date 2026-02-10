@@ -69,14 +69,15 @@ urlpatterns = [
     path('clinical-names/<str:referrerCode>/final_approve/', clinicalname.ClinicalNameViewSet.as_view({'patch': 'final_approve'}), name='clinical-name-final-approve'),
     path('mou-preview/<str:file_id>/',clinicalname.preview_mou_file, name='preview_mou_file'),
     #Logistics
-    path('get_sample_collectors/', logistic.get_sample_collectors, name='get_sample_collectors'),
-    path('get_logistic_data/', logistic.get_logistic_data, name='get_logistic_data/'),
-    path('save_logistic_data/',logistic.save_logistic_data, name='save_logistic_data/'),
-    path('sample_collector_location/', location.sample_collector_location, name='save_collector_location'),
-    path('savesamplecollector/', logistic.savesamplecollectordetails, name='savesamplecollector'),
-    path('updatesamplecollectordetails/', logistic.update_sample_collector_details, name='updatesamplecollectordetails'),
-    path('get_logistic_task/', logistic.get_logistic_task, name='get_logistic_task'),
-    path('get_home_collection_report/', report.get_home_collection_report, name='get_home_collection_report'),
+    path('logistics/',logistics.create_logistics, name='logistics'),
+    path('logistics_by_collector/',logistics.logistics_by_collector, name='logistics_by_collector'),
+    path('logistics/<int:task_id>/accept/', logistics.accept_task, name='accept_task'),
+    path('logistics/<int:task_id>/reject/', logistics.reject_task, name='reject_task'),
+    path('logistics/<int:task_id>/pickup/', logistics.pickup_task, name='pickup_task'),
+    path('logistics-dashboard/', logistics.logistics_dashboard, name='logistics_dashboard'),
+    path('logistics-tat-report/', logistics.logistics_tat_report, name='logistics_tat_report'),
+    path('sample-collector-location/', location.create_sample_collector_location, name='create_sample_collector_location'),
+    path('collector-route-stats/', location.collector_route_stats, name='collector_route_stats'),
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
@@ -260,6 +261,7 @@ urlpatterns = [
 
     
 ]
+
 
 
 
