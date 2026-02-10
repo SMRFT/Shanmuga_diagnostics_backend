@@ -210,17 +210,6 @@ class HospitalLab(models.Model):
     created_date = models.DateTimeField(auto_now_add=True)
     def __str__(self):
         return self.clinicalname
-    
-
-class LogisticData(AuditModel):
-    date = models.DateField()
-    sampleordertime = models.CharField(max_length=255)
-    labName= models.CharField(max_length=255)
-    salesMapping = models.CharField(max_length=255, blank=True, null=True)
-    sampleCollector = models.CharField(max_length=255)
-    def __str__(self):
-        return f"{self.labName} - {self.date}"
-    
 
 class Logistics(AuditModel):
     task_id = models.IntegerField(unique=True,primary_key=True)
@@ -244,11 +233,7 @@ class Logistics(AuditModel):
 class SampleCollectorLocation(models.Model):
     sampleCollector = models.CharField(max_length=255)
     date = models.DateField()
-    latitudeStart = models.CharField(max_length=255, null=True, blank=True)
-    longitudeStart = models.CharField(max_length=255, null=True, blank=True)
     startTime = models.DateTimeField(null=True, blank=True)
-    latitudeEnd = models.CharField(max_length=255, null=True, blank=True)
-    longitudeEnd = models.CharField(max_length=255, null=True, blank=True)
     endTime = models.DateTimeField(null=True, blank=True)
     location_history = models.JSONField(default=list, blank=True)  # To store multiple points as a list
     distance_travelled = models.CharField(max_length=255, null=True, blank=True)
@@ -256,7 +241,6 @@ class SampleCollectorLocation(models.Model):
         return f"{self.sampleCollector} - {self.date}"
     class Meta:
         unique_together = ('sampleCollector', 'date')
-
 
 #HMS PART
 class HmspatientBilling(AuditModel):
@@ -322,3 +306,4 @@ class MBTestValue(AuditModel):
         if not self._id:
             self._id = str(ObjectId())  # Convert ObjectId to string
         super().save(*args, **kwargs)
+

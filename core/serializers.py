@@ -120,11 +120,11 @@ class SalesVisitLogSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-from .models import LogisticData
-class LogisticDataSerializer(serializers.ModelSerializer):
+from .models import Logistics
+class LogisticsSerializer(serializers.ModelSerializer):
     id = ObjectIdField(read_only=True)
     class Meta:
-        model = LogisticData
+        model = Logistics
         fields = "__all__"
 
         
