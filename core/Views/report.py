@@ -1,41 +1,29 @@
 from rest_framework.response import Response
 from django.http import JsonResponse 
-from datetime import datetime
 from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view
 from rest_framework import  status
 from urllib.parse import quote_plus
 from pymongo import MongoClient
-from rest_framework import status
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime, timedelta
-from collections import defaultdict
-from django.utils import timezone  # Import Django's timezone module
 import re
+from datetime import datetime, timedelta
 from django.core.mail import EmailMessage
 from django.conf import settings 
-from django.utils.timezone import make_aware
-from datetime import datetime, date  
-from rest_framework.views import APIView
-import traceback
-import json
+from django.utils.timezone import make_aware 
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from ..models import Patient
 from ..models import SampleStatus,Billing
 from ..models import TestValue, MBTestValue
 from ..models import BarcodeTestDetails
-from pymongo import MongoClient
-from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
 from django.views.decorators.csrf import csrf_exempt
-from django.http import JsonResponse
 from django.core.mail import EmailMessage
-import os
 from dotenv import load_dotenv
 import pytz
-from datetime import datetime
 from django.utils.dateparse import parse_datetime
 import gridfs
 load_dotenv()
@@ -130,6 +118,7 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
                     department_status[dept] = 'In Progress'
     
     return department_status
+
 @api_view(['GET', 'PATCH'])
 @csrf_exempt
 def overall_report(request):
@@ -156,6 +145,27 @@ def overall_report(request):
 
         print("Received query parameters:", request.GET)
         print(f"from_date: {from_date}, to_date: {to_date}, selected_date: {selected_date}, patient_id: {patient_id}")
+
+        def parse_tat_format(tat_str):
+            """Parse TAT format like '2D 3H 45M' and return total seconds"""
+            if not tat_str or tat_str == 'N/A':
+                return None
+            try:
+                total_seconds = 0
+                days = re.search(r'(\d+)D', str(tat_str))
+                hours = re.search(r'(\d+)H', str(tat_str))
+                minutes = re.search(r'(\d+)M', str(tat_str))
+
+                if days:
+                    total_seconds += int(days.group(1)) * 86400
+                if hours:
+                    total_seconds += int(hours.group(1)) * 3600
+                if minutes:
+                    total_seconds += int(minutes.group(1)) * 60
+
+                return total_seconds if total_seconds > 0 else None
+            except:
+                return None
 
         # Validate and parse dates
         try:
@@ -540,56 +550,123 @@ def overall_report(request):
             elif partially_received:
                 status = "Partially Received"
             
-            # Get individual test statuses
+            
+
+
+                # Get individual test statuses
             individual_test_statuses = []
             if barcode and test_list:
-                for test in test_list:
-                    test_id = test.get('test_id')
-                    test_name = test.get('testname', 'N/A')
-                    
-                    # Get sample info
-                    sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
-                    
-                    # Get test value info
-                    test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
-                    
-                    # Determine individual test status
-                    test_status = "Registered"
-                    
-                    if sample_info:
-                        if sample_info.get('samplestatus') == 'Sample Collected':
-                            test_status = "Collected"
-                        if sample_info.get('samplestatus') == 'Received':
-                            test_status = "Received"
-                        if sample_info.get('samplestatus') == 'Rejected':
-                            test_status = "Rejected"
-                    
-                    if test_value_info:
-                        # Check if test has values
-                        has_values = False
-                        parameters = test_value_info.get("parameters", [])
-                        if not parameters:
-                            has_values = bool(test_value_info.get("value"))
-                        else:
-                            has_values = any(
-                                param.get("value") is not None and str(param.get("value")).strip() != ""
-                                for param in parameters
-                            )
+                    for test in test_list:
+                        test_id = test.get('test_id')
+                        test_name = test.get('testname', 'N/A')
                         
-                        if has_values:
-                            test_status = "Tested"
+                        # Get sample info
+                        sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
                         
-                        if test_value_info.get('approve'):
-                            test_status = "Approved"
+                        # Get test value info
+                        test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
                         
-                        if test_value_info.get('dispatch'):
-                            test_status = "Dispatched"
-                    
-                    individual_test_statuses.append({
-                        'test_id': test_id,
-                        'test_name': test_name,
-                        'status': test_status,
-                    })
+                        # Get TAT from core_testdetails
+                        test_detail = test_details_collection.find_one(
+                            {"test_id": test_id},
+                            {"_id": 0, "TAT_Time": 1}
+                        )
+                        tat_time = test_detail.get("TAT_Time") if test_detail else None
+                        
+                        # Get timestamps
+                        sample_collected_time = None
+                        approve_time = None
+                        
+                        if sample_info and sample_info.get('samplecollected_time'):
+                            try:
+                                if isinstance(sample_info['samplecollected_time'], str):
+                                    sample_collected_time = datetime.strptime(
+                                        sample_info['samplecollected_time'], 
+                                        "%Y-%m-%d %H:%M:%S"
+                                    )
+                                elif isinstance(sample_info['samplecollected_time'], datetime):
+                                    sample_collected_time = sample_info['samplecollected_time']
+                            except Exception as e:
+                                print(f"Error parsing sample_collected_time: {e}")
+                        
+                        if test_value_info and test_value_info.get('approve_time'):
+                            try:
+                                approve_time_str = test_value_info['approve_time']
+                                if approve_time_str and approve_time_str != 'null':
+                                    approve_time = datetime.strptime(
+                                        approve_time_str, 
+                                        "%Y-%m-%d %H:%M:%S"
+                                    )
+                            except Exception as e:
+                                print(f"Error parsing approve_time: {e}")
+                        
+                        # Calculate TAT status
+                        tat_status = None
+                        seconds_left = None
+                        tat_deadline_iso = None
+                        
+                        if tat_time and sample_collected_time:
+                            # Parse TAT_Time using the new function
+                            tat_seconds = parse_tat_format(tat_time)
+                            
+                            if tat_seconds:
+                                tat_deadline = sample_collected_time + timedelta(seconds=tat_seconds)
+                                tat_deadline_iso = tat_deadline.isoformat()
+                                
+                                if approve_time:
+                                    # Test is approved - calculate time taken
+                                    time_taken_seconds = (approve_time - sample_collected_time).total_seconds()
+                                    seconds_left = tat_seconds - time_taken_seconds
+                                    tat_status = "completed"
+                                else:
+                                    # Test not approved yet - calculate remaining time
+                                    now = datetime.now()
+                                    seconds_left = (tat_deadline - now).total_seconds()
+                                    tat_status = "pending"
+                        
+                        # Determine individual test status
+                        test_status = "Registered"
+                        
+                        if sample_info:
+                            if sample_info.get('samplestatus') == 'Sample Collected':
+                                test_status = "Collected"
+                            if sample_info.get('samplestatus') == 'Received':
+                                test_status = "Received"
+                            if sample_info.get('samplestatus') == 'Rejected':
+                                test_status = "Rejected"
+                        
+                        if test_value_info:
+                            # Check if test has values
+                            has_values = False
+                            parameters = test_value_info.get("parameters", [])
+                            if not parameters:
+                                has_values = bool(test_value_info.get("value"))
+                            else:
+                                has_values = any(
+                                    param.get("value") is not None and str(param.get("value")).strip() != ""
+                                    for param in parameters
+                                )
+                            
+                            if has_values:
+                                test_status = "Tested"
+                            
+                            if test_value_info.get('approve'):
+                                test_status = "Approved"
+                            
+                            if test_value_info.get('dispatch'):
+                                test_status = "Dispatched"
+                        
+                        individual_test_statuses.append({
+                            'test_id': test_id,
+                            'test_name': test_name,
+                            'status': test_status,
+                            'tat_time': tat_time,
+                            'seconds_left': int(seconds_left) if seconds_left is not None else None,
+                            'tat_status': tat_status,
+                            'tat_deadline': tat_deadline_iso,
+                            'sample_collected_time': sample_collected_time.isoformat() if sample_collected_time else None,
+                            'approve_time': approve_time.isoformat() if approve_time else None,
+                        }) 
 
             # Test value status logic using test_id
             if valid_test_values:
