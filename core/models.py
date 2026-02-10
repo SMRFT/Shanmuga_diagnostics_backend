@@ -228,7 +228,7 @@ class Logistics(AuditModel):
             last = Logistics.objects.order_by('-task_id').first()
             self.task_id = (last.task_id + 1) if last else 1
         super().save(*args, **kwargs)
-
+    
 
 class SampleCollectorLocation(models.Model):
     sampleCollector = models.CharField(max_length=255)

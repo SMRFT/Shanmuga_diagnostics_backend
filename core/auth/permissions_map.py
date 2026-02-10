@@ -59,13 +59,13 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/final_approve/?(\?.*)?$':'SD-P-SCU',
  
     #Logistics
-    '/_b_a_c_k_e_n_d/LIS/logistics/': 'SD-P-LTA',
-    '/_b_a_c_k_e_n_d/LIS/logistics_by_collector/': 'SD-P-LBC',
-    '/_b_a_c_k_e_n_d/LIS/logistics-dashboard/': 'SD-P-LD',
-    '/_b_a_c_k_e_n_d/LIS/logistics-tat-report/': 'SD-P-LTR',
-    r'^/_b_a_c_k_e_n_d/LIS/logistics/?(\?.*)?$': 'SD-P-LTM',
-    '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
-    '/_b_a_c_k_e_n_d/LIS/collector-route-stats/': 'SD-P-LSR',
+    '/_b_a_c_k_e_n_d/LIS/logistics/': 'SD-P-LTA',
+    '/_b_a_c_k_e_n_d/LIS/logistics_by_collector/': 'SD-P-LBC',
+    '/_b_a_c_k_e_n_d/LIS/logistics-dashboard/': 'SD-P-LD',
+    '/_b_a_c_k_e_n_d/LIS/logistics-tat-report/': 'SD-P-LTR',
+    r'^/_b_a_c_k_e_n_d/LIS/logistics/?(\?.*)?$': 'SD-P-LTM',
+    '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
+    '/_b_a_c_k_e_n_d/LIS/collector-route-stats/': 'SD-P-LSR',
 
 
     #Sample Status: 

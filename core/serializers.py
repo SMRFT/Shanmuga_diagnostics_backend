@@ -126,3 +126,11 @@ class LogisticsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Logistics
         fields = "__all__"
+
+        
+from .models import Logistics
+class LogisticsSerializer(serializers.ModelSerializer):
+    id = ObjectIdField(read_only=True)
+    class Meta:
+        model = Logistics
+        fields = "__all__"
