@@ -52,8 +52,8 @@ def sales_person(request):
         # Query: employees with primaryRole == "SD-R-SMC" OR additionalRoles contains "SD-R-SMC"
         query = {
             "$or": [
-                {"primaryRole": "SD-R-SP"},
-                {"additionalRoles": "SD-R-SP"}
+                {"primaryRole": "SD-R-SE"},
+                {"additionalRoles": "SD-R-SE"}
             ]
         }
 
@@ -322,5 +322,6 @@ def update_clinicalname(request):
     if serializer.is_valid():
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
+
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
