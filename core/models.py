@@ -212,7 +212,7 @@ class HospitalLab(models.Model):
         return self.clinicalname
 
 class Logistics(AuditModel):
-    task_id = models.IntegerField(unique=True,primary_key=True)
+    task_id = models.IntegerField(primary_key=True)
     date = models.DateField()
     sample_collector = models.CharField(max_length=255)
     clinicalname = models.CharField(max_length=255)
@@ -306,4 +306,5 @@ class MBTestValue(AuditModel):
         if not self._id:
             self._id = str(ObjectId())  # Convert ObjectId to string
         super().save(*args, **kwargs)
+
 
