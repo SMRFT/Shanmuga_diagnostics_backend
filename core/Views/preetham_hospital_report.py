@@ -8,6 +8,8 @@ import json
 import os
 import traceback
 
+from ..models import Billing
+
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
@@ -519,3 +521,58 @@ def preetham_billing_dashboard(request):
         print("Error in preetham_billing_dashboard:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
+    
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def preetham_hospital_ledger(request):
+    try:
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
+
+        print(f"preetham_hospital_ledger: from={from_date}, to={to_date}")
+
+        query = {
+            'B2B': 'PREETHAM HOSPITAL'
+        }
+
+        if from_date and to_date:
+            try:
+                start_date = datetime.strptime(from_date, "%Y-%m-%d")
+                end_date = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+                query['date__range'] = [start_date, end_date]
+            except ValueError:
+                return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+        billings = Billing.objects.filter(**query).order_by('date')
+
+        data = []
+        for bill in billings:
+            try:
+                total    = float(bill.totalAmount) if bill.totalAmount else 0
+                net      = float(bill.netAmount)   if bill.netAmount   else 0
+                discount = float(bill.discount)    if bill.discount    else 0
+            except ValueError:
+                total, net, discount = 0, 0, 0
+
+            data.append({
+                "id":           getattr(bill, 'id', str(bill.pk)),
+                "date":         bill.date.strftime("%Y-%m-%d") if bill.date else "N/A",
+                "bill_no":      bill.bill_no,
+                "patient_name": bill.patientname,
+                "b2b_name":     bill.B2B,
+                "total_amount": total,
+                "net_amount":   net,
+                "discount":     discount,
+            })
+
+        return JsonResponse({"success": True, "data": data})
+
+    except Exception as e:
+        print(f"Error in preetham_hospital_ledger: {str(e)}")
+        print(traceback.format_exc())
+        return JsonResponse(
+            {"success": False, "error": f"{str(e)} | {traceback.format_exc()}"},
+            status=500
+        )

@@ -651,18 +651,18 @@ def patient_report(request):
         'refund_amount': 0,
         'payment_totals': {
             'Cash': 0, 'UPI': 0, 'Neft': 0,
-            'Cheque': 0, 'Credit': 0, 'PartialPayment': 0,
-            'Credit Card': 0
+            'Cheque': 0, 'Credit': 0
         }
     })
 
-    # ✅ Patients query within range
+    # ✅ Patients query within range (Billing Date)
     patients = patients_collection.find({
         "date": {"$gte": start_date, "$lt": end_date}
     })
 
     for patient in patients:
         patient_date = patient.get('date')
+
         if isinstance(patient_date, dict) and "$date" in patient_date:
             patient_date = datetime.fromisoformat(patient_date["$date"].replace("Z", "+00:00"))
         elif isinstance(patient_date, str):
@@ -675,6 +675,7 @@ def patient_report(request):
             continue
 
         date_key = patient_date.strftime("%Y-%m-%d")
+
         gross_amount = convert_to_float(patient.get('totalAmount', 0))
         discount = convert_to_float(patient.get('discount', 0))
         due_amount = convert_to_float(patient.get('credit_amount', 0))
@@ -683,9 +684,10 @@ def patient_report(request):
         report_by_date[date_key]['discount'] += discount
         report_by_date[date_key]['due_amount'] += due_amount
 
-        # ✅ Handle payment methods
+        # ✅ Handle Payment Methods
         payment_method = patient.get('payment_method', '')
         payment_method_dict = {}
+
         if isinstance(payment_method, str) and payment_method.strip():
             try:
                 payment_method_dict = json.loads(payment_method)
@@ -708,7 +710,6 @@ def patient_report(request):
                     report_by_date[date_key]['payment_totals'][method] += amt
                 else:
                     report_by_date[date_key]['payment_totals'][method] = amt
-
         else:
             method = payment_method_dict.get("paymentmethod")
             if method in report_by_date[date_key]['payment_totals']:
@@ -717,9 +718,10 @@ def patient_report(request):
                 if method:
                     report_by_date[date_key]['payment_totals'][method] = gross_amount
 
-        # ✅ Handle Refunds
+        # ✅ Handle Refunds from testdetails
         test_list = []
         testdetails = patient.get('testdetails', [])
+
         if isinstance(testdetails, str) and testdetails.strip():
             try:
                 test_list = json.loads(testdetails)
@@ -734,9 +736,13 @@ def patient_report(request):
                 if refunded_date_str:
                     try:
                         if 'T' in refunded_date_str:
-                            refund_date = datetime.fromisoformat(refunded_date_str.replace("Z", "+00:00")).date()
+                            refund_date = datetime.fromisoformat(
+                                refunded_date_str.replace("Z", "+00:00")
+                            ).date()
                         else:
-                            refund_date = datetime.strptime(refunded_date_str, "%Y-%m-%d").date()
+                            refund_date = datetime.strptime(
+                                refunded_date_str, "%Y-%m-%d"
+                            ).date()
 
                         if start_date.date() <= refund_date < end_date.date():
                             refund_date_key = refund_date.strftime("%Y-%m-%d")
@@ -745,7 +751,43 @@ def patient_report(request):
                     except:
                         continue
 
-    # ✅ Process Invoices (Credit Payments)
+    # ✅ NEW: Process Credit Payments from credit_details (Billing Collection)
+    credit_patients = patients_collection.find({
+        "credit_details": {"$exists": True, "$ne": "[]"}
+    })
+
+    for patient in credit_patients:
+        credit_details = patient.get("credit_details", [])
+
+        if isinstance(credit_details, str):
+            try:
+                credit_details = json.loads(credit_details)
+            except:
+                credit_details = []
+
+        for credit in credit_details:
+            paid_date_str = credit.get("paid_date")
+            if not paid_date_str:
+                continue
+
+            try:
+                paid_date = datetime.strptime(paid_date_str, "%Y-%m-%d").date()
+            except:
+                continue
+
+            if start_date.date() <= paid_date < end_date.date():
+                date_key = paid_date.strftime("%Y-%m-%d")
+                amount_paid = convert_to_float(credit.get("amount_paid", 0))
+                method = credit.get("payment_method", "")
+
+                report_by_date[date_key]['credit_payment_received'] += amount_paid
+
+                if method in report_by_date[date_key]['payment_totals']:
+                    report_by_date[date_key]['payment_totals'][method] += amount_paid
+                else:
+                    report_by_date[date_key]['payment_totals'][method] = amount_paid
+
+    # ✅ Process Invoices (Credit Payments from Invoice Collection)
     invoices = invoice_collection.find({
         "paymentDetails.paymentDate": {
             "$gte": start_date.strftime("%Y-%m-%d"),
@@ -755,6 +797,7 @@ def patient_report(request):
 
     for invoice in invoices:
         payment_details = invoice.get('paymentDetails', [])
+
         if isinstance(payment_details, str):
             try:
                 payment_details = json.loads(payment_details)
@@ -765,14 +808,17 @@ def patient_report(request):
             payment_date_str = payment.get('paymentDate')
             if not payment_date_str:
                 continue
+
             try:
                 payment_date = datetime.strptime(payment_date_str, "%Y-%m-%d").date()
+
                 if start_date.date() <= payment_date < end_date.date():
                     payment_date_key = payment_date.strftime("%Y-%m-%d")
                     amount_paid = convert_to_float(payment.get('paymentAmount', 0))
                     method = payment.get('paymentMethod', '')
 
                     report_by_date[payment_date_key]['credit_payment_received'] += amount_paid
+
                     if method in report_by_date[payment_date_key]['payment_totals']:
                         report_by_date[payment_date_key]['payment_totals'][method] += amount_paid
                     else:
@@ -782,9 +828,15 @@ def patient_report(request):
 
     # 📊 Final Report
     report_list = []
+
     for date, data in sorted(report_by_date.items()):
         net_amount = data['gross_amount'] - (data['discount'] + data['due_amount'])
-        total_collection = net_amount + data['credit_payment_received'] - data['refund_amount']
+        total_collection = (
+            net_amount
+            + data['credit_payment_received']
+            - data['refund_amount']
+        )
+
         report_list.append({
             'date': date,
             'gross_amount': round(data['gross_amount'], 2),
@@ -794,9 +846,10 @@ def patient_report(request):
             'refund_amount': round(data['refund_amount'], 2),
             'net_amount': round(net_amount, 2),
             'total_collection': round(total_collection, 2),
-            'payment_totals': {k: round(v, 2) for k, v in data['payment_totals'].items()},
+            'payment_totals': {
+                k: round(v, 2) for k, v in data['payment_totals'].items()
+            },
         })
 
     client.close()
     return Response({'report': report_list})
-
