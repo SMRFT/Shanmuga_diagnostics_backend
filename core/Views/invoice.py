@@ -15,8 +15,6 @@ from django.views.decorators.csrf import csrf_exempt
 import pytz
 import os
 
-#auth
-
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
