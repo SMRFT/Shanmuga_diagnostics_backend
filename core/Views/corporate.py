@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def get_corporate_sample(request, batch_number):
     """
     Get all sample details for a specific batch number with employee information
@@ -215,7 +215,7 @@ def get_corporate_sample(request, batch_number):
                 client.close()
 @api_view(['PUT'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def update_corporate_sample(request,barcode):
     """
     Bulk update sample status for multiple samples/tests
@@ -365,7 +365,7 @@ def update_corporate_sample(request,barcode):
 
 @api_view(['GET'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def get_corporate_batch_generation_data(request):
     """
     Get all batch generation data where received=false with optional date filtering
@@ -483,7 +483,7 @@ def get_corporate_batch_generation_data(request):
 
 @api_view(['PATCH'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def update_corporate_batch_received_status(request, batch_no):
     """
     Update the received status and optionally remarks for a specific batch using batch_no
@@ -672,7 +672,7 @@ def get_department_status_corporate(test_list, employee_id, sample_status_map, t
 
 @api_view(['GET','PATCH'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_overall_report(request):
     try:
         # MongoDB setup
@@ -1239,7 +1239,7 @@ def corporate_overall_report(request):
         return JsonResponse({"error": str(e)}, status=500)
 
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_patient_test_details(request):
     barcode = request.GET.get('barcode')
     if not barcode:
@@ -1602,7 +1602,7 @@ def corporate_patient_test_details(request):
     
 @api_view(['GET','PATCH'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_approval_report(request):
     try:
         # MongoDB setup
@@ -1810,7 +1810,7 @@ def corporate_approval_report(request):
         return JsonResponse({"error": str(e)}, status=500)
     
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_health_report(request):
     barcode = request.GET.get('barcode')
     if not barcode:
@@ -2445,7 +2445,7 @@ def get_investigation_file(request):
 # Add these new endpoints to your Django views.py
 
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def get_investigation_status(request):
     """
     Get investigation and ophthalmology status for a patient
@@ -2702,7 +2702,7 @@ def save_overall_approval(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 @api_view(['POST'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def get_batch_corporate_health_reports(request):
     """
     Get multiple corporate health reports in one call for batch PDF generation
