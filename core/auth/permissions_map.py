@@ -19,6 +19,8 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/refby/':'SD-API-RB',
     '/_b_a_c_k_e_n_d/LIS/clinical_name/':'SD-API-CN',
     '/_b_a_c_k_e_n_d/LIS/test_details_test/':'SD-P-TE',
+    '/_b_a_c_k_e_n_d/LIS/send_approval_email/':'SD-P-TE',
+    r'^/_b_a_c_k_e_n_d/LIS/approve_test/?(\?.*)?$':'SD-P-TE',
     '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-API-GD',
     '/_b_a_c_k_e_n_d/LIS/appointments/':'SD-P-BA',
     r'^/_b_a_c_k_e_n_d/LIS/patient_report/?(\?.*)?$': 'SD-API-PR',
@@ -142,9 +144,6 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/get_outsourced_samples/': 'SD-API-MIS',
     '/_b_a_c_k_e_n_d/LIS/get_home_collection_report/': 'SD-API-MIS',
 
-
-    r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',
-
     # Invoice URLs
     '/_b_a_c_k_e_n_d/LIS/get_clinicalname_invoice/': 'SD-API-IVM',
     '/_b_a_c_k_e_n_d/LIS/update-invoice/': 'SD-API-IVM',
@@ -203,6 +202,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',
     r'^/_b_a_c_k_e_n_d/LIS/preetham_billing_dashboard/?(\?.*)?$':'SD-P-PHD',
     r'^/_b_a_c_k_e_n_d/LIS/get_preethampatient_test_details/?(\?.*)?$':'SD-P-GPT',
+    r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_ledger/?(\?.*)?$':'SD-P-PHR',
 
 }
 

@@ -175,10 +175,25 @@ def get_test_details(request):
         # -------------------- POST (CREATE) --------------------
         elif request.method == 'POST':
             try:
-                data = request.data
+                data = dict(request.data)  # make mutable copy
 
-                auth_user_id = request.headers.get('auth-user-id')
-                auth_user_name = request.headers.get('auth-user-name')
+                auth_user_id = data.get('auth-user-id')
+
+                # 🔥 Remove unwanted auth fields if accidentally sent in body
+                auth_fields = [
+                    "auth-user-id",
+                    "auth-user-name",
+                    "auth-user-email",
+                    "auth-branch-code",
+                    "auth-page-id",
+                    "auth-action-id",
+                    "auth-permission-id",
+                    "auth-allowed-action-codes",
+                    "auth-allowed-branch-codes"
+                ]
+
+                for field in auth_fields:
+                    data.pop(field, None)
 
                 # Normalize device_id
                 data['device_id'] = normalize_device_ids(data.get('device_id'))
@@ -195,6 +210,7 @@ def get_test_details(request):
                     sort=[("test_id", -1)],
                     projection={"test_id": 1, "_id": 0}
                 )
+
                 next_id = (max_doc.get('test_id', 0) if max_doc else 0) + 1
                 data['test_id'] = next_id
 
@@ -202,14 +218,9 @@ def get_test_details(request):
                 data.setdefault('NABL', False)
                 data.setdefault('status', 'Pending')
 
-                # ✅ AUDIT FIELDS (CREATE)
-                data['created_at'] = datetime.utcnow()
+                # ✅ AUDIT FIELDS (only what you want)
+                data['created_date'] = datetime.utcnow()
                 data['created_by'] = auth_user_id
-                data['created_by_name'] = auth_user_name
-
-                data['last_modified_at'] = datetime.utcnow()
-                data['last_modified_by'] = auth_user_id
-                data['last_modified_by_name'] = auth_user_name
 
                 collection.insert_one(data)
 
@@ -219,11 +230,12 @@ def get_test_details(request):
                     'test_id': next_id
                 }, status=201)
 
-            except json.JSONDecodeError:
-                return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
             except Exception as e:
                 print("POST Error:", e)
-                return JsonResponse({'success': False, 'error': 'Error while saving data'}, status=500)
+                return JsonResponse(
+                    {'success': False, 'error': 'Error while saving data'},
+                    status=500
+                )
 
         # -------------------- PATCH (UPDATE) --------------------
         elif request.method == 'PATCH':
@@ -231,7 +243,6 @@ def get_test_details(request):
                 data = request.data
 
                 auth_user_id = data.get('auth-user-id')
-                auth_user_name = data.get('auth-user-name')
 
                 test_id = data.get('test_id')
                 test_name = data.get('test_name')
@@ -262,9 +273,8 @@ def get_test_details(request):
                     'parameters': shaped,
 
                     # ✅ AUDIT FIELDS (UPDATE ONLY)
-                    'last_modified_at': datetime.utcnow(),
+                    'last_modified_date': datetime.utcnow(),
                     'last_modified_by': auth_user_id,
-                    'last_modified_by_name': auth_user_name
                 }
 
                 if 'device_id' in data:
@@ -295,60 +305,58 @@ def get_test_details(request):
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
 def send_approval_email(request):
-    if request.method != 'POST':
-        return JsonResponse({'success': False, 'error': 'Invalid request method'}, status=405)
 
     try:
-        # ✅ Handle both JSON body and form data
-        if request.content_type == 'application/json':
-            data = json.loads(request.body.decode('utf-8'))
-        else:
-            data = request.data
-        
+        # ✅ DRF automatically parses JSON/form-data
+        data = request.data
+
         test_id = data.get('test_id')
         recipient_email = data.get('recipient_email')
 
         # ✅ Validate test_id
         if not test_id:
-            return JsonResponse({'success': False, 'error': 'test_id is required'}, status=400)
+            return Response(
+                {'success': False, 'error': 'test_id is required'},
+                status=400
+            )
 
-        # ✅ Convert test_id to integer
         try:
             test_id = int(test_id)
         except (ValueError, TypeError):
-            return JsonResponse({'success': False, 'error': 'test_id must be a valid integer'}, status=400)
+            return Response(
+                {'success': False, 'error': 'test_id must be a valid integer'},
+                status=400
+            )
 
-        # MongoDB connection
+        # ✅ MongoDB Connection
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Diagnostics
         collection = db.core_testdetails
 
-        # ✅ Find test by integer test_id
         test = collection.find_one({'test_id': test_id})
+
         if not test:
-            return JsonResponse({'success': False, 'error': f'Test not found with test_id: {test_id}'}, status=404)
+            return Response(
+                {'success': False, 'error': f'Test not found with test_id: {test_id}'},
+                status=404
+            )
 
         test_name = test.get('test_name', 'Unknown Test')
 
-        # ✅ Build proper base URL
+        # ✅ Build approval URL
         base_url = request.build_absolute_uri('/').rstrip('/')
+        approval_url = f"{base_url}/_b_a_c_k_e_n_d/LIS/approve_test/?test_id={test_id}"
 
-        approval_url = (
-            f"{base_url}/_b_a_c_k_e_n_d/LIS/approve_test/?test_id={test_id}"
-        )
-
-
-        # Build test details (exclude _id and parameters for cleaner email)
+        # ✅ Build test details string
         test_details_list = []
         for key, value in test.items():
             if key not in ['_id', 'parameters']:
                 label = key.replace('_', ' ').title()
                 test_details_list.append(f"{label}: {value}")
-        
+
         test_details_str = "\n".join(test_details_list)
 
         subject = f"Approval Request: Test {test_name} (ID: {test_id})"
-
         html_message = f"""
         <html>
         <head>
@@ -406,7 +414,7 @@ This is an automated email from the Diagnostics LIS system.
             recipient_list.append(recipient_email)
         
         # Add default admin email
-        recipient_list.append('drprabusankar@smrft.org')
+        recipient_list.append('sivasundarismrft@gmail.com')
         
         # Remove duplicates
         recipient_list = list(set(recipient_list))
@@ -447,7 +455,7 @@ This is an automated email from the Diagnostics LIS system.
 # ✅ Fixed approve_test view
 @csrf_exempt
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def approve_test(request):
     try:
         test_id = request.GET.get('test_id')
@@ -488,8 +496,7 @@ def approve_test(request):
             <html>
                 <body style="text-align:center;font-family:Arial;padding:50px">
                     <div style="max-width:600px;margin:0 auto">
-                        <h2 style="color:#f59e0b">⚠️ Already Approved</h2>
-                        <p>Test ID: {}</p>
+                        <h2 style="color:#f59e0b">Already Approved!</h2>
                         <p>This test has already been approved.</p>
                         <button onclick="window.close()" 
                                 style="margin-top:20px;padding:10px 20px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer">
@@ -550,9 +557,7 @@ def approve_test(request):
             </head>
             <body>
                 <div class="container">
-                    <div class="success-icon">✓</div>
                     <h2>Test Approved Successfully!</h2>
-                    <p class="test-id">Test ID: {}</p>
                     <p>The test has been approved and is now active in the system.</p>
                     <button class="button" onclick="window.close()">Close Window</button>
                 </div>
@@ -570,7 +575,7 @@ def approve_test(request):
 # Generic field update (add normalization)
 # ---------------------------------------------
 
-@api_view(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+@api_view(['PATCH'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def handle_patch_request(request):
@@ -629,9 +634,8 @@ def handle_patch_request(request):
 
         # Handle audit fields
         auth_user_id = data.get('auth-user-id')
-        auth_user_name = data.get('auth-user-name')
         
-        update_fields['last_modified_at'] = datetime.utcnow()
+        update_fields['last_modified_date'] = datetime.utcnow()
         if auth_user_id:
             update_fields['last_modified_by'] = auth_user_id
 
