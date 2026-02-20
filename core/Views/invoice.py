@@ -361,16 +361,21 @@ def generate_invoice(request):
 
 
 
-@api_view(["GET"])
+@api_view(["GET", "POST"])
+@csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def get_invoices(request):
     collection = get_mongo_collection()
-    
-    from_date = request.GET.get('from_date')
-    to_date = request.GET.get('to_date')
+
+    if request.method == "POST":
+        from_date = request.data.get('from_date')
+        to_date = request.data.get('to_date')
+    else:
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
 
     query = {}
-    
+
     if from_date and to_date:
         query["generateDate"] = {
             "$gte": from_date,
