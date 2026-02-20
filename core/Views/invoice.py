@@ -362,11 +362,27 @@ def generate_invoice(request):
 
 
 @api_view(["GET"])
-@permission_classes([ HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def get_invoices(request):
     collection = get_mongo_collection()
+    
+    from_date = request.GET.get('from_date')
+    to_date = request.GET.get('to_date')
+
+    query = {}
+    
+    if from_date and to_date:
+        query["generateDate"] = {
+            "$gte": from_date,
+            "$lte": to_date
+        }
+    elif from_date:
+        query["generateDate"] = {"$gte": from_date}
+    elif to_date:
+        query["generateDate"] = {"$lte": to_date}
+
     # Sort by generation date descending to show latest invoices first
-    invoices = list(collection.find({}, {"_id": 0}).sort("generatedAt", -1))
+    invoices = list(collection.find(query, {"_id": 0}).sort("generatedAt", -1))
     return JsonResponse(invoices, safe=False)
 
 @api_view(['PUT', 'POST'])
