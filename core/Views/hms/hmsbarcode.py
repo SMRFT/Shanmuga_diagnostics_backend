@@ -15,11 +15,11 @@ def save_hms_barcodes(request):
     if request.method == "POST":
         try:
             data = request.data
-            billnumber = data.get('billnumber') or data.get('billnumber')
+            barcode = data.get('barcode') or data.get('barcode')
 
-            # Check if bill_no already exists
-            if Hmsbarcode.objects.filter(billnumber=billnumber).exists():
-                return JsonResponse({'error': 'Bill number already exists!'}, status=400)
+            # Check if barcode already exists
+            if Hmsbarcode.objects.filter(barcode=barcode).exists():
+                return JsonResponse({'error': 'Barcode already exists!'}, status=400)
 
             # Extract employee ID from request
             employee_id = data.get('auth-user-id')
