@@ -15,19 +15,20 @@ def save_hms_barcodes(request):
     if request.method == "POST":
         try:
             data = request.data
-            barcode = data.get('barcode') or data.get('barcode')
+            billnumber = data.get('billnumber') or data.get('billnumber')
 
             # Check if bill_no already exists
-            if Hmsbarcode.objects.filter(barcode=barcode).exists():
-                return JsonResponse({'error': 'Barcode already exists!'}, status=400)
+            if Hmsbarcode.objects.filter(billnumber=billnumber).exists():
+                return JsonResponse({'error': 'Bill number already exists!'}, status=400)
 
             # Extract employee ID from request
             employee_id = data.get('auth-user-id')
-            
+
             # Get all fields from the payload
             patient_id = data.get('patient_id', '')
             ipnumber = data.get('ipnumber', '')
             patientname = data.get('patientname', '')
+            phone = data.get('phone', '')
             age = data.get('age', 0)
             age_type = data.get('age_type', '')
             billnumber = data.get('billnumber', '')
@@ -35,11 +36,13 @@ def save_hms_barcodes(request):
             barcode = data.get('barcode', '')
             IPOPType = data.get('IPOPType', '')
             ref_doctor = data.get('ref_doctor', '')
-            
-            
+
+
+
             date = data.get('date')
             testdetails = data.get('testdetails', [])
-            
+
+
 
             # Convert string to datetime object if needed
             if date:
@@ -58,22 +61,23 @@ def save_hms_barcodes(request):
                 patient_id=patient_id,
                 ipnumber=ipnumber,
                 patientname=patientname,
+                phone=phone,
                 age=age,
                 age_type=age_type,
                 billnumber=billnumber,
                 gender=gender,
                 barcode=barcode,
                 IPOPType=IPOPType,
-                ref_doctor=ref_doctor,          
+                ref_doctor=ref_doctor,
                 date=date,
                 testdetails=testdetails,
                 created_by=employee_id,
             )
-            
+
             return JsonResponse({'message': 'Barcodes saved successfully!'}, status=201)
 
         except Exception as e:
-            return JsonResponse({'error': str(e)}, status=400)
+            return JsonResponse({'error': str(e)}, status=400)  
         
 
 from datetime import datetime, time
@@ -161,8 +165,12 @@ def get_hms_barcode_by_date(request):
         # ------------------------------------------------
         for rec in billing_collection.find(billing_filter):
             bill_no = rec.get("billnumber")
+            bill_type = rec.get("BillType")
+
             if not bill_no:
                 continue
+
+            bill_key = f"{bill_no}__{bill_type}"
 
             tests = rec.get("testdetails", [])
             if isinstance(tests, str):
@@ -174,49 +182,54 @@ def get_hms_barcode_by_date(request):
 
             billing_test_ids.update(test_ids)
 
-            bill_map.setdefault(bill_no, {
+            bill_map.setdefault(bill_key, {
                 "source": "core_hmspatientbilling",
                 "patient_id": rec.get("patient_id", ""),
                 "patientname": rec.get("patientname", ""),
                 "age": rec.get("age", ""),
                 "gender": rec.get("gender", ""),
                 "IPOPType": rec.get("IPOPType", ""),
-                "BillType": rec.get("BillType", ""),
+                "BillType": bill_type,
                 "phone": rec.get("phone", ""),
                 "date": rec.get("date"),
                 "ref_doctor": rec.get("ref_doctor", ""),
+                "bill_no": bill_no,
                 "test_ids": []
             })
 
-            bill_map[bill_no]["test_ids"].extend(test_ids)
+            bill_map[bill_key]["test_ids"].extend(test_ids)
 
         # ------------------------------------------------
-        # STEP 2: MACHINE DATA (APPEND + NO SKIP)
+        # STEP 2: MACHINE DATA (FIXED: BILLNO + BILLTYPE)
         # ------------------------------------------------
         for rec in machine_collection.find(machine_filter):
             bill_no = rec.get("BillNumber")
+            bill_type = rec.get("BillType")
             test_code = rec.get("TestCode")
 
-            if not bill_no or not test_code:
+            if not bill_no or not bill_type or not test_code:
                 continue
+
+            bill_key = f"{bill_no}__{bill_type}"
 
             machine_test_codes.add(test_code)
 
-            if bill_no in bill_map:
-                bill_map[bill_no].setdefault("test_codes", []).append(test_code)
+            if bill_key in bill_map:
+                bill_map[bill_key].setdefault("test_codes", []).append(test_code)
                 continue
 
-            bill_map[bill_no] = {
+            bill_map[bill_key] = {
                 "source": "machine_hmsmi",
                 "patient_id": rec.get("IPOPNumber", ""),
                 "patientname": rec.get("PatientName", ""),
                 "age": rec.get("PatientAge", ""),
                 "gender": rec.get("Gender", ""),
                 "IPOPType": rec.get("IPOPType", ""),
-                "BillType": rec.get("BillType", ""),
+                "BillType": bill_type,
                 "phone": rec.get("mobilenumber", ""),
                 "date": rec.get("BillDate"),
                 "ref_doctor": rec.get("RefDoctor", ""),
+                "bill_no": bill_no,
                 "test_codes": [test_code]
             }
 
@@ -238,15 +251,15 @@ def get_hms_barcode_by_date(request):
                 test_lookup_by_code[t["hms_testcode"]] = t
 
         # ------------------------------------------------
-        # STEP 4: RESPONSE (DEDUPLICATE TESTS)
+        # STEP 4: RESPONSE (DEDUPLICATION SAFE)
         # ------------------------------------------------
         patient_data = []
 
-        for bill_no, rec in bill_map.items():
+        for rec in bill_map.values():
             testdetails = []
-            seen_tests = set()  # ✅ DEDUPLICATION
+            seen_tests = set()
 
-            # ---- BILLING SOURCE ----
+            # BILLING SOURCE
             if rec["source"] == "core_hmspatientbilling":
                 for tid in rec.get("test_ids", []):
                     if tid in seen_tests:
@@ -262,7 +275,7 @@ def get_hms_barcode_by_date(request):
                         "shortcut": t.get("shortcut", ""),
                     })
 
-            # ---- MACHINE SOURCE ----
+            # MACHINE SOURCE
             else:
                 for code in rec.get("test_codes", []):
                     t = test_lookup_by_code.get(code, {})
@@ -289,9 +302,9 @@ def get_hms_barcode_by_date(request):
                 "gender": rec["gender"],
                 "IPOPType": rec["IPOPType"],
                 "phone": rec["phone"],
-                "bill_no": bill_no,
-                "date": rec["date"],
+                "bill_no": rec["bill_no"],
                 "BillType": rec["BillType"],
+                "date": rec["date"],
                 "ref_doctor": rec["ref_doctor"],
                 "testdetails": testdetails,
                 "source": rec["source"]
@@ -306,5 +319,5 @@ def get_hms_barcode_by_date(request):
         }, safe=False)
 
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        return JsonResponse({"error": str(e)}, status=500)  
 
