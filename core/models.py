@@ -267,6 +267,7 @@ class Hmsbarcode(AuditModel):
     age = models.IntegerField()
     age_type = models.CharField(max_length=10, blank=True)
     billnumber= models.CharField(max_length=15, blank=True,primary_key=True)
+    phone = models.CharField(max_length=15, blank=True)
     gender = models.CharField(max_length=10)
     barcode= models.CharField(max_length=50,  blank=True)
     IPOPType=models.CharField(max_length=15, blank=True)
@@ -306,5 +307,6 @@ class MBTestValue(AuditModel):
         if not self._id:
             self._id = str(ObjectId())  # Convert ObjectId to string
         super().save(*args, **kwargs)
+
 
 
