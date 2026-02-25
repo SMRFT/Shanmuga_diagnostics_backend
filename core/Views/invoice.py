@@ -389,6 +389,7 @@ def get_invoices(request):
     # Sort by generation date descending to show latest invoices first
     invoices = list(collection.find(query, {"_id": 0}).sort("generatedAt", -1))
     return JsonResponse(invoices, safe=False)
+    
 
 @api_view(['PUT', 'POST'])
 @csrf_exempt
@@ -506,8 +507,6 @@ def update_invoice(request):
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
 
-
-        
 
 @api_view(['DELETE', 'POST'])
 @csrf_exempt

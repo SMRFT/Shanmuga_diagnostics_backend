@@ -31,7 +31,6 @@ def hospitallabform(request):
         )
 
 @csrf_exempt
-@csrf_exempt
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
 def salesvisitlog(request):
@@ -153,15 +152,15 @@ def get_all_clinicalnames(request):
             "phone": 1,
             "email": 1,
             "address":1,
-            "b2bType": 1,
             "referrerCode": 1,
         })
         clinical_list = list(clinical_cursor)
         for item in clinical_list:
             item["hospitalName"] = item.get("clinicalname", "")
             item["contactNumber"] = item.get("phone", "")
-            item["emailId"] = item.get("email", "")
+            item["emailId"] = item.get("email", ""),
             item["referrerCode"] = item.get("referrerCode", "")
+            item["address"] = item.get("address", "")
         # --- Fetch from core_hospitallab ---
         hospital_cursor = db.core_hospitallab.find({}, {
             "_id": 0,
@@ -179,8 +178,7 @@ def get_all_clinicalnames(request):
             # :white_check_mark: Match structure with clinical_list
             item["hospitalName"] = item.get("clinicalname", "")
             item["referrerCode"] = item.get("referrerCode", "")
-            item["phone"] = item.get("contactNumber", "")
-            item["email"] = item.get("emailId", "")
+            item["address"] = item.get("address", "")
         # --- Merge both ---
         combined = clinical_list + hospital_list
         return Response(
@@ -253,23 +251,12 @@ def get_sales_individual_report(request):
 
 
 
-@api_view(['GET', 'POST'])
+@api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def Adminview_salesexecutive_report(request):
-    from datetime import datetime
-    from rest_framework.response import Response
-    from rest_framework import status
-    from ..models import SalesVisitLog
-    from ..serializers import SalesVisitLogSerializer
-
-    if request.method == 'POST':
-        from_date = request.data.get('fromDate')
-        to_date = request.data.get('toDate')
-        sales_executive = request.data.get('salesExecutive')
-    else:
-        from_date = request.query_params.get('fromDate')
-        to_date = request.query_params.get('toDate')
-        sales_executive = request.query_params.get('salesExecutive')
+    from_date = request.query_params.get('fromDate')
+    to_date = request.query_params.get('toDate')
+    sales_executive = request.query_params.get('salesExecutive')  # key name: salesExecutive
 
     query = {}
 
@@ -391,6 +378,7 @@ def update_clinicalname(request):
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
