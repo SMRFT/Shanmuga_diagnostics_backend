@@ -71,9 +71,9 @@ urlpatterns = [
     #Logistics
     path('logistics/',logistic.create_logistics, name='logistics'),
     path('logistics_by_collector/',logistic.logistics_by_collector, name='logistics_by_collector'),
-    path('logistics/<int:task_id>/accept/', logistic.accept_task, name='accept_task'),
-    path('logistics/<int:task_id>/reject/', logistic.reject_task, name='reject_task'),
-    path('logistics/<int:task_id>/pickup/', logistic.pickup_task, name='pickup_task'),
+    path('logistics/accept/<int:task_id>/', logistic.accept_task, name='accept_task'),
+    path('logistics/reject/<int:task_id>/', logistic.reject_task, name='reject_task'),
+    path('logistics/pickup/<int:task_id>/', logistic.pickup_task, name='pickup_task'),
     path('logistics-dashboard/', logistic.logistics_dashboard, name='logistics_dashboard'),
     path('logistics-tat-report/', logistic.logistics_tat_report, name='logistics_tat_report'),
     # path('sample-collector-location/', location.create_sample_collector_location, name='create_sample_collector_location'),

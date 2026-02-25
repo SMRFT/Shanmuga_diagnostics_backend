@@ -29,6 +29,16 @@ def create_logistics(request):
     try:
         if request.method == 'GET':
             queryset = Logistics.objects.all().order_by('-created_date')
+
+            # ── Date range filtering ──
+            start_date = request.query_params.get('start_date')
+            end_date   = request.query_params.get('end_date')
+
+            if start_date:
+                queryset = queryset.filter(date__gte=start_date)
+            if end_date:
+                queryset = queryset.filter(date__lte=end_date)
+
             serializer = LogisticsSerializer(queryset, many=True)
             return Response(
                 {'count': queryset.count(), 'results': serializer.data},
@@ -39,8 +49,8 @@ def create_logistics(request):
             data = request.data.copy()
             employee_id = request.headers.get("auth-user-id")
 
-            data['status'] = 'Assigned'
-            data['created_by'] = employee_id
+            data['status']       = 'Assigned'
+            data['created_by']   = employee_id
             data['created_date'] = timezone.now()
 
             if not data.get('date'):
@@ -224,21 +234,6 @@ def pickup_task(request, task_id):
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def logistics_dashboard(request):
-    """
-    GET: Fetch logistics dashboard analytics
-    Query params:
-    - sample_collector (optional): Filter by specific collector
-    - start_date (optional): Start date in YYYY-MM-DD format
-    - end_date (optional): End date in YYYY-MM-DD format
-    
-    Returns:
-    - summary: Overall statistics
-    - assigned_tasks: List of assigned tasks
-    - accepted_tasks: List of accepted tasks
-    - rejected_tasks: List of rejected tasks
-    - picked_up_tasks: List of picked up tasks
-    - billed_tasks: List of tasks that have been billed
-    """
     try:
         collector = request.query_params.get('sample_collector')
         start_date = request.query_params.get('start_date')

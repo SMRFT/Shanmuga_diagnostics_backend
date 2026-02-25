@@ -4,9 +4,10 @@ from django.views.decorators.http import require_http_methods
 from rest_framework import status
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
-from datetime import datetime, timedelta
 from django.db.models import Max
+from datetime import datetime, timedelta
 from django.forms.models import model_to_dict
+from django.utils.timezone import make_aware
 from django.db import transaction
 import json
 import re
@@ -697,95 +698,134 @@ def patient_get(request):
         }, status=500)
 
 
-@api_view(['GET', 'POST'])
+@api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def get_patients_by_date(request):
-    start_date = None
-    end_date = None
-    single_date = None
 
-    if request.method == 'POST':
-        start_date = request.data.get('start_date')
-        end_date = request.data.get('end_date')
-        single_date = request.data.get('date')
-    else:
-        start_date = request.GET.get('start_date')
-        end_date = request.GET.get('end_date')
-        single_date = request.GET.get('date')
+    start_date = request.GET.get('start_date')
+    end_date = request.GET.get('end_date')
+    single_date = request.GET.get('date')
 
     if single_date and not (start_date and end_date):
         start_date = single_date
         end_date = single_date
 
-    if start_date and end_date:
-        try:
-            from django.utils.timezone import make_aware
-            
-            # Convert to timezone-aware datetimes
-            start_date_parsed = make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
-            end_date_parsed = make_aware(
-                datetime.strptime(end_date, '%Y-%m-%d')
-                + timedelta(days=1) - timedelta(seconds=1)
-            )
+    if not (start_date and end_date):
+        return Response({
+            'error': 'start_date and end_date parameters are required, or provide a single date parameter.'
+        }, status=400)
 
-            # Query Billing records
-            patients = Billing.objects.filter(
-                date__gte=start_date_parsed,
-                date__lte=end_date_parsed
-            ).order_by('date') # It's often good to order by date
+    try:
+        # Convert to timezone-aware datetime
+        start_date_parsed = make_aware(datetime.strptime(start_date, '%Y-%m-%d'))
+        end_date_parsed = make_aware(
+            datetime.strptime(end_date, '%Y-%m-%d')
+            + timedelta(days=1) - timedelta(seconds=1)
+        )
 
-            patient_data = []
-            for patient in patients:
+        # Fetch Billing records
+        patients = Billing.objects.filter(
+            date__gte=start_date_parsed,
+            date__lte=end_date_parsed
+        ).order_by('date')
+
+        # ------------------ MongoDB Connection ------------------
+        mongo_url = os.getenv("GLOBAL_DB_HOST")
+        client = MongoClient(mongo_url)
+        db = client["Global"]
+        profile_col = db.backend_diagnostics_profile
+
+        # Collect unique lastmodified_by values
+        lastmodified_users = set(
+            patients.values_list('lastmodified_by', flat=True)
+        )
+        lastmodified_users.discard(None)
+
+        # Convert all to string (important)
+        lastmodified_users = [str(user) for user in lastmodified_users]
+
+        # Fetch matching profiles
+        profiles = profile_col.find(
+            {"employeeId": {"$in": lastmodified_users}},
+            {"employeeId": 1, "employeeName": 1}
+        )
+
+        # Create mapping dictionary
+        profile_map = {
+            str(profile["employeeId"]): profile.get("employeeName", "Unknown")
+            for profile in profiles
+        }
+        # ---------------------------------------------------------
+
+        patient_data = []
+
+        for patient in patients:
+            try:
+                patient_dict = model_to_dict(patient)
+
+                # -------- Patient Model Data --------
                 try:
-                    patient_dict = model_to_dict(patient)
+                    patient_info = Patient.objects.get(
+                        patient_id=patient.patient_id
+                    )
+                    patient_dict['patientname'] = patient_info.patientname
+                    patient_dict['gender'] = patient_info.gender
+                    patient_dict['age'] = patient_info.age
+                    patient_dict['phone'] = patient_info.phone
+                except Patient.DoesNotExist:
+                    patient_dict['patientname'] = 'Unknown'
+                    patient_dict['gender'] = 'N/A'
+                    patient_dict['age'] = 'N/A'
+                    patient_dict['phone'] = 'N/A'
 
-                    # Match with Patient model
+                # -------- Profile Name Mapping --------
+                username = str(patient_dict.get("lastmodified_by"))
+                patient_dict["lastmodified_name"] = profile_map.get(
+                    username, "Unknown"
+                )
+
+                # -------- Handle testdetails --------
+                tests = getattr(patient, 'testdetails', [])
+
+                if isinstance(tests, str):
                     try:
-                        patient_info = Patient.objects.get(patient_id=patient.patient_id)
-                        patient_dict['patientname'] = patient_info.patientname
-                        patient_dict['gender'] = patient_info.gender
-                        patient_dict['age'] = patient_info.age
-                    except Patient.DoesNotExist:
-                        patient_dict.setdefault('patientname', 'Unknown')
-                        patient_dict.setdefault('gender', 'N/A')
-                        patient_dict.setdefault('age', 'N/A')
+                        tests = json.loads(tests) if tests and tests != '\"[]\"' else []
+                    except json.JSONDecodeError:
+                        tests = []
 
-                    # Handle testdetails
-                    tests = getattr(patient, 'testdetails', [])
-                    if isinstance(tests, str):
-                        try:
-                            tests = json.loads(tests) if tests and tests != '\"[]\"' else []
-                        except json.JSONDecodeError:
-                            tests = []
+                valid_tests = [
+                    test for test in tests
+                    if not test.get('refund', False)
+                    and not test.get('cancellation', False)
+                ]
 
-                    valid_tests = [
-                        test for test in tests
-                        if not test.get('refund', False) and not test.get('cancellation', False)
-                    ]
-                    patient_dict['testdetails'] = valid_tests
-                    patient_dict.setdefault('phone', 'N/A')
-                    patient_dict.setdefault('segment', 'N/A')
+                patient_dict['testdetails'] = valid_tests
+                patient_dict.setdefault('segment', 'N/A')
 
-                    patient_data.append(patient_dict)
+                patient_data.append(patient_dict)
 
-                except Exception as patient_error:
-                    print(f"Error processing patient {getattr(patient, 'patient_id', 'unknown')}: {patient_error}")
-                    continue
+            except Exception as patient_error:
+                print(
+                    f"Error processing patient {getattr(patient, 'patient_id', 'unknown')}: {patient_error}"
+                )
+                continue
 
-            # Return standard DRF Response for consistency if desired, or JsonResponse
-            # Using Response allows DRF to handle content negotiation
-            return Response({'success': True, 'data': patient_data})
+        return Response({
+            'success': True,
+            'data': patient_data
+        })
 
-        except ValueError as e:
-            return Response({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
-        except Exception as e:
-            print(f"Error in get_patients_by_date: {str(e)}")
-            return Response({'error': 'An error occurred while fetching patients.'}, status=500)
+    except ValueError:
+        return Response({
+            'error': 'Invalid date format. Use YYYY-MM-DD.'
+        }, status=400)
 
-    return Response({
-        'error': 'start_date and end_date parameters are required, or provide a single date parameter.'
-    }, status=400)
-
+    except Exception as e:
+        print(f"Error in get_patients_by_date: {str(e)}")
+        return Response({
+            'error': 'An error occurred while fetching patients.'
+        }, status=500)
+    
 
 @api_view(['GET'])
 def patient_overview(request):
