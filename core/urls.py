@@ -221,17 +221,6 @@ urlpatterns = [
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
 
-    #sales
-    path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
-    path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
-    path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
-    path('get_sales_executives/', sales.get_sales_executives, name='get_sales_executives'),
-    path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
-    path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
-    path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
-    path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
-    path('serve_sales_image/<str:file_id>/', sales.serve_sales_image, name='serve_sales_image'),
-
     #Invoice URLs
     path("generate-invoice/", generate_invoice, name="generate-invoice"),
     path("get-invoices/", get_invoices, name="get-invoices"),
