@@ -1364,3 +1364,134 @@ def save_test_value(request):
         except Exception as e:
             print(f"DEBUG: POST error: {str(e)}")
             return Response({"error": f"An error occurred: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+def worklist_view(request):
+    """
+    GET /worklist/?uhid=<patient_id>
+
+    Returns all barcodes for a given UHID with patient details and test names.
+
+    Response:
+    {
+      "patient": {
+        "uhid": "...",
+        "name": "...",
+        "age": "...",
+        "age_type": "...",
+        "gender": "..."
+      },
+      "barcodes": [
+        {
+          "barcode": "...",
+          "date": "YYYY-MM-DD",
+          "billnumber": "...",
+          "ipnumber": "...",
+          "opiptype": "...",
+          "test_names": "Test A, Test B",
+          "no_of_tests": 2
+        },
+        ...
+      ]
+    }
+    """
+    uhid = request.GET.get("uhid", "").strip()
+
+    if not uhid:
+        return JsonResponse({"error": "uhid query parameter is required"}, status=400)
+
+    try:
+        # 1. Fetch all Hmsbarcode records for this UHID
+        barcode_records = list(
+            Hmsbarcode.objects.filter(patient_id=uhid)
+            .values(
+                "billnumber", "barcode", "date", "testdetails",
+                "patient_id", "patientname", "age", "age_type", "gender",
+                "IPOPType", "ipnumber",
+            )
+            .order_by("-date")
+        )
+
+        if not barcode_records:
+            return JsonResponse(
+                {"error": f"No records found for UHID: {uhid}"},
+                status=404,
+            )
+
+        # 2. Patient info from first record
+        first = barcode_records[0]
+        patient_info = {
+            "uhid":     first.get("patient_id", "N/A"),
+            "name":     first.get("patientname", "N/A"),
+            "age":      first.get("age", "N/A"),
+            "age_type": first.get("age_type", ""),
+            "gender":   first.get("gender", "N/A"),
+        }
+
+        # 3. Collect all test_ids across all barcodes
+        all_test_ids = set()
+        parsed_test_fields = {}
+
+        for record in barcode_records:
+            barcode = record.get("barcode")
+            test_field = record.get("testdetails", [])
+            if isinstance(test_field, str):
+                try:
+                    test_field = json.loads(test_field.strip('"'))
+                except json.JSONDecodeError:
+                    test_field = []
+            if not isinstance(test_field, list):
+                test_field = []
+
+            parsed_test_fields[barcode] = test_field
+            for t in test_field:
+                if isinstance(t, dict) and t.get("test_id"):
+                    all_test_ids.add(t["test_id"])
+
+        # 4. Bulk-fetch test names from MongoDB
+        mongo_client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+        core_collection = mongo_client.Diagnostics.core_testdetails
+
+        test_info_map = {}  # test_id -> test_name
+        if all_test_ids:
+            cursor = core_collection.find(
+                {"test_id": {"$in": list(all_test_ids)}},
+                {"_id": 0, "test_id": 1, "test_name": 1},
+            )
+            for doc in cursor:
+                test_info_map[doc["test_id"]] = doc.get("test_name", "N/A")
+
+        mongo_client.close()
+
+        # 5. Build barcodes list
+        result_barcodes = []
+
+        for record in barcode_records:
+            barcode = record.get("barcode", "N/A")
+            test_field = parsed_test_fields.get(barcode, [])
+
+            test_names = ", ".join(
+                test_info_map.get(t.get("test_id"), t.get("testname", "N/A"))
+                for t in test_field
+                if isinstance(t, dict) and t.get("test_id")
+            )
+
+            result_barcodes.append({
+                "barcode":     barcode,
+                "date":        record["date"].strftime("%Y-%m-%d") if record.get("date") else "N/A",
+                "billnumber":  record.get("billnumber", "N/A"),
+                "ipnumber":    record.get("ipnumber", "N/A"),
+                "opiptype":    record.get("IPOPType", "N/A"),
+                "test_names":  test_names,
+                "no_of_tests": len(test_field),
+            })
+
+        return JsonResponse(
+            {"patient": patient_info, "barcodes": result_barcodes},
+            safe=False,
+        )
+
+    except Exception as exc:
+        print(traceback.format_exc())
+        return JsonResponse({"error": str(exc)}, status=500)
