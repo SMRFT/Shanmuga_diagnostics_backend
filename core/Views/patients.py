@@ -417,11 +417,28 @@ def update_bill(request):
             testdetails_json = json.dumps([])
         
         # Amount Calculations
-        total_amount = float(request.data.get("totalAmount", "0"))
-        discount = float(request.data.get("discount", "0"))
-        net_amount = total_amount - discount
+        try:
+            total_amount = float(request.data.get("totalAmount", "0"))
+        except (ValueError, TypeError):
+            total_amount = 0.0
+            
+        discount_raw = str(request.data.get("discount", "0")).strip()
+        discount_amount = 0.0
+        if discount_raw.endswith('%'):
+            try:
+                pct = float(discount_raw.strip('%'))
+                discount_amount = (total_amount * pct) / 100.0
+            except (ValueError, TypeError):
+                pass
+        else:
+            try:
+                discount_amount = float(discount_raw)
+            except (ValueError, TypeError):
+                pass
+                
+        net_amount = total_amount - discount_amount
         if net_amount < 0:
-            net_amount = 0
+            net_amount = 0.0
         
         # Handle emergency field
         emergency = request.data.get("emergency", billing_record.get("is_emergency", False))
@@ -446,7 +463,7 @@ def update_bill(request):
             "testdetails": testdetails_json,
             "totalAmount": str(total_amount),
             "netAmount": str(net_amount),
-            "discount": str(discount),
+            "discount": str(discount_raw),
             "credit_amount": str(credit_amount),
             "status": "Billed",
             "is_emergency": emergency,
