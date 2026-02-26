@@ -149,6 +149,7 @@ urlpatterns = [
     path('credit_amount/', patients.update_credit_amount, name='update_credit_amount'),
     path('send-email/', whatsapp.send_email, name='send_email'),
     path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
+    path('get_home_collection_report/', report.get_home_collection_report, name='get_home_collection_report'),
 
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
