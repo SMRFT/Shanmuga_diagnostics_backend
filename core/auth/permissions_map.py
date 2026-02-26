@@ -101,6 +101,8 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/samplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       
     r'^/_b_a_c_k_e_n_d/LIS/compare_test_details/?(\?.*)?$':'SD-P-TD',
     '/_b_a_c_k_e_n_d/LIS/test-value/save/':'SD-P-TD',
+    r'^/_b_a_c_k_e_n_d/LIS/worklist/?(\?.*)?$':'SD-P-TD',
+    
 
     #O/S Test Values:
     r'^/_b_a_c_k_e_n_d/LIS/os-samplestatus-testvalue/?(\?.*)?$':'SD-P-PD',       

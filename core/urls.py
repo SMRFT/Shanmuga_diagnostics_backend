@@ -88,7 +88,8 @@ urlpatterns = [
     #Test Values:
     path('samplestatus-testvalue/', testvalue.get_samplestatus_testvalue, name='sample-status-list'), 
     path('compare_test_details/', testvalue.compare_test_details, name='compare_test_details'),
-    path('test-value/save/', testvalue.save_test_value, name='save_test_value'),   
+    path('test-value/save/', testvalue.save_test_value, name='save_test_value'),
+    path('worklist/', testvalue.worklist_view, name='worklist'),   
 
     #M/B Test Values:
     path('micro_biology_testvalue/', microbiology.micro_biology_testvalue, name='micro_biology_testvalue'),  

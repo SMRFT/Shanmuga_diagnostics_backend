@@ -873,29 +873,33 @@ def patient_test_sorting(request):
                         
                         core_test = core_testdetails_collection.find_one(
                             query,
-                            {"test_code": 1, "test_name": 1, "_id": 0}
+                            {"test_code": 1, "test_name": 1,"NABL": 1, "_id": 0}
                         )
                         
                         if core_test:
                             # Update test_code and test_name from core_testdetails
                             test_item['test_code'] = core_test.get('test_code', 'N/A')
                             test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
+                            test_item['NABL'] = core_test.get('NABL', 'N/A')
                         else:
                             # If no match found, try with just test_id
                             core_test = core_testdetails_collection.find_one(
                                 {"test_id": test_id},
-                                {"test_code": 1, "test_name": 1, "_id": 0}
+                                {"test_code": 1, "test_name": 1, "NABL": 1, "_id": 0}
                             )
                             
                             if core_test:
                                 test_item['test_code'] = core_test.get('test_code', 'N/A')
                                 test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
+                                test_item['NABL'] = core_test.get('NABL', 'N/A')
                             else:
                                 test_item['test_code'] = test_item.get('test_code', 'N/A')
                                 test_item['test_name'] = test_item.get('test_name', 'N/A')
+                                test_item['NABL'] = test_item.get('NABL', 'N/A')
                     else:
                         test_item['test_code'] = test_item.get('test_code', 'N/A')
                         test_item['test_name'] = test_item.get('test_name', 'N/A')
+                        test_item['NABL'] = test_item.get('NABL', 'N/A')
                     
                     # Add created_date to each test item
                     test_item['created_date'] = test_created_date.isoformat() if test_created_date else None

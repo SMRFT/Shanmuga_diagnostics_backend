@@ -672,7 +672,7 @@ def get_department_status_corporate(test_list, employee_id, sample_status_map, t
 
 @api_view(['GET','PATCH'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_overall_report(request):
     try:
         # MongoDB setup
@@ -1239,7 +1239,7 @@ def corporate_overall_report(request):
         return JsonResponse({"error": str(e)}, status=500)
 
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_patient_test_details(request):
     barcode = request.GET.get('barcode')
     if not barcode:
@@ -1602,13 +1602,13 @@ def corporate_patient_test_details(request):
     
 @api_view(['GET','PATCH'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_approval_report(request):
     try:
         # MongoDB setup
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup  # Database name
-        patients_collection = db.core_billing  # Changed to franchise_billing
+        patients_collection = db.core_billing  # Changed to corporate_billing
         sample_status_colletion = db.core_sample # Collection name for sample 
         franchise_patient_collection = db.core_employeeregistration  # Collection for patient details
         overall_approval_collection = db.overallApproval  # NEW: Collection for approval status
@@ -1810,7 +1810,7 @@ def corporate_approval_report(request):
         return JsonResponse({"error": str(e)}, status=500)
     
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_health_report(request):
     barcode = request.GET.get('barcode')
     if not barcode:
@@ -2407,7 +2407,7 @@ def corporate_health_report(request):
 
 
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def get_investigation_file(request):
     file_id = request.GET.get('file_id')
     if not file_id:
