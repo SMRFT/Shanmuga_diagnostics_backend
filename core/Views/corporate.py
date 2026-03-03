@@ -1810,7 +1810,7 @@ def corporate_approval_report(request):
         return JsonResponse({"error": str(e)}, status=500)
     
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def corporate_health_report(request):
     barcode = request.GET.get('barcode')
     if not barcode:
