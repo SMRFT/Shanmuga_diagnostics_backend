@@ -1602,7 +1602,7 @@ def corporate_patient_test_details(request):
     
 @api_view(['GET','PATCH'])
 @csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def corporate_approval_report(request):
     try:
         # MongoDB setup
