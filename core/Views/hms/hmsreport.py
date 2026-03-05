@@ -512,6 +512,8 @@ def hms_overall_report(request):
                             test_status = "Received"
                         if sample_info.get('samplestatus') == 'Rejected':
                             test_status = "Rejected"
+                        if sample_info.get('samplestatus') == 'Outsource':
+                            test_status = "Outsourced"
                     
                     if test_value_info:
                         # Check if test has values
@@ -674,6 +676,7 @@ def hms_overall_report(request):
         print(f"Critical Error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
+
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -949,6 +952,7 @@ def get_hms_patient_test_details(request):
                     "age": barcode_details.age,
                     "age_type": barcode_details.age_type if hasattr(barcode_details, 'age_type') else "Years",
                     "gender": barcode_details.gender,
+                    "phone": barcode_details.phone,
                     "date": test_value_record.date,
                     "barcode": test_value_record.barcode,
                     "bill_no": barcode_details.billnumber,

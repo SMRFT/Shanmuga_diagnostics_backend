@@ -60,7 +60,7 @@ def hms_get_samplepatients_by_date(request):
             for test in testdetails:
                 # Use test_id instead of testname for more accurate tracking
                 test_key = (barcode, test.get('test_id', ''))
-                if test.get('samplestatus') == 'Pending':
+                if test.get('samplestatus') in ["Pending", "Rejected"]:
                     pending_samples.add(test_key)
                 else:
                     # Any other status (Sample Collected, Received, etc.) is considered completed
@@ -275,7 +275,6 @@ def hms_sample_status(request):
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def hms_patch_sample_status(request, barcode):
-    # Import timezone at the top of the function
     from django.utils import timezone
     
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -284,18 +283,13 @@ def hms_patch_sample_status(request, barcode):
     
     if request.method == 'PATCH':
         try:
-            # Handle different data formats
             if hasattr(request, 'data'):
                 data = request.data
             else:
                 data = json.loads(request.body)
             
-            print(f"PATCH Request Data: {data}")
-            
-            # Extract employee_id for lastmodified_by
             employee_id = data.get('auth-user-id')
             
-            # Extract testdetails from the request data
             if 'testdetails' not in data:
                 return JsonResponse({'error': 'testdetails field is required'}, status=400)
             
@@ -304,15 +298,11 @@ def hms_patch_sample_status(request, barcode):
             if not isinstance(updates, list) or len(updates) == 0:
                 return JsonResponse({'error': 'testdetails must be a non-empty array'}, status=400)
             
-            # Find the patient document
             patient_doc = collection.find_one({"barcode": barcode})
             if not patient_doc:
                 return JsonResponse({'error': 'No patient found with the given barcode'}, status=404)
             
-            # Get current testdetails
             testdetails = patient_doc.get('testdetails', [])
-            
-            # Parse testdetails if it's a string
             if isinstance(testdetails, str):
                 try:
                     testdetails = json.loads(testdetails)
@@ -322,68 +312,54 @@ def hms_patch_sample_status(request, barcode):
             if not isinstance(testdetails, list):
                 return JsonResponse({'error': 'testdetails is not in the correct format'}, status=400)
             
-            # Process updates based on test_id
-            updated_testdetails = []
+            # ✅ Build lookup map of only the test_ids sent in the request
+            updates_map = {u.get('test_id'): u for u in updates if u.get('test_id') is not None}
+            
             updated_count = 0
             test_ids_updated = []
             
             for existing_test in testdetails:
                 if not isinstance(existing_test, dict):
-                    updated_testdetails.append(existing_test)
                     continue
                 
-                # Find matching update by test_id
-                matching_update = None
-                for update in updates:
-                    if existing_test.get('test_id') == update.get('test_id'):
-                        matching_update = update
-                        break
+                test_id = existing_test.get('test_id')
                 
-                if matching_update:
-                    test_id = existing_test.get('test_id')
-                    new_status = matching_update.get('samplestatus')
-                    current_status = existing_test.get('samplestatus')
+                # ✅ Skip tests NOT in the request — leave them completely untouched
+                if test_id not in updates_map:
+                    continue
+                
+                matching_update = updates_map[test_id]
+                new_status = matching_update.get('samplestatus')
+                current_status = existing_test.get('samplestatus')
+                
+                if new_status and new_status != current_status:
+                    ist_time = timezone.now().astimezone(timezone.get_current_timezone())
+                    formatted_time = ist_time.strftime('%Y-%m-%d %H:%M:%S')
                     
-                    # Only update if status actually changes
-                    if new_status and new_status != current_status:
-                        # Update fields based on new status
-                        if new_status == 'Sample Collected':
-                            # Set collected time in IST format
-                            ist_time = timezone.now().astimezone(timezone.get_current_timezone())
-                            formatted_time = ist_time.strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            existing_test['samplestatus'] = new_status
-                            existing_test['samplecollected_time'] = matching_update.get('samplecollected_time', formatted_time)
-                            existing_test['collectd_by'] = matching_update.get('collectd_by')
-                            
-                            updated_count += 1
-                            test_ids_updated.append(test_id)
-                            
-                        elif new_status == 'Pending':
-                            # Reset to pending status
-                            existing_test['samplestatus'] = new_status
-                            existing_test['samplecollected_time'] = None
-                            existing_test['collectd_by'] = None
-                            
-                            updated_count += 1
-                            test_ids_updated.append(test_id)
-                
-                updated_testdetails.append(existing_test)
+                    if new_status == 'Sample Collected':
+                        existing_test['samplestatus'] = new_status
+                        existing_test['samplecollected_time'] = matching_update.get('samplecollected_time', formatted_time)
+                        existing_test['collectd_by'] = matching_update.get('collectd_by')
+                        updated_count += 1
+                        test_ids_updated.append(test_id)
+                        
+                    elif new_status == 'Pending':
+                        existing_test['samplestatus'] = new_status
+                        existing_test['samplecollected_time'] = None
+                        existing_test['collectd_by'] = None
+                        updated_count += 1
+                        test_ids_updated.append(test_id)
             
-            # Check if any updates were actually made after processing
             if updated_count == 0:
                 return JsonResponse({'error': 'No matching test_id found or no changes were made'}, status=400)
             
-            # Prepare update data
             update_data = {
-                "testdetails": json.dumps(updated_testdetails),
+                "testdetails": json.dumps(testdetails),  # ✅ Save original array (mutated in-place)
                 "lastmodified_date": timezone.now()
             }
-            
             if employee_id:
                 update_data["lastmodified_by"] = employee_id
             
-            # Update the document in MongoDB
             result = collection.update_one(
                 {"_id": patient_doc['_id']},
                 {"$set": update_data}
@@ -399,14 +375,11 @@ def hms_patch_sample_status(request, barcode):
                 return JsonResponse({'error': 'No changes were made to the database'}, status=400)
                 
         except KeyError as e:
-            print(f"KeyError: {str(e)}")
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except Exception as e:
-            print(f"Unexpected error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=500)
     
     return JsonResponse({'error': 'Invalid request method'}, status=405)
-
 
 from django.utils.timezone import make_aware
 @api_view(['GET'])
@@ -643,3 +616,28 @@ def hms_update_sample_collected(request, barcode):
         
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+    
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def hms_check_sample_status(request, barcode):
+    if request.method == 'GET':
+        try:
+            # Check if an entry exists for this barcode
+            existing_entry = Hmssamplestatus.objects.filter(barcode=barcode).first()
+            
+            if existing_entry:
+                return JsonResponse({
+                    'exists': True,
+                    'message': 'Sample status data exists for this barcode'
+                }, status=200)
+            else:
+                return JsonResponse({
+                    'exists': False,
+                    'message': 'No sample status data found for this barcode'
+                }, status=200)
+                
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=400)
+    
+    return JsonResponse({'error': 'Invalid request method'}, status=405)

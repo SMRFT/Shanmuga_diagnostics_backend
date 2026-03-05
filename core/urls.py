@@ -42,11 +42,12 @@ urlpatterns = [
     path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
     path('sample_status/', sample.sample_status, name='sample_status'),   
     path('sample_statusupdate/<str:barcode>/', sample.patch_sample_status, name='patch_sample_status'),
+    path('check_sample_status/<str:barcode>/', sample.check_sample_status, name='check_sample_status'),
 
     #sample accessioning:
     path("get_sample_collected/", sample.get_sample_collected, name="get_sample_collected"),
     path('get_outsource_labs/', sample.get_outsource_labs, name='get_outsource_labs'),
-    path("update_sample_collected/<str:patient_id>/", sample.update_sample_collected, name="update_sample_collected"),  
+    path("update_sample_collected/<str:barcode>/", sample.update_sample_collected, name="update_sample_collected"),  
     path("get_rejected_samples/", sample.get_rejected_samples, name="get_rejected_samples"),
     path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
@@ -210,6 +211,7 @@ urlpatterns = [
     path('hms_patch_sample_status/<str:barcode>/', hmssamplestatus.hms_patch_sample_status, name='hms_patch_sample_status'),
     path('hms_get_sample_collected/', hmssamplestatus.hms_get_sample_collected, name='hms_get_sample_collected'),
     path('hms_update_sample_collected/<str:barcode>/', hmssamplestatus.hms_update_sample_collected, name='hms_update_sample_collected'),
+    path('hms_check_sample_status/<str:barcode>/', hmssamplestatus.hms_check_sample_status, name='hms_check_sample_status'),
     
 
     #HMS Report:

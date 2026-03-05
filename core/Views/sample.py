@@ -62,7 +62,7 @@ def get_samplepatients_by_date(request):
             for test in testdetails:
                 # Use test_id instead of testname for more accurate tracking
                 test_key = (patient_id, barcode, test.get('test_id', ''))
-                if test.get('samplestatus') == 'Pending':
+                if test.get('samplestatus') in ["Pending", "Rejected"]:
                     pending_samples.add(test_key)
                 else:
                     # Any other status (Sample Collected, Received, etc.) is considered completed
@@ -300,7 +300,6 @@ def sample_status(request):
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def patch_sample_status(request, barcode):
-    # Import timezone at the top of the function
     from django.utils import timezone
     
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -309,18 +308,13 @@ def patch_sample_status(request, barcode):
     
     if request.method == 'PATCH':
         try:
-            # Handle different data formats
             if hasattr(request, 'data'):
                 data = request.data
             else:
                 data = json.loads(request.body)
             
-            print(f"PATCH Request Data: {data}")
-            
-            # Extract employee_id for lastmodified_by
             employee_id = data.get('auth-user-id')
             
-            # Extract testdetails from the request data
             if 'testdetails' not in data:
                 return JsonResponse({'error': 'testdetails field is required'}, status=400)
             
@@ -328,134 +322,89 @@ def patch_sample_status(request, barcode):
             
             if not isinstance(updates, list):
                 return JsonResponse({'error': 'testdetails must be an array'}, status=400)
-            
-            # Find the patient document
+
             patient_doc = collection.find_one({"barcode": barcode})
             if not patient_doc:
-                return JsonResponse({'error': 'No patient found with the given patient_id'}, status=404)
-            
-            # Get current testdetails
+                return JsonResponse({'error': 'No patient found with the given barcode'}, status=404)
+
             testdetails = patient_doc.get('testdetails', [])
-            
-            # Parse testdetails if it's a string
             if isinstance(testdetails, str):
                 try:
                     testdetails = json.loads(testdetails)
                 except json.JSONDecodeError:
                     return JsonResponse({'error': 'Invalid testdetails format'}, status=400)
-            
+
             if not isinstance(testdetails, list):
                 return JsonResponse({'error': 'testdetails is not in the correct format'}, status=400)
-            
-            # First, validate if any changes are needed
-            changes_needed = False
-            for update in updates:
-                for existing_test in testdetails:
-                    if not isinstance(existing_test, dict):
-                        continue
-                    
-                    # Find matching test
-                    if (existing_test.get('test_id') == update.get('test_id') or 
-                        existing_test.get('testname') == update.get('testname')):
-                        
-                        new_status = update.get('samplestatus')
-                        current_status = existing_test.get('samplestatus')
-                        
-                        # Check if status change is needed
-                        if new_status != current_status:
-                            # Special validation: if trying to change to Pending but already Pending
-                            if new_status == 'Pending' and current_status == 'Pending':
-                                continue  # No change needed
-                            changes_needed = True
-                            break
-                
-                if changes_needed:
-                    break
-            
-            # If no changes are needed, return early
-            if not changes_needed:
-                return JsonResponse({'error': 'No changes were made'}, status=400)
-            
-            # Process updates
-            updated_testdetails = []
+
+            # Build a lookup of updates by test_id
+            updates_map = {u.get('test_id'): u for u in updates if u.get('test_id') is not None}
+
             updated_count = 0
-            
+
+            # ✅ Only touch tests whose test_id is in the request
             for existing_test in testdetails:
                 if not isinstance(existing_test, dict):
-                    updated_testdetails.append(existing_test)
                     continue
-                
-                # Find matching update
-                matching_update = None
-                for update in updates:
-                    if (existing_test.get('test_id') == update.get('test_id') or 
-                        existing_test.get('testname') == update.get('testname')):
-                        matching_update = update
-                        break
-                
-                if matching_update:
-                    # Update the test status and related fields
-                    new_status = matching_update.get('samplestatus', existing_test.get('samplestatus'))
-                    current_status = existing_test.get('samplestatus')
-                    
-                    # Only update if status actually changes
-                    if new_status != current_status:
-                        # Update fields based on new status
-                        if new_status == 'Sample Collected':
-                            # Set collected time in IST format
-                            ist_time = timezone.now().astimezone(timezone.get_current_timezone())
-                            formatted_time = ist_time.strftime('%Y-%m-%d %H:%M:%S')
-                            
-                            existing_test['samplestatus'] = new_status
-                            existing_test['samplecollected_time'] = formatted_time
-                            existing_test['collectd_by'] = matching_update.get('collectd_by')
-                            updated_count += 1
-                        elif new_status == 'Pending':
-                            # Reset to pending status
-                            existing_test['samplestatus'] = new_status
-                            existing_test['samplecollected_time'] = None
-                            existing_test['collectd_by'] = None
-                            updated_count += 1
-                        else:
-                            existing_test['samplestatus'] = new_status
-                            updated_count += 1
-                
-                updated_testdetails.append(existing_test)
-            
-            # Check if any updates were actually made after processing
+
+                test_id = existing_test.get('test_id')
+
+                # Skip tests NOT in the request — leave them completely untouched
+                if test_id not in updates_map:
+                    continue
+
+                update = updates_map[test_id]
+                new_status = update.get('samplestatus')
+                current_status = existing_test.get('samplestatus')
+
+                if new_status == current_status:
+                    continue
+
+                ist_time = timezone.now().astimezone(timezone.get_current_timezone())
+                formatted_time = ist_time.strftime('%Y-%m-%d %H:%M:%S')
+
+                if new_status == 'Sample Collected':
+                    existing_test['samplestatus'] = new_status
+                    existing_test['samplecollected_time'] = formatted_time
+                    existing_test['collectd_by'] = update.get('collectd_by')
+                    updated_count += 1
+                elif new_status == 'Pending':
+                    existing_test['samplestatus'] = new_status
+                    existing_test['samplecollected_time'] = None
+                    existing_test['collectd_by'] = None
+                    updated_count += 1
+                else:
+                    existing_test['samplestatus'] = new_status
+                    updated_count += 1
+
             if updated_count == 0:
                 return JsonResponse({'error': 'No changes were made'}, status=400)
-            
-            # Prepare update data
+
             update_data = {
-                "testdetails": json.dumps(updated_testdetails),
+                "testdetails": json.dumps(testdetails),
                 "lastmodified_date": timezone.now()
             }
-            
             if employee_id:
                 update_data["lastmodified_by"] = employee_id
-            
-            # Update the document in MongoDB
+
             result = collection.update_one(
                 {"_id": patient_doc['_id']},
                 {"$set": update_data}
             )
-            
+
             if result.modified_count > 0:
                 return JsonResponse({
-                    'message': f'Successfully updated {updated_count} tests for patient {barcode}',
+                    'message': f'Successfully updated {updated_count} tests for barcode {barcode}',
                     'updated_count': updated_count
                 }, status=200)
             else:
                 return JsonResponse({'error': 'No changes were made'}, status=400)
-                
+
         except KeyError as e:
-            print(f"KeyError: {str(e)}")
             return JsonResponse({'error': f'Missing required field: {str(e)}'}, status=400)
         except Exception as e:
-            print(f"Unexpected error: {str(e)}")
             return JsonResponse({'error': str(e)}, status=400)
-    
+
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
 
@@ -625,6 +574,7 @@ def get_sample_collected(request):
             
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
+ 
         
 @api_view(['GET'])
 @csrf_exempt
@@ -656,7 +606,7 @@ def get_outsource_labs(request):
 @api_view(['PUT'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def update_sample_collected(request, patient_id):
+def update_sample_collected(request, barcode):
     # MongoDB connection setup
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     db = client.Diagnostics
@@ -677,8 +627,7 @@ def update_sample_collected(request, patient_id):
                 return JsonResponse({"error": "Updates are required"}, status=400)
             
             # Find the patient sample record by patient_id and barcode
-            patient_sample = collection.find_one({
-                "patient_id": patient_id,
+            patient_sample = collection.find_one({               
                 "barcode": barcode
             })
             
@@ -765,7 +714,7 @@ def update_sample_collected(request, patient_id):
             
             # Save changes back to the database
             collection.update_one(
-                {"patient_id": patient_id, "barcode": barcode},
+                {"barcode": barcode},
                 {"$set": {"testdetails": json.dumps(testdetails)}}
             )
             
@@ -1076,4 +1025,30 @@ def get_outsourced_samples(request):
             }, safe=False)
 
         except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)       
+            return JsonResponse({"error": str(e)}, status=500)    
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def check_sample_status(request, barcode):
+    if request.method == 'GET':
+        try:
+            # Check if an entry exists for this patient_id
+            existing_entry = SampleStatus.objects.filter(barcode=barcode).first()
+            
+            if existing_entry:
+                return JsonResponse({
+                    'exists': True,
+                    'message': 'Sample status data exists for this patient'
+                }, status=200)
+            else:
+                return JsonResponse({
+                    'exists': False,
+                    'message': 'No sample status data found for this patient'
+                }, status=200)
+                
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=400)
+    
+    return JsonResponse({'error': 'Invalid request method'}, status=405)
+   

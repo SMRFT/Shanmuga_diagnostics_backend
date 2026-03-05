@@ -1066,12 +1066,16 @@ def franchise_overall_report(request):
                     test_status = "Registered"
                     
                     if sample_info:
-                        if sample_info.get('samplestatus') == 'Sample Collected':
+                        if sample_info.get('samplestatus') == 'Collected':
                             test_status = "Collected"
+                        if sample_info.get('samplestatus') == 'Transferred':
+                            test_status = "Transferred"
                         if sample_info.get('samplestatus') == 'Received':
                             test_status = "Received"
                         if sample_info.get('samplestatus') == 'Rejected':
                             test_status = "Rejected"
+                        if sample_info.get('samplestatus') == 'Outsourced':
+                            test_status = "Outsourced"
                     
                     if test_value_info:
                         # Check if test has values

@@ -634,6 +634,8 @@ def overall_report(request):
                                 test_status = "Received"
                             if sample_info.get('samplestatus') == 'Rejected':
                                 test_status = "Rejected"
+                            if sample_info.get('samplestatus') == 'Outsource':
+                                test_status = "Outsourced"
                         
                         if test_value_info:
                             # Check if test has values
