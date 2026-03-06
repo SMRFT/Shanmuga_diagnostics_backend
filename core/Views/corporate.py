@@ -1007,8 +1007,8 @@ def corporate_overall_report(request):
                             test_status = "Received"
                         if sample_info.get('samplestatus') == 'Rejected':
                             test_status = "Rejected"
-                        if sample_info.get('samplestatus') == 'Outsourced':
-                            test_status = "Outsourced"
+                        if sample_info.get('samplestatus') == 'Outsource':
+                            test_status = "Outsource"
                     if test_value_info:
                         has_values = False
                         parameters = test_value_info.get("parameters", [])
@@ -2173,14 +2173,37 @@ def get_investigation_status(request):
         patient_history = ""
         if investigation:
             patient_history = investigation.get("patient_history", "") or ""
-        # Lab approval (from TestValue model)
+
+        # ---------------------------------------------------------------
+        # Lab approval — only count tests with valid samplestatus,
+        # excluding Outsource tests (Outsource test_ids won't exist in TestValue)
+        # ---------------------------------------------------------------
+        VALID_SAMPLE_STATUSES = {"Collected", "Transferred", "Received"}
+
         total_sample_tests = 0
+        eligible_test_ids = set()   # test_ids that are NOT outsource & have valid status
+
         try:
             franchise_sample = sample_collection.find_one({"barcode": barcode})
             if franchise_sample and franchise_sample.get('testdetails'):
                 raw = franchise_sample.get('testdetails')
                 sample_tests = json.loads(raw) if isinstance(raw, str) else (raw or [])
-                total_sample_tests = len(sample_tests)
+
+                for t in sample_tests:
+                    if not isinstance(t, dict):
+                        continue
+                    status = t.get("samplestatus", "")
+                    specimen_type = t.get("specimen_type", "")
+
+                    # Exclude Outsource tests
+                    if specimen_type.lower() == "outsource":
+                        continue
+
+                    # Only count tests with valid sample statuses
+                    if status in VALID_SAMPLE_STATUSES:
+                        eligible_test_ids.add(str(t.get("test_id", "")))
+                        total_sample_tests += 1
+
         except Exception:
             total_sample_tests = 0
 
@@ -2190,7 +2213,12 @@ def get_investigation_status(request):
                 td = record.testdetails
                 tests_list = json.loads(td) if isinstance(td, str) else (td or [])
                 for t in tests_list:
-                    if isinstance(t, dict) and t.get("approve"):
+                    if not isinstance(t, dict):
+                        continue
+                    # Only consider test_ids that passed our eligibility filter
+                    if str(t.get("test_id", "")) not in eligible_test_ids:
+                        continue
+                    if t.get("approve"):
                         approved_tests_count += 1
         except Exception as e:
             print(f"Error calculating approved_tests_count: {e}")
@@ -2199,7 +2227,9 @@ def get_investigation_status(request):
             total_sample_tests > 0 and approved_tests_count >= total_sample_tests
         ) else "pending"
 
-        # NEW: Build per-CHC-test status from investigation.test_results
+        # ---------------------------------------------------------------
+        # Build per-CHC-test status from investigation.test_results
+        # ---------------------------------------------------------------
         chc_test_status = {}
         if investigation:
             test_results = investigation.get("test_results", [])
@@ -2225,7 +2255,7 @@ def get_investigation_status(request):
                     "status": "approved" if (bool(report.strip()) or bool(files)) else "pending",
                 }
 
-        # NEW: Get chctestdetails list from billing
+        # Get chctestdetails list from billing
         billing = billing_collection.find_one({"barcode": barcode})
         chc_tests_list = []
         if billing:
@@ -2263,17 +2293,17 @@ def get_investigation_status(request):
         client.close()
 
         return JsonResponse({
-        'success': True,
-        'investigation': {},
-        'lab_approval': lab_approval,
-        'chc_tests': chc_tests_enriched,
-        'chc_investigation_status': chc_overall_status,
-        'vitals': vitals_data,           # ← ADD THIS
-        'patient_history': patient_history,  # ← ADD THIS
-    })
+            'success': True,
+            'investigation': {},
+            'lab_approval': lab_approval,
+            'chc_tests': chc_tests_enriched,
+            'chc_investigation_status': chc_overall_status,
+            'vitals': vitals_data,
+            'patient_history': patient_history,
+        })
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
+    
 
 @api_view(['POST'])
 @csrf_exempt
