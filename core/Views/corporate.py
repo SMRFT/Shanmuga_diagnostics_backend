@@ -28,39 +28,61 @@ logger = logging.getLogger(__name__)
 # Returns a dict keyed by barcode → {test_id → {report, files, notes, has_report, has_file}}
 # ──────────────────────────────────────────────────────────────────────────────
 def _build_chc_status_from_investigation(investigation_records):
-    """
-    investigation_records: list of core_investigation documents
-    Returns: {barcode: {test_id: {report, has_report, has_file, notes, files}}}
-    """
-    result = {}
+    chc_status_by_barcode = {}
+
     for inv in investigation_records:
-        barcode = inv.get("barcode")
+        barcode = str(inv.get("barcode", ""))
         if not barcode:
             continue
+
+        chc_status_by_barcode.setdefault(barcode, {})
+
+        # ── Normal CHC tests from test_results ─────────────────
         test_results = inv.get("test_results", [])
         if isinstance(test_results, str):
             try:
                 test_results = json.loads(test_results)
-            except (json.JSONDecodeError, TypeError):
+            except Exception:
                 test_results = []
 
-        per_test = {}
         for tr in test_results:
-            tid = tr.get("test_id")
+            tid = str(tr.get("test_id", ""))
             if not tid:
                 continue
+
             files = tr.get("files", [])
             report = tr.get("report", "") or ""
             notes = tr.get("notes", "") or ""
-            per_test[str(tid)] = {
+
+            chc_status_by_barcode[barcode][tid] = {
+                "test_name": tr.get("test_name", ""),
                 "report": report,
                 "notes": notes,
                 "files": files,
                 "has_report": bool(report.strip()),
                 "has_file": bool(files),
             }
-        result[str(barcode)] = per_test
-    return result
+
+        # ── NEW: Ophthalmology (CHCT001) directly from investigation ─────
+        oph_data = inv.get("CHCT001")
+
+        if isinstance(oph_data, dict) and oph_data:
+            has_data = any(
+                v for v in oph_data.values()
+                if v and (not isinstance(v, dict) or any(v.values()))
+            )
+
+            if has_data:
+                chc_status_by_barcode[barcode]["CHCT001"] = {
+                    "test_name": "Ophthalmology",
+                    "report": "Available",
+                    "notes": oph_data.get("remarks", ""),
+                    "files": [],
+                    "has_report": True,
+                    "has_file": False,
+                }
+
+    return chc_status_by_barcode
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1677,7 +1699,6 @@ def corporate_health_report(request):
         franchise_sample_collection = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
         franchise_investigation_collection = db.core_investigation
-        franchise_ophthalmology_collection = db.core_ophthalmology
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection = db.core_company
 
@@ -1757,10 +1778,6 @@ def corporate_health_report(request):
             "status": "approved"
         })
 
-        franchise_ophthalmology = franchise_ophthalmology_collection.find_one({
-            "barcode": barcode,
-            "status": "approved"
-        })
 
         franchise_overall_approval = franchise_overall_approval_collection.find_one({
             "barcode": barcode,
@@ -1820,79 +1837,59 @@ def corporate_health_report(request):
                 if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
                     clinical_examination_data[field] = value
 
-        # Ophthalmology
+            # Ophthalmology (Directly from CHCT001 in core_investigation)
         ophthalmology_data = None
-        if franchise_ophthalmology:
-            try:
+
+        if franchise_investigation:
+            chc_ophthalmology = franchise_investigation.get("CHCT001")
+
+            if chc_ophthalmology:
                 ophthalmology_data = {}
-                visual_acuity_str = franchise_ophthalmology.get('visual_acuity', '')
-                print(f"Raw visual_acuity from DB: {visual_acuity_str}")
-                if visual_acuity_str:
-                    try:
-                        json_array_str = '[' + visual_acuity_str + ']'
-                        parsed_array = json.loads(json_array_str)
-                        parsed_va = {}
-                        for obj in parsed_array:
-                            parsed_va.update(obj)
-                        print(f"Merged parsed_va: {parsed_va}")
-                        visual_acuity_data = {}
-                        if parsed_va.get("distance"):
-                            visual_acuity_data["distance"] = {
-                                "right": str(parsed_va.get("distance", {}).get("right", "6/6")),
-                                "left": str(parsed_va.get("distance", {}).get("left", "6/6"))
-                            }
-                        if parsed_va.get("nearVision"):
-                            visual_acuity_data["near_vision"] = {
-                                "right": str(parsed_va.get("nearVision", {}).get("right", "N-6")),
-                                "left": str(parsed_va.get("nearVision", {}).get("left", "N-6"))
-                            }
-                        if parsed_va.get("colourVision"):
-                            visual_acuity_data["color_vision"] = {
-                                "right": str(parsed_va.get("colourVision", {}).get("right", "Normal")),
-                                "left": str(parsed_va.get("colourVision", {}).get("left", "Normal"))
-                            }
-                        if parsed_va.get("ocularmovement"):
-                            visual_acuity_data["ocularmovement"] = {
-                                "right": str(parsed_va.get("ocularmovement", {}).get("right", "Normal")),
-                                "left": str(parsed_va.get("ocularmovement", {}).get("left", "Normal"))
-                            }
-                        if visual_acuity_data:
-                            ophthalmology_data["visual_acuity"] = visual_acuity_data
-                    except (json.JSONDecodeError, KeyError, AttributeError, TypeError) as e:
-                        print(f"Error parsing visual_acuity: {str(e)}")
-                remarks = franchise_ophthalmology.get('remarks', '')
-                if remarks and remarks.strip():
+
+                # Distance Vision
+                distance = chc_ophthalmology.get("distance", {})
+                if distance:
+                    ophthalmology_data["distance"] = {
+                        "right": str(distance.get("right", "")),
+                        "left": str(distance.get("left", ""))
+                    }
+
+                # Near Vision
+                near_vision = chc_ophthalmology.get("nearVision", {})
+                if near_vision:
+                    ophthalmology_data["near_vision"] = {
+                        "right": str(near_vision.get("right", "")),
+                        "left": str(near_vision.get("left", ""))
+                    }
+
+                # Colour Vision
+                colour_vision = chc_ophthalmology.get("colourVision", {})
+                if colour_vision:
+                    ophthalmology_data["color_vision"] = {
+                        "right": str(colour_vision.get("right", "")),
+                        "left": str(colour_vision.get("left", ""))
+                    }
+
+                # Ocular Movement
+                ocular_movement = chc_ophthalmology.get("ocularmovement", {})
+                if ocular_movement:
+                    ophthalmology_data["ocularmovement"] = {
+                        "right": str(ocular_movement.get("right", "")),
+                        "left": str(ocular_movement.get("left", ""))
+                    }
+
+                # Complaints
+                complaints = chc_ophthalmology.get("complaints")
+                if complaints:
+                    ophthalmology_data["complaints"] = complaints
+
+                # Remarks
+                remarks = chc_ophthalmology.get("remarks")
+                if remarks:
                     ophthalmology_data["remarks"] = remarks
-                patient_complaints = franchise_ophthalmology.get('patient_complaints', '')
-                if patient_complaints and patient_complaints.strip():
-                    ophthalmology_data["patient_complaints"] = patient_complaints
-                right_eye = franchise_ophthalmology.get('right_eye')
-                if right_eye:
-                    try:
-                        ophthalmology_data["right_eye"] = json.loads(right_eye) if isinstance(right_eye, str) else right_eye
-                    except json.JSONDecodeError:
-                        pass
-                left_eye = franchise_ophthalmology.get('left_eye')
-                if left_eye:
-                    try:
-                        ophthalmology_data["left_eye"] = json.loads(left_eye) if isinstance(left_eye, str) else left_eye
-                    except json.JSONDecodeError:
-                        pass
-                color_vision = franchise_ophthalmology.get('color_vision', '')
-                if color_vision and color_vision.strip():
-                    ophthalmology_data["color_vision_status"] = color_vision
-                vision_status = franchise_ophthalmology.get('vision_status', '')
-                if vision_status and vision_status.strip():
-                    ophthalmology_data["vision_status"] = vision_status
-                optometrist_name = franchise_ophthalmology.get('optometrist_name', '')
-                if optometrist_name and optometrist_name.strip():
-                    ophthalmology_data["optometrist_name"] = optometrist_name
+
                 if not ophthalmology_data:
                     ophthalmology_data = None
-            except Exception as e:
-                print(f"Error parsing ophthalmology data: {str(e)}")
-                ophthalmology_data = None
-
         # All barcodes for patient
         barcodes = []
         try:
@@ -2135,15 +2132,23 @@ def get_investigation_file(request):
         return JsonResponse({'error': str(e)}, status=500)
 
 
-@api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
 def get_investigation_status(request):
     """
-    Returns lab approval + ophthalmology + per CHC-test status from core_investigation.test_results.
+    Returns lab approval + CHC investigation status + vitals + patient history
+    CHCT001 is checked directly from core_investigation (not test_results)
     """
+
     barcode = request.GET.get('barcode')
     if not barcode:
         return JsonResponse({'error': 'Barcode is required'}, status=400)
+
+    def parse_json(value, default):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return default
+        return value if value else default
 
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -2153,96 +2158,130 @@ def get_investigation_status(request):
         sample_collection = db.core_sample
         billing_collection = db.core_billing
 
-        # Core investigation record
-        investigation = investigation_collection.find_one({"barcode": barcode})
+        investigation = investigation_collection.find_one({"barcode": barcode}) or {}
 
-        # Extract vitals from core_investigation directly
+        # -----------------------------
+        # VITALS
+        # -----------------------------
         vitals_data = {}
-        if investigation:
-            raw_vitals = investigation.get("vitals", {})
-            if isinstance(raw_vitals, str):
-                try:
-                    raw_vitals = json.loads(raw_vitals)
-                except Exception:
-                    raw_vitals = {}
-            for key, value in (raw_vitals or {}).items():
-                if value and str(value).strip() and str(value).strip() != "0":
-                    vitals_data[key] = value
+        raw_vitals = parse_json(investigation.get("vitals", {}), {})
 
-        # Also extract patient_history
-        patient_history = ""
-        if investigation:
-            patient_history = investigation.get("patient_history", "") or ""
-        # Lab approval (from TestValue model)
+        for key, value in raw_vitals.items():
+            if value and str(value).strip() not in ["", "0"]:
+                vitals_data[key] = value
+
+        # -----------------------------
+        # PATIENT HISTORY
+        # -----------------------------
+        patient_history = investigation.get("patient_history", "") or ""
+
+        # -----------------------------
+        # LAB APPROVAL
+        # -----------------------------
         total_sample_tests = 0
+
         try:
             franchise_sample = sample_collection.find_one({"barcode": barcode})
-            if franchise_sample and franchise_sample.get('testdetails'):
-                raw = franchise_sample.get('testdetails')
-                sample_tests = json.loads(raw) if isinstance(raw, str) else (raw or [])
-                total_sample_tests = len(sample_tests)
-        except Exception:
-            total_sample_tests = 0
+
+            if franchise_sample and franchise_sample.get("testdetails"):
+
+                sample_tests = parse_json(franchise_sample.get("testdetails"), [])
+
+                invalid_status = {"Rejected", "Outsource"}
+
+                valid_tests = [
+                    t for t in sample_tests
+                    if t.get("samplestatus", "").strip() not in invalid_status
+                ]
+
+                total_sample_tests = len(valid_tests)
+
+        except Exception as e:
+            print(f"Error calculating total_sample_tests: {e}")
 
         approved_tests_count = 0
+
         try:
             for record in TestValue.objects.filter(barcode=barcode):
-                td = record.testdetails
-                tests_list = json.loads(td) if isinstance(td, str) else (td or [])
+
+                tests_list = parse_json(record.testdetails, [])
+
                 for t in tests_list:
                     if isinstance(t, dict) and t.get("approve"):
                         approved_tests_count += 1
+
         except Exception as e:
             print(f"Error calculating approved_tests_count: {e}")
 
-        lab_approval = "approved" if (
-            total_sample_tests > 0 and approved_tests_count >= total_sample_tests
-        ) else "pending"
+        lab_approval = (
+            "approved"
+            if total_sample_tests > 0 and approved_tests_count >= total_sample_tests
+            else "pending"
+        )
 
-        # NEW: Build per-CHC-test status from investigation.test_results
+        # -----------------------------
+        # CHC TEST STATUS FROM test_results
+        # -----------------------------
         chc_test_status = {}
-        if investigation:
-            test_results = investigation.get("test_results", [])
-            if isinstance(test_results, str):
-                try:
-                    test_results = json.loads(test_results)
-                except (json.JSONDecodeError, TypeError):
-                    test_results = []
-            for tr in test_results:
-                tid = str(tr.get("test_id", ""))
-                if not tid:
-                    continue
-                files = tr.get("files", [])
-                report = tr.get("report", "") or ""
-                notes = tr.get("notes", "") or ""
-                chc_test_status[tid] = {
-                    "test_name": tr.get("test_name", ""),
-                    "report": report,
-                    "notes": notes,
-                    "files": files,
-                    "has_report": bool(report.strip()),
-                    "has_file": bool(files),
-                    "status": "approved" if (bool(report.strip()) or bool(files)) else "pending",
-                }
 
-        # NEW: Get chctestdetails list from billing
-        billing = billing_collection.find_one({"barcode": barcode})
-        chc_tests_list = []
-        if billing:
-            chc_raw = billing.get("chctestdetails", "[]")
-            if isinstance(chc_raw, str):
-                try:
-                    chc_tests_list = json.loads(chc_raw)
-                except (json.JSONDecodeError, TypeError):
-                    chc_tests_list = []
-            elif isinstance(chc_raw, list):
-                chc_tests_list = chc_raw
+        test_results = parse_json(investigation.get("test_results", []), [])
 
-        # Enrich chc_tests_list with status from investigation
+        for tr in test_results:
+
+            tid = str(tr.get("test_id", "")).strip()
+            if not tid:
+                continue
+
+            files = tr.get("files", []) or []
+            report = (tr.get("report") or "").strip()
+            notes = tr.get("notes") or ""
+
+            has_report = bool(report)
+            has_file = bool(files)
+
+            chc_test_status[tid] = {
+                "test_name": tr.get("test_name", ""),
+                "report": report,
+                "notes": notes,
+                "files": files,
+                "has_report": has_report,
+                "has_file": has_file,
+                "status": "approved" if (has_report or has_file) else "pending",
+            }
+
+        # -----------------------------
+        # SPECIAL CASE → CHCT001
+        # -----------------------------
+        ophthal_data = investigation.get("CHCT001", {})
+
+        if ophthal_data:
+            chc_test_status["CHCT001"] = {
+                "test_name": "Ophthalmology",
+                "report": "",
+                "notes": ophthal_data.get("remarks", ""),
+                "files": [],
+                "has_report": True,
+                "has_file": False,
+                "status": "approved",
+            }
+
+        # -----------------------------
+        # GET BILLING TESTS
+        # -----------------------------
+        billing = billing_collection.find_one({"barcode": barcode}) or {}
+        chc_tests_list = parse_json(billing.get("chctestdetails", []), [])
+
+        # -----------------------------
+        # MERGE BILLING + STATUS
+        # -----------------------------
         chc_tests_enriched = []
+
         for ct in chc_tests_list:
-            tid = str(ct.get("test_id", ""))
+
+            tid = str(ct.get("test_id", "")).strip()
+
             info = chc_test_status.get(tid, {})
+
             chc_tests_enriched.append({
                 "test_id": tid,
                 "testname": ct.get("testname", ""),
@@ -2254,25 +2293,31 @@ def get_investigation_status(request):
                 "files": info.get("files", []),
             })
 
+        # -----------------------------
+        # CHC OVERALL STATUS
+        # -----------------------------
         all_chc_approved = (
-            len(chc_tests_enriched) > 0
-            and all(ct["status"] == "approved" for ct in chc_tests_enriched)
+            len(chc_tests_enriched) > 0 and
+            all(ct["status"] == "approved" for ct in chc_tests_enriched)
         )
+
         chc_overall_status = "approved" if all_chc_approved else "pending"
 
         client.close()
 
         return JsonResponse({
-        'success': True,
-        'investigation': {},
-        'lab_approval': lab_approval,
-        'chc_tests': chc_tests_enriched,
-        'chc_investigation_status': chc_overall_status,
-        'vitals': vitals_data,           # ← ADD THIS
-        'patient_history': patient_history,  # ← ADD THIS
-    })
+            "success": True,
+            "investigation": {},
+            "lab_approval": lab_approval,
+            "chc_tests": chc_tests_enriched,
+            "chc_investigation_status": chc_overall_status,
+            "vitals": vitals_data,
+            "patient_history": patient_history,
+        })
+
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        return JsonResponse({"error": str(e)}, status=500)
+
 
 
 @api_view(['POST'])
@@ -2481,9 +2526,12 @@ def save_overall_approval(request):
 
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
 def get_batch_corporate_health_reports(request):
     """
-    Get multiple corporate health reports in one call for batch PDF generation
+    Get multiple corporate health reports in one call for batch PDF generation.
+    Ophthalmology is now read from CHCT001 in core_investigation (same as
+    corporate_health_report) instead of the separate core_ophthalmology collection.
     """
     barcodes = request.data.get('barcodes', [])
 
@@ -2504,7 +2552,8 @@ def get_batch_corporate_health_reports(request):
         franchise_sample_collection = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
         franchise_investigation_collection = db.core_investigation
-        franchise_ophthalmology_collection = db.core_ophthalmology
+        # NOTE: franchise_ophthalmology_collection removed —
+        #       ophthalmology now comes from CHCT001 inside core_investigation
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection = db.core_company
 
@@ -2590,10 +2639,6 @@ def get_batch_corporate_health_reports(request):
                     "barcode": barcode,
                 })
 
-                franchise_ophthalmology = franchise_ophthalmology_collection.find_one({
-                    "barcode": barcode, "status": "approved"
-                })
-
                 franchise_overall_approval = franchise_overall_approval_collection.find_one({
                     "barcode": barcode, "status": "approved"
                 })
@@ -2644,76 +2689,53 @@ def get_batch_corporate_health_reports(request):
                         if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
                             clinical_examination_data[field] = value
 
-                # Ophthalmology
+                # ── Ophthalmology — read from CHCT001 in core_investigation ──────────
+                # This is the same source as corporate_health_report, ensuring
+                # single-print and bulk-download produce identical ophthalmology output.
                 ophthalmology_data = None
-                if franchise_ophthalmology:
-                    try:
+                if franchise_investigation:
+                    chc_ophthalmology = franchise_investigation.get("CHCT001")
+                    if chc_ophthalmology:
                         ophthalmology_data = {}
-                        visual_acuity_str = franchise_ophthalmology.get('visual_acuity', '')
-                        if visual_acuity_str:
-                            try:
-                                json_array_str = '[' + visual_acuity_str + ']'
-                                parsed_array = json.loads(json_array_str)
-                                parsed_va = {}
-                                for obj in parsed_array:
-                                    parsed_va.update(obj)
-                                visual_acuity_data = {}
-                                if parsed_va.get("distance"):
-                                    visual_acuity_data["distance"] = {
-                                        "right": str(parsed_va.get("distance", {}).get("right", "6/6")),
-                                        "left": str(parsed_va.get("distance", {}).get("left", "6/6"))
-                                    }
-                                if parsed_va.get("nearVision"):
-                                    visual_acuity_data["near_vision"] = {
-                                        "right": str(parsed_va.get("nearVision", {}).get("right", "N-6")),
-                                        "left": str(parsed_va.get("nearVision", {}).get("left", "N-6"))
-                                    }
-                                if parsed_va.get("colourVision"):
-                                    visual_acuity_data["color_vision"] = {
-                                        "right": str(parsed_va.get("colourVision", {}).get("right", "Normal")),
-                                        "left": str(parsed_va.get("colourVision", {}).get("left", "Normal"))
-                                    }
-                                if parsed_va.get("ocularmovement"):
-                                    visual_acuity_data["ocularmovement"] = {
-                                        "right": str(parsed_va.get("ocularmovement", {}).get("right", "Normal")),
-                                        "left": str(parsed_va.get("ocularmovement", {}).get("left", "Normal"))
-                                    }
-                                if visual_acuity_data:
-                                    ophthalmology_data["visual_acuity"] = visual_acuity_data
-                            except (json.JSONDecodeError, KeyError, AttributeError, TypeError) as e:
-                                print(f"Error parsing visual_acuity: {str(e)}")
-                        remarks = franchise_ophthalmology.get('remarks', '')
-                        if remarks and remarks.strip():
+
+                        distance = chc_ophthalmology.get("distance", {})
+                        if distance:
+                            ophthalmology_data["distance"] = {
+                                "right": str(distance.get("right", "")),
+                                "left": str(distance.get("left", ""))
+                            }
+
+                        near_vision = chc_ophthalmology.get("nearVision", {})
+                        if near_vision:
+                            ophthalmology_data["near_vision"] = {
+                                "right": str(near_vision.get("right", "")),
+                                "left": str(near_vision.get("left", ""))
+                            }
+
+                        colour_vision = chc_ophthalmology.get("colourVision", {})
+                        if colour_vision:
+                            ophthalmology_data["color_vision"] = {
+                                "right": str(colour_vision.get("right", "")),
+                                "left": str(colour_vision.get("left", ""))
+                            }
+
+                        ocular_movement = chc_ophthalmology.get("ocularmovement", {})
+                        if ocular_movement:
+                            ophthalmology_data["ocularmovement"] = {
+                                "right": str(ocular_movement.get("right", "")),
+                                "left": str(ocular_movement.get("left", ""))
+                            }
+
+                        complaints = chc_ophthalmology.get("complaints")
+                        if complaints:
+                            ophthalmology_data["complaints"] = complaints
+
+                        remarks = chc_ophthalmology.get("remarks")
+                        if remarks:
                             ophthalmology_data["remarks"] = remarks
-                        patient_complaints = franchise_ophthalmology.get('patient_complaints', '')
-                        if patient_complaints and patient_complaints.strip():
-                            ophthalmology_data["patient_complaints"] = patient_complaints
-                        right_eye = franchise_ophthalmology.get('right_eye')
-                        if right_eye:
-                            try:
-                                ophthalmology_data["right_eye"] = json.loads(right_eye) if isinstance(right_eye, str) else right_eye
-                            except json.JSONDecodeError:
-                                pass
-                        left_eye = franchise_ophthalmology.get('left_eye')
-                        if left_eye:
-                            try:
-                                ophthalmology_data["left_eye"] = json.loads(left_eye) if isinstance(left_eye, str) else left_eye
-                            except json.JSONDecodeError:
-                                pass
-                        color_vision = franchise_ophthalmology.get('color_vision', '')
-                        if color_vision and color_vision.strip():
-                            ophthalmology_data["color_vision_status"] = color_vision
-                        vision_status = franchise_ophthalmology.get('vision_status', '')
-                        if vision_status and vision_status.strip():
-                            ophthalmology_data["vision_status"] = vision_status
-                        optometrist_name = franchise_ophthalmology.get('optometrist_name', '')
-                        if optometrist_name and optometrist_name.strip():
-                            ophthalmology_data["optometrist_name"] = optometrist_name
+
                         if not ophthalmology_data:
                             ophthalmology_data = None
-                    except Exception as e:
-                        print(f"Error parsing ophthalmology data: {str(e)}")
-                        ophthalmology_data = None
 
                 # Sample testdetails
                 sample_testdetails = []
@@ -2923,3 +2945,5 @@ def get_batch_corporate_health_reports(request):
         print(f"Batch processing error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
+
+
