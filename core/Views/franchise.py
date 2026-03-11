@@ -1638,6 +1638,83 @@ def franchise_patient_test_details(request):
         }
         
         return JsonResponse(response_data, safe=False)
+
+
+    
+
+
+from rest_framework.decorators import api_view
+from django.http import JsonResponse
+from datetime import datetime
+import json
+from bson import json_util
+
+@api_view(['GET'])
+def get_test_value_for_franchise(request):
+
+    franchise_id = request.GET.get('franchise_id')
+    from_date = request.GET.get('from_date')
+    to_date = request.GET.get('to_date')
+
+    if not franchise_id or not from_date or not to_date:
+        return JsonResponse(
+            {'error': 'franchise_id, from_date and to_date are required'},
+            status=400
+        )
+
+    try:
+        # Convert string to date
+        from_date_obj = datetime.strptime(from_date, "%Y-%m-%d").date()
+        to_date_obj = datetime.strptime(to_date, "%Y-%m-%d").date()
+
+        # 🔥 Step 1: Filter only by locationId (Mongo works fine for equality)
+        test_values = TestValue.objects.filter(
+            locationId=franchise_id
+        )
+
+        result = []
+
+        for test_value in test_values:
+
+            # 🔥 Step 2: Manual date filtering (Mongo-safe)
+            record_date = test_value.date
+
+            if from_date_obj <= record_date <= to_date_obj:
+
+                try:
+                    testdetails = (
+                        json.loads(test_value.testdetails)
+                        if isinstance(test_value.testdetails, str)
+                        else test_value.testdetails
+                    )
+                except Exception:
+                    testdetails = test_value.testdetails
+
+                result.append({
+                    'franchise_id': test_value.locationId,
+                    'barcode': test_value.barcode,
+                    'date': str(test_value.date),
+                    'testdetails': testdetails,
+                })
+
+        if not result:
+            return JsonResponse(
+                {'message': 'No test values found'},
+                status=404
+            )
+
+        return JsonResponse(
+            {'status': 'success', 'data': result},
+            status=200,
+            safe=False,
+            json_dumps_params={'default': json_util.default}
+        )
+
+    except Exception as e:
+        return JsonResponse(
+            {'error': 'Internal server error', 'details': str(e)},
+            status=500
+        )
         
     except Exception as e:
         import traceback
