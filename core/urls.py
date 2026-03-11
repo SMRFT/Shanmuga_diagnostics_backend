@@ -155,6 +155,8 @@ urlpatterns = [
     path('franchise-receive/<str:batch_no>/', franchise.update_batch_received_status, name='update_batch_received_status'),
     path("get_franchise_Transferred/<str:batch_number>/", franchise.get_franchise_sample, name="get_franchise_sample"),
     path("update_franchise_sample/<str:barcode>/", franchise.update_franchise_sample, name="update_franchise_sample"), 
+
+    path('get_test_value_for_franchise/', franchise.get_test_value_for_franchise, name='get_test_value_for_franchise'),
     
     #Franchise Reports:     
     path('franchise_overall_report/', franchise.franchise_overall_report, name='franchise_overall_report'),
@@ -239,3 +241,4 @@ urlpatterns = [
     path("test-summary/", dashboard.test_summary, name="test-summary"),
     
 ]
+
