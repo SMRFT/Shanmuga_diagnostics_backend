@@ -1647,3 +1647,59 @@ def franchise_patient_test_details(request):
         import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
+
+
+from rest_framework.decorators import api_view, permission_classes
+from django.http import JsonResponse
+from bson import json_util
+import json
+
+@api_view(['GET'])
+@permission_classes([ HasRoleAndDataPermission])
+def get_test_value_for_franchise(request):
+    date = request.GET.get('date')
+    franchise_id = request.GET.get('franchise_id')
+
+    # print(f"Received date: {date}, franchise_id: {franchise_id}")
+
+    if not franchise_id or not date:
+        return JsonResponse({'error': 'franchise_id and date are required'}, status=400)
+
+    try:
+        test_values = TestValue.objects.filter(
+            franchise_id=franchise_id,
+            date__startswith=date  # ✅ fix: only match date part
+        )
+
+        if not test_values:
+            return JsonResponse({'message': 'No test values found'}, status=404)
+
+        result = []
+        for test_value in test_values:
+            try:
+                testdetails = (
+                    json.loads(test_value.testdetails)
+                    if isinstance(test_value.testdetails, str)
+                    else test_value.testdetails
+                )
+            except Exception as e:
+                print(f"Error parsing testdetails: {e}")
+                testdetails = test_value.testdetails
+
+            result.append({
+                'franchise_id': test_value.franchise_id,
+                'barcode':test_value.barcode,
+                'date': str(test_value.date),
+                'testdetails': testdetails,
+            })
+
+        return JsonResponse(
+            {'status': 'success', 'data': result},
+            safe=False,
+            status=200,
+            json_dumps_params={'default': json_util.default}
+        )
+
+    except Exception as e:
+        print(f"[ERROR] While processing test values: {str(e)}")
+        return JsonResponse({'error': 'Internal server error', 'details': str(e)}, status=500)
