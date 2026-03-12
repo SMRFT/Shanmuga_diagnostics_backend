@@ -1647,7 +1647,7 @@ def franchise_patient_test_details(request):
     
 
 
-from rest_framework.decorators import api_view
+
 from django.http import JsonResponse
 from datetime import datetime
 import json
@@ -1657,7 +1657,7 @@ from datetime import datetime
 import json
 from bson import json_util
 from django.http import JsonResponse
-from rest_framework.decorators import api_view
+
 
 
 @api_view(['GET'])
