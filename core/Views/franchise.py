@@ -1653,6 +1653,13 @@ from datetime import datetime
 import json
 from bson import json_util
 
+from datetime import datetime
+import json
+from bson import json_util
+from django.http import JsonResponse
+from rest_framework.decorators import api_view
+
+
 @api_view(['GET'])
 def get_test_value_for_franchise(request):
 
@@ -1671,16 +1678,14 @@ def get_test_value_for_franchise(request):
         from_date_obj = datetime.strptime(from_date, "%Y-%m-%d").date()
         to_date_obj = datetime.strptime(to_date, "%Y-%m-%d").date()
 
-        # 🔥 Step 1: Filter only by locationId (Mongo works fine for equality)
-        test_values = TestValue.objects.filter(
-            locationId=franchise_id
-        )
+        # Step 1: Filter only by locationId
+        test_values = TestValue.objects.filter(locationId=franchise_id)
 
         result = []
 
         for test_value in test_values:
 
-            # 🔥 Step 2: Manual date filtering (Mongo-safe)
+            # Step 2: Manual date filtering
             record_date = test_value.date
 
             if from_date_obj <= record_date <= to_date_obj:
@@ -1715,12 +1720,9 @@ def get_test_value_for_franchise(request):
         )
 
     except Exception as e:
+        import traceback
+        print(traceback.format_exc())
         return JsonResponse(
             {'error': 'Internal server error', 'details': str(e)},
             status=500
         )
-        
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return JsonResponse({'error': str(e)}, status=500)
