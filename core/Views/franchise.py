@@ -1655,51 +1655,73 @@ from bson import json_util
 import json
 
 @api_view(['GET'])
-# @permission_classes([ HasRoleAndDataPermission])
 def get_test_value_for_franchise(request):
-    date = request.GET.get('date')
+
     franchise_id = request.GET.get('franchise_id')
+    from_date = request.GET.get('from_date')
+    to_date = request.GET.get('to_date')
 
-    # print(f"Received date: {date}, franchise_id: {franchise_id}")
-
-    if not franchise_id or not date:
-        return JsonResponse({'error': 'franchise_id and date are required'}, status=400)
-
-    try:
-        test_values = TestValue.objects.filter(
-            franchise_id=franchise_id,
-            date__startswith=date  # ✅ fix: only match date part
+    if not franchise_id or not from_date or not to_date:
+        return JsonResponse(
+            {'error': 'franchise_id, from_date and to_date are required'},
+            status=400
         )
 
-        if not test_values:
-            return JsonResponse({'message': 'No test values found'}, status=404)
+    try:
+        # Convert string to date
+        from_date_obj = datetime.strptime(from_date, "%Y-%m-%d").date()
+        to_date_obj = datetime.strptime(to_date, "%Y-%m-%d").date()
+
+        # 🔥 Step 1: Filter only by locationId (Mongo works fine for equality)
+        test_values = TestValue.objects.filter(
+            locationId=franchise_id
+        )
 
         result = []
-        for test_value in test_values:
-            try:
-                testdetails = (
-                    json.loads(test_value.testdetails)
-                    if isinstance(test_value.testdetails, str)
-                    else test_value.testdetails
-                )
-            except Exception as e:
-                print(f"Error parsing testdetails: {e}")
-                testdetails = test_value.testdetails
 
-            result.append({
-                'franchise_id': test_value.franchise_id,
-                'barcode':test_value.barcode,
-                'date': str(test_value.date),
-                'testdetails': testdetails,
-            })
+        for test_value in test_values:
+
+            # 🔥 Step 2: Manual date filtering (Mongo-safe)
+            record_date = test_value.date
+
+            if from_date_obj <= record_date <= to_date_obj:
+
+                try:
+                    testdetails = (
+                        json.loads(test_value.testdetails)
+                        if isinstance(test_value.testdetails, str)
+                        else test_value.testdetails
+                    )
+                except Exception:
+                    testdetails = test_value.testdetails
+
+                result.append({
+                    'franchise_id': test_value.locationId,
+                    'barcode': test_value.barcode,
+                    'date': str(test_value.date),
+                    'testdetails': testdetails,
+                })
+
+        if not result:
+            return JsonResponse(
+                {'message': 'No test values found'},
+                status=404
+            )
 
         return JsonResponse(
             {'status': 'success', 'data': result},
-            safe=False,
             status=200,
+            safe=False,
             json_dumps_params={'default': json_util.default}
         )
 
     except Exception as e:
-        print(f"[ERROR] While processing test values: {str(e)}")
-        return JsonResponse({'error': 'Internal server error', 'details': str(e)}, status=500)
+        return JsonResponse(
+            {'error': 'Internal server error', 'details': str(e)},
+            status=500
+        )
+        
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return JsonResponse({'error': str(e)}, status=500)
