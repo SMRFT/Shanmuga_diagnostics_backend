@@ -1648,15 +1648,7 @@ def franchise_patient_test_details(request):
 
 
 
-from django.http import JsonResponse
-from datetime import datetime
-import json
-from bson import json_util
 
-from datetime import datetime
-import json
-from bson import json_util
-from django.http import JsonResponse
 
 
 
