@@ -2951,4 +2951,3 @@ def get_batch_corporate_health_reports(request):
         print(f"Batch processing error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
-

@@ -389,6 +389,7 @@ def get_invoices(request):
     # Sort by generation date descending to show latest invoices first
     invoices = list(collection.find(query, {"_id": 0}).sort("generatedAt", -1))
     return JsonResponse(invoices, safe=False)
+    
 
 @api_view(['PUT', 'POST'])
 @csrf_exempt
@@ -479,12 +480,25 @@ def update_invoice(request):
                     else proportional_credits
                 )
 
+                total_original_credit = sum(
+                    float(p.get("credit_amount", 0.00))
+                    for p in proportional_data
+                )
+                current_pending = float(pending_amount)
+
                 for patient_credit in proportional_data:
                     patient_id = patient_credit.get("patient_id")
-                    new_credit = patient_credit.get("proportionalCredit", "0.00")
+                    orig_credit = float(patient_credit.get("credit_amount", 0.00))
+
+                    if current_pending <= 0:
+                        new_credit = 0.0
+                    elif total_original_credit > 0:
+                        new_credit = (orig_credit / total_original_credit) * current_pending
+                    else:
+                        new_credit = max(0.0, orig_credit - float(patient_credit.get("proportionalCredit", 0.0)))
 
                     Billing.objects.filter(patient_id=patient_id).update(
-                        credit_amount=new_credit
+                        credit_amount=f"{new_credit:.2f}"
                     )
 
             except Exception as e:
@@ -506,8 +520,6 @@ def update_invoice(request):
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
 
-
-        
 
 @api_view(['DELETE', 'POST'])
 @csrf_exempt
