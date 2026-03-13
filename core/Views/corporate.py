@@ -1330,6 +1330,8 @@ def corporate_patient_test_details(request):
                 if not isinstance(testvalue_details, list):
                     continue
                 for test_detail in testvalue_details:
+                    if not test_detail.get("approve") == True:  # ← add this
+                        continue
                     test_id = test_detail.get("test_id")
                     testname = test_detail.get("testname")
                     device_id = test_detail.get("device_id", "N/A")
@@ -1966,6 +1968,8 @@ def corporate_health_report(request):
                     if not isinstance(testvalue_details, list):
                         continue
                     for test_detail in testvalue_details:
+                        if not test_detail.get("approve") == True:  # ← add this
+                            continue
                         test_id = test_detail.get("test_id")
                         testname = test_detail.get("testname")
                         device_id = test_detail.get("device_id", "N/A")
@@ -2798,6 +2802,8 @@ def get_batch_corporate_health_reports(request):
                             if not isinstance(testvalue_details, list):
                                 continue
                             for test_detail in testvalue_details:
+                                if not test_detail.get("approve") == True:  # ← add this
+                                    continue
                                 test_id = test_detail.get("test_id")
                                 testname = test_detail.get("testname")
                                 device_id = test_detail.get("device_id", "N/A")
@@ -2945,5 +2951,3 @@ def get_batch_corporate_health_reports(request):
         print(f"Batch processing error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
-
