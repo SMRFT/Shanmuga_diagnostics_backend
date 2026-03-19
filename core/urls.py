@@ -151,12 +151,15 @@ urlpatterns = [
     path('credit_amount/', patients.update_credit_amount, name='update_credit_amount'),
     path('send-email/', whatsapp.send_email, name='send_email'),
     path('communication_logs/', whatsapp.get_communication_logs, name='get_communication_logs'),
+    path('get_home_collection_report/', report.get_home_collection_report, name='get_home_collection_report'),
 
     #Franchise Batch and Sample Status Update:
     path('franchise-batches/', franchise.get_batch_generation_data, name='get_batch_generation_data'),
     path('franchise-receive/<str:batch_no>/', franchise.update_batch_received_status, name='update_batch_received_status'),
     path("get_franchise_Transferred/<str:batch_number>/", franchise.get_franchise_sample, name="get_franchise_sample"),
     path("update_franchise_sample/<str:barcode>/", franchise.update_franchise_sample, name="update_franchise_sample"), 
+
+    path('get_test_value_for_franchise/', franchise.get_test_value_for_franchise, name='get_test_value_for_franchise'),
     
     #Franchise Reports:     
     path('franchise_overall_report/', franchise.franchise_overall_report, name='franchise_overall_report'),
@@ -224,17 +227,6 @@ urlpatterns = [
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
 
-    #sales
-    path('hospitallabform/', sales.hospitallabform, name='hospitallabform'),
-    path('get_all_clinicalnames/',sales.get_all_clinicalnames, name='get_all_clinicalnames'),
-    path('SalesVisitLog/', sales.salesvisitlog, name='salesvisitlog'),
-    path('get_sales_executives/', sales.get_sales_executives, name='get_sales_executives'),
-    path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
-    path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
-    path('Adminview_salesexecutive_report/', sales.Adminview_salesexecutive_report, name='Adminview_salesexecutive_report'),
-    path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
-    path('serve_sales_image/<str:file_id>/', sales.serve_sales_image, name='serve_sales_image'),
-
     #Invoice URLs
     path("generate-invoice/", generate_invoice, name="generate-invoice"),
     path("get-invoices/", get_invoices, name="get-invoices"),
@@ -253,3 +245,4 @@ urlpatterns = [
     path("test-summary/", dashboard.test_summary, name="test-summary"),
     
 ]
+

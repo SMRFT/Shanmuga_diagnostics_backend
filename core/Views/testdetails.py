@@ -414,7 +414,7 @@ This is an automated email from the Diagnostics LIS system.
             recipient_list.append(recipient_email)
         
         # Add default admin email
-        recipient_list.append('sivasundarismrft@gmail.com')
+        recipient_list.append('drprabusankar@smrft.org')
         
         # Remove duplicates
         recipient_list = list(set(recipient_list))

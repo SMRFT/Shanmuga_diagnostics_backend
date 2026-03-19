@@ -206,57 +206,105 @@ def overall_report(request):
                 print("Test query result:", test_result[0])
             return JsonResponse([], safe=False)
 
-        # Fetch barcode from BarcodeTestDetails
-        bill_nos = [record['bill_no'] for record in billing_records if record['bill_no']]
-        barcode_query = {"bill_no__in": bill_nos} if bill_nos else {}
-        print(f"BarcodeTestDetails query: {barcode_query}")
-        barcode_records = BarcodeTestDetails.objects.filter(**barcode_query).values(
-            'patient_id', 'patientname', 'age', 'gender', 'segment', 'date', 'bill_no', 'barcode', 'testdetails'
+        def fetch_in_chunks(collection, query_field, param_list, additional_query=None, projection=None, chunk_size=50):
+            results = []
+            if not param_list:
+                return results
+            for i in range(0, len(param_list), chunk_size):
+                chunk = param_list[i:i+chunk_size]
+                query = {query_field: {"$in": chunk}}
+                if additional_query:
+                    query.update(additional_query)
+                if projection:
+                    results.extend(list(collection.find(query, projection)))
+                else:
+                    results.extend(list(collection.find(query)))
+            return results
+
+        # Fetch barcode from BarcodeTestDetails using PyMongo
+        bill_nos = [record['bill_no'] for record in billing_records if record.get('bill_no')]
+        print(f"Fetching BarcodeTestDetails for {len(bill_nos)} bill_nos")
+        
+        barcode_collection = db.core_barcodetestdetails
+        barcode_records = fetch_in_chunks(
+            collection=barcode_collection,
+            query_field="bill_no",
+            param_list=bill_nos,
+            projection={'_id': 0, 'patient_id': 1, 'patientname': 1, 'age': 1, 'gender': 1, 'segment': 1, 'date': 1, 'bill_no': 1, 'barcode': 1, 'testdetails': 1},
+            chunk_size=50
         )
+        
         barcode_map = {record['bill_no']: record for record in barcode_records}
         print(f"Found {len(barcode_records)} BarcodeTestDetails records")
         if barcode_records:
             print("Sample BarcodeTestDetails record:", barcode_records[0])
 
         # Fetch patient details from Patient model
-        patient_ids = [record['patient_id'] for record in billing_records]
+        patient_ids = [record['patient_id'] for record in billing_records if record.get('patient_id')]
         patient_details_map = {}
         try:
-            patient_records = Patient.objects.filter(patient_id__in=patient_ids).values(
-                'patient_id', 'patientname', 'age', 'age_type', 'gender', 'phone', 'email', 'address', 'created_date'
+            patient_collection = db.core_patient
+            patient_records = fetch_in_chunks(
+                collection=patient_collection,
+                query_field="patient_id",
+                param_list=patient_ids,
+                chunk_size=50
             )
             for patient_record in patient_records:
                 patient_details_map[patient_record['patient_id']] = patient_record
-            print(f"Fetched {len(patient_details_map)} patient records from Patient model")
+            print(f"Fetched {len(patient_details_map)} patient records from Patient model via PyMongo")
         except Exception as e:
             print(f"Error fetching patient details from Patient model: {str(e)}")
 
         # Fetch status and test data
-        barcodes = [record['barcode'] for record in barcode_records if record['barcode']]
-        print(f"Barcodes for querying: {barcodes}")
-        sample_status_records = SampleStatus.objects.filter(
-            barcode__in=barcodes,
-            date__range=(make_aware(from_date), make_aware(to_date))
-        ).values("barcode", "testdetails")
+        barcodes = [record['barcode'] for record in barcode_records if record.get('barcode')]
+        print(f"Barcodes for querying: {len(barcodes)}")
+        
+        # Prepare date query based on naive datetime
+        date_query = {"$gte": from_date, "$lt": to_date}
+        
+        sample_status_collection = db.core_samplestatus
+        sample_status_records = fetch_in_chunks(
+            collection=sample_status_collection,
+            query_field="barcode",
+            param_list=barcodes,
+            additional_query={"date": date_query},
+            chunk_size=50
+        )
         print(f"Fetched {len(sample_status_records)} SampleStatus records")
 
-        test_value_records = TestValue.objects.filter(
-            barcode__in=barcodes,
-            date__range=(make_aware(from_date), make_aware(to_date))
-        ).values("barcode", "testdetails", "created_date")
+        test_value_collection = db.core_testvalue
+        test_value_records = fetch_in_chunks(
+            collection=test_value_collection,
+            query_field="barcode",
+            param_list=barcodes,
+            additional_query={"date": date_query},
+            chunk_size=50
+        )
         print(f"Fetched {len(test_value_records)} TestValue records")
 
-        # Fetch MBTestValue records using Django ORM
-        mb_test_value_records = MBTestValue.objects.filter(
-            barcode__in=barcodes,
-            date__range=(make_aware(from_date), make_aware(to_date))
-        ).values("barcode", "testdetails", "created_date")
+        # Fetch MBTestValue records using PyMongo
+        mb_test_value_collection = db.core_mbtestvalue
+        mb_test_value_records = fetch_in_chunks(
+            collection=mb_test_value_collection,
+            query_field="barcode",
+            param_list=barcodes,
+            additional_query={"date": date_query},
+            chunk_size=50
+        )
         print(f"Fetched {len(mb_test_value_records)} MBTestValue records")
 
         # Organize status data
         sample_status_map = {}
         for record in sample_status_records:
-            sample_status_map.setdefault(record["barcode"], []).extend(record["testdetails"])
+            td = record.get("testdetails", [])
+            if isinstance(td, str):
+                try:
+                    td = json.loads(td.strip('"'))
+                except json.JSONDecodeError:
+                    td = []
+            if isinstance(td, list):
+                sample_status_map.setdefault(record.get("barcode", ""), []).extend(td)
 
         # Organize test value data - COMBINE ALL RECORDS FOR SAME BARCODE
         test_value_map = {}
