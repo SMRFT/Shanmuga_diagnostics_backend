@@ -941,9 +941,6 @@ def corporate_overall_report(request):
                         valid_test_values.append(test_record)
                         if not test_record.get("approve", False):
                             unapproved_tests.append(test_record)
-
-            print(f"Employee ID: {pid}, Barcode: {barcode}, Total test records: {len(all_test_values)}, Valid (non-rerun) tests: {len(valid_test_values)}, Unapproved tests: {len(unapproved_tests)}")
-
             all_collected = all(
                 t.get("samplestatus") == "Collected" if isinstance(t, dict) else False
                 for t in sample_tests
@@ -1130,8 +1127,6 @@ def corporate_overall_report(request):
                 elif partially_dispatched:
                     status = "Partially Dispatched"
 
-            print(f"Final status for Employee {pid}: {status}")
-
             department_statuses = {}
             if pid and test_list:
                 department_statuses = get_department_status_corporate(
@@ -1208,15 +1203,15 @@ def corporate_patient_test_details(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
         franchise_billing_collection = db.core_billing
-        franchise_sample_collection = db.core_sample
+        franchise_sample_collection  = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
 
-        global_db = client.Global
+        global_db          = client.Global
         profile_collection = global_db.backend_diagnostics_profile
-        fs = gridfs.GridFS(global_db)
+        fs                 = gridfs.GridFS(global_db)
 
         franchise_billing = franchise_billing_collection.find_one({"barcode": barcode})
         if not franchise_billing:
@@ -1249,6 +1244,25 @@ def corporate_patient_test_details(request):
         except Exception:
             barcodes = []
 
+        # ── Resolve patient gender for reference range selection ──────────────
+        # core_employeeregistration has a 'gender' field
+        patient_gender = (franchise_patient.get('gender') or '').strip()
+
+        # ── Gender-aware reference_range resolver ─────────────────────────────
+        def resolve_reference_range(meta, gender):
+            """
+            Pick reference_range from male/female fields based on patient gender.
+            Falls back to generic reference_range when gender-specific value absent.
+            """
+            gender_key = (gender or '').strip().lower()   # 'male', 'female', or ''
+
+            if gender_key == 'male' and meta.get('male'):
+                return meta['male']
+            if gender_key == 'female' and meta.get('female'):
+                return meta['female']
+            return meta.get('reference_range', '') or ''
+
+        # ── Parameter helper ──────────────────────────────────────────────────
         def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
             core_parameters = core_test.get("parameters", {})
             params_list = []
@@ -1271,6 +1285,7 @@ def corporate_patient_test_details(request):
                     return matching_params[0]
             return None
 
+        # ── Signature helper ──────────────────────────────────────────────────
         def get_employee_signature_data(emp_id):
             if not emp_id:
                 return None
@@ -1278,20 +1293,24 @@ def corporate_patient_test_details(request):
                 profile = profile_collection.find_one({"employeeId": emp_id})
                 if not profile:
                     return None
-                employee_name = profile.get("employeeName", "")
-                designation = profile.get("designation", "")
+                employee_name     = profile.get("employeeName", "")
+                designation       = profile.get("designation", "")
                 signature_file_id = profile.get("signatureFileId")
-                signature_base64 = None
+                signature_base64  = None
                 if signature_file_id:
                     try:
                         if isinstance(signature_file_id, str):
                             signature_file_id = ObjectId(signature_file_id)
-                        signature_file = fs.get(signature_file_id)
-                        signature_bytes = signature_file.read()
+                        signature_file   = fs.get(signature_file_id)
+                        signature_bytes  = signature_file.read()
                         signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
                     except Exception as e:
                         print(f"Error fetching signature for employee {emp_id}: {str(e)}")
-                return {"employeeName": employee_name, "designation": designation, "signatureBase64": signature_base64}
+                return {
+                    "employeeName":    employee_name,
+                    "designation":     designation,
+                    "signatureBase64": signature_base64,
+                }
             except Exception as e:
                 print(f"Error fetching employee data for {emp_id}: {str(e)}")
                 return None
@@ -1309,134 +1328,166 @@ def corporate_patient_test_details(request):
                 sample_testdetails = []
 
         patient_details = {
-            "patient_id": employee_id,
+            "patient_id":  employee_id,
             "patientname": franchise_patient.get("employee_name", ""),
-            "age": franchise_patient.get("age", ""),
-            "age_type": franchise_patient.get("age_type", "Years"),
-            "gender": franchise_patient.get("gender", ""),
-            "date": franchise_billing.get("created_date"),
-            "barcode": franchise_billing.get("barcode", ""),
-            "barcodes": barcodes,
-            "branch": franchise_billing.get("franchise_id", ""),
-            "refby": "SELF",
-            "testdetails": []
+            "age":         franchise_patient.get("age", ""),
+            "age_type":    franchise_patient.get("age_type", "Years"),
+            "gender":      franchise_patient.get("gender", ""),
+            "date":        franchise_billing.get("created_date"),
+            "barcode":     franchise_billing.get("barcode", ""),
+            "barcodes":    barcodes,
+            "branch":      franchise_billing.get("franchise_id", ""),
+            "refby":       "SELF",
+            "testdetails": [],
         }
 
         all_approvers = set()
 
         for test_value in test_values:
             try:
-                testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
+                testvalue_details = (
+                    json.loads(test_value.testdetails)
+                    if isinstance(test_value.testdetails, str)
+                    else test_value.testdetails
+                )
                 if not isinstance(testvalue_details, list):
                     continue
+
                 for test_detail in testvalue_details:
-                    if not test_detail.get("approve") == True:  # ← add this
+                    if test_detail.get("approve") is not True:
                         continue
-                    test_id = test_detail.get("test_id")
-                    testname = test_detail.get("testname")
+
+                    test_id   = test_detail.get("test_id")
+                    testname  = test_detail.get("testname")
                     device_id = test_detail.get("device_id", "N/A")
                     if not test_id:
                         continue
+
                     core_test = core_testdetails_collection.find_one({"test_id": test_id})
+
                     sample_status = None
                     for sample_test in sample_testdetails:
                         if sample_test.get("test_id") == test_id or sample_test.get("testname") == testname:
                             sample_status = sample_test
                             break
+
                     billing_info = None
                     for billing_test in billing_testdetails:
                         if billing_test.get("test_id") == test_id:
                             billing_info = billing_test
                             break
+
                     if core_test:
-                        department = core_test.get("department", "N/A")
-                        NABL = core_test.get("NABL", False)
+                        department    = core_test.get("department", "N/A")
+                        NABL          = core_test.get("NABL", False)
                         specimen_type = core_test.get("specimen_type", "N/A")
-                        testname = core_test.get("test_name", testname)
+                        testname      = core_test.get("test_name", testname)
                     else:
-                        department = test_detail.get("department", sample_status.get("department", "") if sample_status else "")
-                        NABL = test_detail.get("NABL", "")
+                        department    = test_detail.get("department", sample_status.get("department", "") if sample_status else "")
+                        NABL          = test_detail.get("NABL", "")
                         specimen_type = test_detail.get("specimen_type", "")
-                    outsourced = test_detail.get("outsourced", False)
-                    comment = test_detail.get("comment", "")
-                    verified_by = test_detail.get("verified_by", "N/A")
-                    approve_by = test_detail.get("approve_by", "N/A")
+
+                    outsourced   = test_detail.get("outsourced", False)
+                    comment      = test_detail.get("comment", "")
+                    verified_by  = test_detail.get("verified_by", "N/A")
+                    approve_by   = test_detail.get("approve_by", "N/A")
                     approve_time = test_detail.get("approve_time", "N/A")
+
                     if approve_by:
                         all_approvers.add(approve_by)
+
                     test_response = {
-                        "test_id": test_id,
-                        "testname": testname,
-                        "department": department,
-                        "NABL": NABL,
-                        "specimen_type": specimen_type,
-                        "outsourced": outsourced,
-                        "comment": comment,
-                        "verified_by": verified_by,
-                        "approve_by": approve_by,
-                        "approve_time": approve_time,
+                        "test_id":              test_id,
+                        "testname":             testname,
+                        "department":           department,
+                        "NABL":                 NABL,
+                        "specimen_type":        specimen_type,
+                        "outsourced":           outsourced,
+                        "comment":              comment,
+                        "verified_by":          verified_by,
+                        "approve_by":           approve_by,
+                        "approve_time":         approve_time,
                         "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
-                        "received_time": sample_status.get("received_time") if sample_status else None
+                        "received_time":        sample_status.get("received_time")         if sample_status else None,
                     }
+
                     if billing_info:
                         test_response["MRP"] = billing_info.get("MRP", "N/A")
+
                     parameters = test_detail.get("parameters", [])
+
                     if parameters and len(parameters) > 0:
+                        # ── Parameterised test ────────────────────────────────
                         enriched_parameters = []
                         for param_index, param_value in enumerate(parameters):
-                            test_code = param_value.get("test_code")
-                            value = param_value.get("value", "")
+                            test_code     = param_value.get("test_code")
+                            value         = param_value.get("value", "")
                             param_comment = param_value.get("comment", "")
-                            if core_test:
-                                param_def = get_parameter_from_core(core_test, device_id, test_code=test_code, param_index=param_index)
-                            else:
-                                param_def = None
+
+                            param_def = get_parameter_from_core(
+                                core_test, device_id,
+                                test_code=test_code,
+                                param_index=param_index,
+                            ) if core_test else None
+
                             if param_def:
+                                # Gender-resolved reference_range
+                                ref_range = resolve_reference_range(param_def, patient_gender)
+
                                 enriched_param = {
-                                    "name": param_def.get("test_name", ""),
-                                    "test_code": test_code,
-                                    "value": value,
-                                    "unit": param_def.get("unit", ""),
-                                    "reference_range": param_def.get("reference_range", ""),
-                                    "method": param_def.get("method", ""),
-                                    "specimen_type": specimen_type,
-                                    "sub_title": param_def.get("sub_title", ""),
-                                    "value_option": param_def.get("value_option", []),
-                                    "comment": param_comment
+                                    "name":            param_def.get("test_name", ""),
+                                    "test_code":       test_code,
+                                    "value":           value,
+                                    "unit":            param_def.get("unit", ""),
+                                    "reference_range": ref_range,   # gender-resolved
+                                    "method":          param_def.get("method", ""),
+                                    "specimen_type":   specimen_type,
+                                    "sub_title":       param_def.get("sub_title", ""),
+                                    "value_option":    param_def.get("value_option", []),
+                                    "comment":         param_comment,
                                 }
                             else:
+                                # Fallback: no core definition found
                                 enriched_param = {
-                                    "name": param_value.get("name", "N/A"),
-                                    "test_code": test_code,
-                                    "value": value,
-                                    "unit": param_value.get("unit", "N/A"),
+                                    "name":            param_value.get("name", "N/A"),
+                                    "test_code":       test_code,
+                                    "value":           value,
+                                    "unit":            param_value.get("unit", "N/A"),
                                     "reference_range": param_value.get("reference_range", "N/A"),
-                                    "method": param_value.get("method", "N/A"),
-                                    "specimen_type": specimen_type,
-                                    "sub_title": param_value.get("sub_title", ""),
-                                    "value_option": [],
-                                    "comment": param_comment
+                                    "method":          param_value.get("method", "N/A"),
+                                    "specimen_type":   specimen_type,
+                                    "sub_title":       param_value.get("sub_title", ""),
+                                    "value_option":    [],
+                                    "comment":         param_comment,
                                 }
+
                             enriched_parameters.append(enriched_param)
                         test_response["parameters"] = enriched_parameters
+
                     else:
+                        # ── Single-value test ─────────────────────────────────
                         if core_test:
+                            # Gender-resolved reference_range
+                            ref_range = resolve_reference_range(core_test, patient_gender)
+
                             test_response.update({
-                                "method": core_test.get("method", ""),
-                                "value": test_detail.get("value", ""),
-                                "unit": core_test.get("unit", ""),
-                                "reference_range": core_test.get("reference_range", ""),
-                                "sub_title": test_detail.get("sub_title", "")
+                                "method":          core_test.get("method", ""),
+                                "value":           test_detail.get("value", ""),
+                                "unit":            core_test.get("unit", ""),
+                                "reference_range": ref_range,   # gender-resolved
+                                "sub_title":       test_detail.get("sub_title", ""),
                             })
                         else:
                             test_response.update({
-                                "method": test_detail.get("method", ""),
-                                "value": test_detail.get("value", ""),
-                                "unit": test_detail.get("unit", ""),
+                                "method":          test_detail.get("method", ""),
+                                "value":           test_detail.get("value", ""),
+                                "unit":            test_detail.get("unit", ""),
                                 "reference_range": test_detail.get("reference_range", ""),
-                                "sub_title": test_detail.get("sub_title", "")
+                                "sub_title":       test_detail.get("sub_title", ""),
                             })
+
                     patient_details["testdetails"].append(test_response)
+
             except (json.JSONDecodeError, AttributeError):
                 continue
 
@@ -1697,20 +1748,21 @@ def corporate_health_report(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
 
-        franchise_billing_collection = db.core_billing
-        franchise_sample_collection = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
-        franchise_investigation_collection = db.core_investigation
+        franchise_billing_collection          = db.core_billing
+        franchise_sample_collection           = db.core_sample
+        franchise_patient_collection          = db.core_employeeregistration
+        franchise_investigation_collection    = db.core_investigation
         franchise_overall_approval_collection = db.overallApproval
-        franchise_company_collection = db.core_company
+        franchise_company_collection          = db.core_company
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
 
-        global_db = client.Global
+        global_db          = client.Global
         profile_collection = global_db.backend_diagnostics_profile
-        fs = gridfs.GridFS(global_db)
+        fs                 = gridfs.GridFS(global_db)
 
+        # ── Parameter helper ──────────────────────────────────────────────────
         def get_parameter_from_core(core_test, device_id, test_code):
             core_parameters = core_test.get("parameters", {})
             params_list = []
@@ -1731,6 +1783,7 @@ def corporate_health_report(request):
                     return matching_params[0]
             return None
 
+        # ── Signature helper ──────────────────────────────────────────────────
         def get_employee_signature_data(emp_id):
             if not emp_id:
                 return None
@@ -1738,16 +1791,16 @@ def corporate_health_report(request):
                 profile = profile_collection.find_one({"employeeId": emp_id})
                 if not profile:
                     return None
-                employee_name = profile.get("employeeName", "")
-                designation = profile.get("designation", "")
+                employee_name     = profile.get("employeeName", "")
+                designation       = profile.get("designation", "")
                 signature_file_id = profile.get("signatureFileId")
-                signature_base64 = None
+                signature_base64  = None
                 if signature_file_id:
                     try:
                         if isinstance(signature_file_id, str):
                             signature_file_id = ObjectId(signature_file_id)
-                        signature_file = fs.get(signature_file_id)
-                        signature_bytes = signature_file.read()
+                        signature_file   = fs.get(signature_file_id)
+                        signature_bytes  = signature_file.read()
                         signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
                     except Exception as e:
                         print(f"Error fetching signature for employee {emp_id}: {str(e)}")
@@ -1768,22 +1821,36 @@ def corporate_health_report(request):
         if not franchise_patient:
             return JsonResponse({'error': 'Patient not found'}, status=404)
 
+        # ── Resolve patient gender for reference range selection ──────────────
+        # core_employeeregistration has a 'gender' field
+        patient_gender = (franchise_patient.get('gender') or '').strip()
+
+        # ── Gender-aware reference_range resolver ─────────────────────────────
+        def resolve_reference_range(meta, gender):
+            """
+            Pick reference_range from male/female fields based on patient gender.
+            Falls back to generic reference_range when gender-specific value absent.
+            """
+            gender_key = (gender or '').strip().lower()   # 'male', 'female', or ''
+            if gender_key == 'male' and meta.get('male'):
+                return meta['male']
+            if gender_key == 'female' and meta.get('female'):
+                return meta['female']
+            return meta.get('reference_range', '') or ''
+
         company_data = None
-        company_id = franchise_patient.get("company_id")
+        company_id   = franchise_patient.get("company_id")
         if company_id:
             company_data = franchise_company_collection.find_one({"company_id": company_id})
 
         franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
 
         franchise_investigation = franchise_investigation_collection.find_one({
-            "barcode": barcode,
-            "status": "approved"
+            "barcode": barcode, "status": "approved"
         })
 
-
         franchise_overall_approval = franchise_overall_approval_collection.find_one({
-            "barcode": barcode,
-            "status": "approved"
+            "barcode": barcode, "status": "approved"
         })
 
         test_values = TestValue.objects.filter(barcode=barcode)
@@ -1801,9 +1868,8 @@ def corporate_health_report(request):
             except (json.JSONDecodeError, AttributeError):
                 vitals_data = {}
 
-        # Investigation notes and file IDs
         investigation_file_ids = {}
-        investigation_notes = {}
+        investigation_notes    = {}
 
         if franchise_investigation:
             for file_field in ["ecg_file", "pft_file", "audiometric_file", "xrayfilm_file"]:
@@ -1812,17 +1878,16 @@ def corporate_health_report(request):
                     investigation_file_ids[file_field] = file_id
 
             for note_field, key in [
-                ("ecg_notes", "ecg_notes"),
-                ("pft_notes", "pft_notes"),
+                ("ecg_notes",        "ecg_notes"),
+                ("pft_notes",        "pft_notes"),
                 ("audiometry_notes", "audiometry_notes"),
-                ("xray_notes", "xray_notes"),
-                ("xray_report", "xray_report")
+                ("xray_notes",       "xray_notes"),
+                ("xray_report",      "xray_report"),
             ]:
                 note_value = franchise_investigation.get(note_field)
                 if note_value and note_value.strip():
                     investigation_notes[key] = note_value
 
-        # Medical history
         medical_history_data = {}
         if franchise_investigation:
             patient_history = franchise_investigation.get("patient_history")
@@ -1830,7 +1895,6 @@ def corporate_health_report(request):
                 if patient_history.lower() not in ["nil", "nil significant", "no previous history", "none"]:
                     medical_history_data["patient_history"] = patient_history
 
-        # Clinical examination
         clinical_examination_data = {}
         if franchise_investigation:
             for field in ["cardiovascular_system", "respiratory_system", "central_nervous_system",
@@ -1839,72 +1903,42 @@ def corporate_health_report(request):
                 if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
                     clinical_examination_data[field] = value
 
-            # Ophthalmology (Directly from CHCT001 in core_investigation)
         ophthalmology_data = None
-
         if franchise_investigation:
             chc_ophthalmology = franchise_investigation.get("CHCT001")
-
             if chc_ophthalmology:
                 ophthalmology_data = {}
-
-                # Distance Vision
                 distance = chc_ophthalmology.get("distance", {})
                 if distance:
-                    ophthalmology_data["distance"] = {
-                        "right": str(distance.get("right", "")),
-                        "left": str(distance.get("left", ""))
-                    }
-
-                # Near Vision
+                    ophthalmology_data["distance"] = {"right": str(distance.get("right", "")), "left": str(distance.get("left", ""))}
                 near_vision = chc_ophthalmology.get("nearVision", {})
                 if near_vision:
-                    ophthalmology_data["near_vision"] = {
-                        "right": str(near_vision.get("right", "")),
-                        "left": str(near_vision.get("left", ""))
-                    }
-
-                # Colour Vision
+                    ophthalmology_data["near_vision"] = {"right": str(near_vision.get("right", "")), "left": str(near_vision.get("left", ""))}
                 colour_vision = chc_ophthalmology.get("colourVision", {})
                 if colour_vision:
-                    ophthalmology_data["color_vision"] = {
-                        "right": str(colour_vision.get("right", "")),
-                        "left": str(colour_vision.get("left", ""))
-                    }
-
-                # Ocular Movement
+                    ophthalmology_data["color_vision"] = {"right": str(colour_vision.get("right", "")), "left": str(colour_vision.get("left", ""))}
                 ocular_movement = chc_ophthalmology.get("ocularmovement", {})
                 if ocular_movement:
-                    ophthalmology_data["ocularmovement"] = {
-                        "right": str(ocular_movement.get("right", "")),
-                        "left": str(ocular_movement.get("left", ""))
-                    }
-
-                # Complaints
+                    ophthalmology_data["ocularmovement"] = {"right": str(ocular_movement.get("right", "")), "left": str(ocular_movement.get("left", ""))}
                 complaints = chc_ophthalmology.get("complaints")
                 if complaints:
                     ophthalmology_data["complaints"] = complaints
-
-                # Remarks
                 remarks = chc_ophthalmology.get("remarks")
                 if remarks:
                     ophthalmology_data["remarks"] = remarks
-
                 if not ophthalmology_data:
                     ophthalmology_data = None
-        # All barcodes for patient
+
         barcodes = []
         try:
             all_barcodes = franchise_billing_collection.find(
-                {"employee_id": employee_id},
-                {"barcode": 1, "_id": 0}
+                {"employee_id": employee_id}, {"barcode": 1, "_id": 0}
             )
             barcodes = [bc.get("barcode") for bc in all_barcodes if bc.get("barcode")]
             barcodes = list(dict.fromkeys(barcodes))
         except Exception:
             barcodes = []
 
-        # Parse sample testdetails
         sample_testdetails = []
         if franchise_sample:
             try:
@@ -1913,14 +1947,14 @@ def corporate_health_report(request):
                 sample_testdetails = []
 
         patient_details = {
-            "patient_id": employee_id,
+            "patient_id":  employee_id,
             "patientname": franchise_patient.get("employee_name"),
-            "age": franchise_patient.get("age"),
-            "gender": franchise_patient.get("gender"),
-            "date": franchise_billing.get("created_date"),
-            "barcode": barcode,
-            "barcodes": barcodes,
-            "testdetails": []
+            "age":         franchise_patient.get("age"),
+            "gender":      franchise_patient.get("gender"),
+            "date":        franchise_billing.get("created_date"),
+            "barcode":     barcode,
+            "barcodes":    barcodes,
+            "testdetails": [],
         }
 
         if company_data and company_data.get("company_name"):
@@ -1953,7 +1987,7 @@ def corporate_health_report(request):
             remarks = franchise_overall_approval.get("remarks", "")
             if remarks and remarks.strip():
                 final_assessment["remarks"] = remarks
-                approved_date = franchise_overall_approval.get("approved_date", "")
+            approved_date = franchise_overall_approval.get("approved_date", "")
             if approved_date:
                 final_assessment["approved_date"] = approved_date
             if final_assessment:
@@ -1964,35 +1998,47 @@ def corporate_health_report(request):
         if test_values.exists():
             for test_value in test_values:
                 try:
-                    testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
+                    testvalue_details = (
+                        json.loads(test_value.testdetails)
+                        if isinstance(test_value.testdetails, str)
+                        else test_value.testdetails
+                    )
                     if not isinstance(testvalue_details, list):
                         continue
+
                     for test_detail in testvalue_details:
-                        if not test_detail.get("approve") == True:  # ← add this
+                        if test_detail.get("approve") is not True:
                             continue
-                        test_id = test_detail.get("test_id")
-                        testname = test_detail.get("testname")
+
+                        test_id   = test_detail.get("test_id")
+                        testname  = test_detail.get("testname")
                         device_id = test_detail.get("device_id", "N/A")
                         if not test_id:
                             continue
+
                         core_test = core_testdetails_collection.find_one({"test_id": test_id})
+
                         if core_test:
-                            testname = core_test.get("test_name", testname)
+                            testname      = core_test.get("test_name", testname)
                             specimen_type = core_test.get("specimen_type", "N/A")
-                            department = core_test.get("department", test_detail.get("department", ""))
+                            department    = core_test.get("department", test_detail.get("department", ""))
                         else:
                             specimen_type = test_detail.get("specimen_type", "")
-                            department = test_detail.get("department", "")
+                            department    = test_detail.get("department", "")
+
                         if not testname:
                             continue
+
                         approve_by = test_detail.get("approve_by", "")
                         if approve_by:
                             all_approvers.add(approve_by)
+
                         sample_status = None
                         for sample_test in sample_testdetails:
                             if sample_test.get("test_id") == test_id or sample_test.get("testname") == testname:
                                 sample_status = sample_test
                                 break
+
                         test_response = {"testname": testname}
                         if department:
                             test_response["department"] = department
@@ -2013,77 +2059,93 @@ def corporate_health_report(request):
                                 test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
                             if sample_status.get("received_time"):
                                 test_response["received_time"] = sample_status.get("received_time")
+
                         if test_detail.get("parameters"):
+                            # ── Parameterised test ────────────────────────────
                             processed_parameters = []
                             for param in test_detail.get("parameters", []):
-                                test_code = param.get("test_code")
-                                value = param.get("value", "")
+                                test_code     = param.get("test_code")
+                                value         = param.get("value", "")
                                 param_comment = param.get("comment", "")
-                                if core_test and test_code:
-                                    param_def = get_parameter_from_core(core_test, device_id, test_code)
-                                else:
-                                    param_def = None
+
+                                param_def = get_parameter_from_core(core_test, device_id, test_code) \
+                                    if core_test and test_code else None
+
                                 processed_param = {}
                                 if param_def:
-                                    processed_param["name"] = param_def.get("test_name", param.get("name", ""))
-                                    processed_param["value"] = value
-                                    processed_param["unit"] = param_def.get("unit", "")
-                                    processed_param["specimen_type"] = specimen_type
-                                    processed_param["reference_range"] = param_def.get("reference_range", "")
-                                    processed_param["method"] = param_def.get("method", "")
+                                    # Gender-resolved reference_range
+                                    ref_range = resolve_reference_range(param_def, patient_gender)
+
+                                    processed_param["name"]            = param_def.get("test_name", param.get("name", ""))
+                                    processed_param["value"]           = value
+                                    processed_param["unit"]            = param_def.get("unit", "")
+                                    processed_param["specimen_type"]   = specimen_type
+                                    processed_param["reference_range"] = ref_range   # gender-resolved
+                                    processed_param["method"]          = param_def.get("method", "")
                                     if param_def.get("sub_title"):
                                         processed_param["sub_title"] = param_def.get("sub_title")
                                     if param_comment:
                                         processed_param["comment"] = param_comment
                                 else:
+                                    # Fallback: no core definition found
                                     if param.get("name"):
-                                        processed_param["name"] = param.get("name")
+                                        processed_param["name"]            = param.get("name")
                                     if value:
-                                        processed_param["value"] = value
+                                        processed_param["value"]           = value
                                     if param.get("unit"):
-                                        processed_param["unit"] = param.get("unit")
+                                        processed_param["unit"]            = param.get("unit")
                                     if param.get("specimen_type"):
-                                        processed_param["specimen_type"] = param.get("specimen_type")
+                                        processed_param["specimen_type"]   = param.get("specimen_type")
                                     if param.get("reference_range"):
                                         processed_param["reference_range"] = param.get("reference_range")
                                     if param.get("method"):
-                                        processed_param["method"] = param.get("method")
+                                        processed_param["method"]          = param.get("method")
                                     if param.get("sub_title"):
-                                        processed_param["sub_title"] = param.get("sub_title")
+                                        processed_param["sub_title"]       = param.get("sub_title")
                                     if param_comment:
-                                        processed_param["comment"] = param_comment
+                                        processed_param["comment"]         = param_comment
+
                                 if processed_param:
                                     processed_parameters.append(processed_param)
+
                             if processed_parameters:
                                 test_response["parameters"] = processed_parameters
+
                         else:
+                            # ── Single-value test ─────────────────────────────
                             if core_test:
+                                # Gender-resolved reference_range
+                                ref_range = resolve_reference_range(core_test, patient_gender)
+
                                 if core_test.get("method"):
-                                    test_response["method"] = core_test.get("method")
+                                    test_response["method"]          = core_test.get("method")
                                 if specimen_type:
-                                    test_response["specimen_type"] = specimen_type
+                                    test_response["specimen_type"]   = specimen_type
                                 if test_detail.get("value"):
-                                    test_response["value"] = test_detail.get("value")
+                                    test_response["value"]           = test_detail.get("value")
                                 if core_test.get("unit"):
-                                    test_response["unit"] = core_test.get("unit")
-                                if core_test.get("reference_range"):
-                                    test_response["reference_range"] = core_test.get("reference_range")
+                                    test_response["unit"]            = core_test.get("unit")
+                                if ref_range:
+                                    test_response["reference_range"] = ref_range   # gender-resolved
                                 if test_detail.get("sub_title"):
-                                    test_response["sub_title"] = test_detail.get("sub_title")
+                                    test_response["sub_title"]       = test_detail.get("sub_title")
                             else:
+                                # No core_test — use raw values from test_detail
                                 if test_detail.get("method"):
-                                    test_response["method"] = test_detail.get("method")
+                                    test_response["method"]          = test_detail.get("method")
                                 if test_detail.get("specimen_type"):
-                                    test_response["specimen_type"] = test_detail.get("specimen_type")
+                                    test_response["specimen_type"]   = test_detail.get("specimen_type")
                                 if test_detail.get("value"):
-                                    test_response["value"] = test_detail.get("value")
+                                    test_response["value"]           = test_detail.get("value")
                                 if test_detail.get("unit"):
-                                    test_response["unit"] = test_detail.get("unit")
+                                    test_response["unit"]            = test_detail.get("unit")
                                 if test_detail.get("reference_range"):
                                     test_response["reference_range"] = test_detail.get("reference_range")
                                 if test_detail.get("sub_title"):
-                                    test_response["sub_title"] = test_detail.get("sub_title")
+                                    test_response["sub_title"]       = test_detail.get("sub_title")
+
                         patient_details["testdetails"].append(test_response)
+
                 except (json.JSONDecodeError, AttributeError) as e:
                     print(f"Error processing test: {str(e)}")
                     continue
@@ -2100,7 +2162,6 @@ def corporate_health_report(request):
 
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
-
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
@@ -2552,22 +2613,21 @@ def get_batch_corporate_health_reports(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
 
-        franchise_billing_collection = db.core_billing
-        franchise_sample_collection = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
-        franchise_investigation_collection = db.core_investigation
-        # NOTE: franchise_ophthalmology_collection removed —
-        #       ophthalmology now comes from CHCT001 inside core_investigation
+        franchise_billing_collection          = db.core_billing
+        franchise_sample_collection           = db.core_sample
+        franchise_patient_collection          = db.core_employeeregistration
+        franchise_investigation_collection    = db.core_investigation
         franchise_overall_approval_collection = db.overallApproval
-        franchise_company_collection = db.core_company
+        franchise_company_collection          = db.core_company
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
 
-        global_db = client.Global
+        global_db          = client.Global
         profile_collection = global_db.backend_diagnostics_profile
-        fs = gridfs.GridFS(global_db)
+        fs                 = gridfs.GridFS(global_db)
 
+        # ── Parameter helper ──────────────────────────────────────────────────
         def get_parameter_from_core(core_test, device_id, test_code):
             core_parameters = core_test.get("parameters", {})
             params_list = []
@@ -2588,6 +2648,7 @@ def get_batch_corporate_health_reports(request):
                     return matching_params[0]
             return None
 
+        # ── Signature helper ──────────────────────────────────────────────────
         def get_employee_signature_data(emp_id):
             if not emp_id:
                 return None
@@ -2595,16 +2656,16 @@ def get_batch_corporate_health_reports(request):
                 profile = profile_collection.find_one({"employeeId": emp_id})
                 if not profile:
                     return None
-                employee_name = profile.get("employeeName", "")
-                designation = profile.get("designation", "")
+                employee_name     = profile.get("employeeName", "")
+                designation       = profile.get("designation", "")
                 signature_file_id = profile.get("signatureFileId")
-                signature_base64 = None
+                signature_base64  = None
                 if signature_file_id:
                     try:
                         if isinstance(signature_file_id, str):
                             signature_file_id = ObjectId(signature_file_id)
-                        signature_file = fs.get(signature_file_id)
-                        signature_bytes = signature_file.read()
+                        signature_file   = fs.get(signature_file_id)
+                        signature_bytes  = signature_file.read()
                         signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
                     except Exception as e:
                         print(f"Error fetching signature for employee {emp_id}: {str(e)}")
@@ -2612,6 +2673,20 @@ def get_batch_corporate_health_reports(request):
             except Exception as e:
                 print(f"Error fetching employee data for {emp_id}: {str(e)}")
                 return None
+
+        # ── Gender-aware reference_range resolver ─────────────────────────────
+        # Defined once at batch level — reused for every barcode in the loop.
+        def resolve_reference_range(meta, gender):
+            """
+            Pick reference_range from male/female fields based on patient gender.
+            Falls back to generic reference_range when gender-specific value absent.
+            """
+            gender_key = (gender or '').strip().lower()   # 'male', 'female', or ''
+            if gender_key == 'male' and meta.get('male'):
+                return meta['male']
+            if gender_key == 'female' and meta.get('female'):
+                return meta['female']
+            return meta.get('reference_range', '') or ''
 
         results = {}
 
@@ -2632,8 +2707,11 @@ def get_batch_corporate_health_reports(request):
                     results[barcode] = {'error': 'Patient not found'}
                     continue
 
+                # Resolve patient gender for this barcode's patient
+                patient_gender = (franchise_patient.get('gender') or '').strip()
+
                 company_data = None
-                company_id = franchise_patient.get("company_id")
+                company_id   = franchise_patient.get("company_id")
                 if company_id:
                     company_data = franchise_company_collection.find_one({"company_id": company_id})
 
@@ -2662,15 +2740,15 @@ def get_batch_corporate_health_reports(request):
                     except (json.JSONDecodeError, AttributeError):
                         vitals_data = {}
 
-                # Investigation notes (no file IDs for batch/simple PDF)
+                # Investigation notes
                 investigation_notes = {}
                 if franchise_investigation:
                     for note_field, key in [
-                        ("ecg_notes", "ecg_notes"),
-                        ("pft_notes", "pft_notes"),
+                        ("ecg_notes",        "ecg_notes"),
+                        ("pft_notes",        "pft_notes"),
                         ("audiometry_notes", "audiometry_notes"),
-                        ("xray_notes", "xray_notes"),
-                        ("xray_report", "xray_report")
+                        ("xray_notes",       "xray_notes"),
+                        ("xray_report",      "xray_report"),
                     ]:
                         note_value = franchise_investigation.get(note_field)
                         if note_value and note_value.strip():
@@ -2693,51 +2771,30 @@ def get_batch_corporate_health_reports(request):
                         if value and value.strip() and value.lower() not in ["normal", "nil", "nil significant"]:
                             clinical_examination_data[field] = value
 
-                # ── Ophthalmology — read from CHCT001 in core_investigation ──────────
-                # This is the same source as corporate_health_report, ensuring
-                # single-print and bulk-download produce identical ophthalmology output.
+                # Ophthalmology — read from CHCT001 in core_investigation
                 ophthalmology_data = None
                 if franchise_investigation:
                     chc_ophthalmology = franchise_investigation.get("CHCT001")
                     if chc_ophthalmology:
                         ophthalmology_data = {}
-
                         distance = chc_ophthalmology.get("distance", {})
                         if distance:
-                            ophthalmology_data["distance"] = {
-                                "right": str(distance.get("right", "")),
-                                "left": str(distance.get("left", ""))
-                            }
-
+                            ophthalmology_data["distance"] = {"right": str(distance.get("right", "")), "left": str(distance.get("left", ""))}
                         near_vision = chc_ophthalmology.get("nearVision", {})
                         if near_vision:
-                            ophthalmology_data["near_vision"] = {
-                                "right": str(near_vision.get("right", "")),
-                                "left": str(near_vision.get("left", ""))
-                            }
-
+                            ophthalmology_data["near_vision"] = {"right": str(near_vision.get("right", "")), "left": str(near_vision.get("left", ""))}
                         colour_vision = chc_ophthalmology.get("colourVision", {})
                         if colour_vision:
-                            ophthalmology_data["color_vision"] = {
-                                "right": str(colour_vision.get("right", "")),
-                                "left": str(colour_vision.get("left", ""))
-                            }
-
+                            ophthalmology_data["color_vision"] = {"right": str(colour_vision.get("right", "")), "left": str(colour_vision.get("left", ""))}
                         ocular_movement = chc_ophthalmology.get("ocularmovement", {})
                         if ocular_movement:
-                            ophthalmology_data["ocularmovement"] = {
-                                "right": str(ocular_movement.get("right", "")),
-                                "left": str(ocular_movement.get("left", ""))
-                            }
-
+                            ophthalmology_data["ocularmovement"] = {"right": str(ocular_movement.get("right", "")), "left": str(ocular_movement.get("left", ""))}
                         complaints = chc_ophthalmology.get("complaints")
                         if complaints:
                             ophthalmology_data["complaints"] = complaints
-
                         remarks = chc_ophthalmology.get("remarks")
                         if remarks:
                             ophthalmology_data["remarks"] = remarks
-
                         if not ophthalmology_data:
                             ophthalmology_data = None
 
@@ -2750,13 +2807,13 @@ def get_batch_corporate_health_reports(request):
                         sample_testdetails = []
 
                 patient_details = {
-                    "patient_id": employee_id,
+                    "patient_id":  employee_id,
                     "patientname": franchise_patient.get("employee_name"),
-                    "age": franchise_patient.get("age"),
-                    "gender": franchise_patient.get("gender"),
-                    "date": franchise_billing.get("created_date"),
-                    "barcode": barcode,
-                    "testdetails": []
+                    "age":         franchise_patient.get("age"),
+                    "gender":      franchise_patient.get("gender"),
+                    "date":        franchise_billing.get("created_date"),
+                    "barcode":     barcode,
+                    "testdetails": [],
                 }
 
                 if company_data and company_data.get("company_name"):
@@ -2798,35 +2855,47 @@ def get_batch_corporate_health_reports(request):
                 if test_values.exists():
                     for test_value in test_values:
                         try:
-                            testvalue_details = json.loads(test_value.testdetails) if isinstance(test_value.testdetails, str) else test_value.testdetails
+                            testvalue_details = (
+                                json.loads(test_value.testdetails)
+                                if isinstance(test_value.testdetails, str)
+                                else test_value.testdetails
+                            )
                             if not isinstance(testvalue_details, list):
                                 continue
+
                             for test_detail in testvalue_details:
-                                if not test_detail.get("approve") == True:  # ← add this
+                                if test_detail.get("approve") is not True:
                                     continue
-                                test_id = test_detail.get("test_id")
-                                testname = test_detail.get("testname")
+
+                                test_id   = test_detail.get("test_id")
+                                testname  = test_detail.get("testname")
                                 device_id = test_detail.get("device_id", "N/A")
                                 if not test_id:
                                     continue
+
                                 core_test = core_testdetails_collection.find_one({"test_id": test_id})
+
                                 if core_test:
-                                    testname = core_test.get("test_name", testname)
+                                    testname      = core_test.get("test_name", testname)
                                     specimen_type = core_test.get("specimen_type", "N/A")
-                                    department = core_test.get("department", test_detail.get("department", ""))
+                                    department    = core_test.get("department", test_detail.get("department", ""))
                                 else:
                                     specimen_type = test_detail.get("specimen_type", "")
-                                    department = test_detail.get("department", "")
+                                    department    = test_detail.get("department", "")
+
                                 if not testname:
                                     continue
+
                                 approve_by = test_detail.get("approve_by", "")
                                 if approve_by:
                                     all_approvers.add(approve_by)
+
                                 sample_status = None
                                 for sample_test in sample_testdetails:
                                     if sample_test.get("test_id") == test_id or sample_test.get("testname") == testname:
                                         sample_status = sample_test
                                         break
+
                                 test_response = {"testname": testname}
                                 if department:
                                     test_response["department"] = department
@@ -2847,77 +2916,93 @@ def get_batch_corporate_health_reports(request):
                                         test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
                                     if sample_status.get("received_time"):
                                         test_response["received_time"] = sample_status.get("received_time")
+
                                 if test_detail.get("parameters"):
+                                    # ── Parameterised test ────────────────────
                                     processed_parameters = []
                                     for param in test_detail.get("parameters", []):
-                                        test_code = param.get("test_code")
-                                        value = param.get("value", "")
+                                        test_code     = param.get("test_code")
+                                        value         = param.get("value", "")
                                         param_comment = param.get("comment", "")
-                                        if core_test and test_code:
-                                            param_def = get_parameter_from_core(core_test, device_id, test_code)
-                                        else:
-                                            param_def = None
+
+                                        param_def = get_parameter_from_core(core_test, device_id, test_code) \
+                                            if core_test and test_code else None
+
                                         processed_param = {}
                                         if param_def:
-                                            processed_param["name"] = param_def.get("test_name", param.get("name", ""))
-                                            processed_param["value"] = value
-                                            processed_param["unit"] = param_def.get("unit", "")
-                                            processed_param["specimen_type"] = specimen_type
-                                            processed_param["reference_range"] = param_def.get("reference_range", "")
-                                            processed_param["method"] = param_def.get("method", "")
+                                            # Gender-resolved reference_range
+                                            ref_range = resolve_reference_range(param_def, patient_gender)
+
+                                            processed_param["name"]            = param_def.get("test_name", param.get("name", ""))
+                                            processed_param["value"]           = value
+                                            processed_param["unit"]            = param_def.get("unit", "")
+                                            processed_param["specimen_type"]   = specimen_type
+                                            processed_param["reference_range"] = ref_range   # gender-resolved
+                                            processed_param["method"]          = param_def.get("method", "")
                                             if param_def.get("sub_title"):
                                                 processed_param["sub_title"] = param_def.get("sub_title")
                                             if param_comment:
                                                 processed_param["comment"] = param_comment
                                         else:
+                                            # Fallback: no core definition found
                                             if param.get("name"):
-                                                processed_param["name"] = param.get("name")
+                                                processed_param["name"]            = param.get("name")
                                             if value:
-                                                processed_param["value"] = value
+                                                processed_param["value"]           = value
                                             if param.get("unit"):
-                                                processed_param["unit"] = param.get("unit")
+                                                processed_param["unit"]            = param.get("unit")
                                             if param.get("specimen_type"):
-                                                processed_param["specimen_type"] = param.get("specimen_type")
+                                                processed_param["specimen_type"]   = param.get("specimen_type")
                                             if param.get("reference_range"):
                                                 processed_param["reference_range"] = param.get("reference_range")
                                             if param.get("method"):
-                                                processed_param["method"] = param.get("method")
+                                                processed_param["method"]          = param.get("method")
                                             if param.get("sub_title"):
-                                                processed_param["sub_title"] = param.get("sub_title")
+                                                processed_param["sub_title"]       = param.get("sub_title")
                                             if param_comment:
-                                                processed_param["comment"] = param_comment
+                                                processed_param["comment"]         = param_comment
+
                                         if processed_param:
                                             processed_parameters.append(processed_param)
+
                                     if processed_parameters:
                                         test_response["parameters"] = processed_parameters
+
                                 else:
+                                    # ── Single-value test ─────────────────────
                                     if core_test:
+                                        # Gender-resolved reference_range
+                                        ref_range = resolve_reference_range(core_test, patient_gender)
+
                                         if core_test.get("method"):
-                                            test_response["method"] = core_test.get("method")
+                                            test_response["method"]          = core_test.get("method")
                                         if specimen_type:
-                                            test_response["specimen_type"] = specimen_type
+                                            test_response["specimen_type"]   = specimen_type
                                         if test_detail.get("value"):
-                                            test_response["value"] = test_detail.get("value")
+                                            test_response["value"]           = test_detail.get("value")
                                         if core_test.get("unit"):
-                                            test_response["unit"] = core_test.get("unit")
-                                        if core_test.get("reference_range"):
-                                            test_response["reference_range"] = core_test.get("reference_range")
+                                            test_response["unit"]            = core_test.get("unit")
+                                        if ref_range:
+                                            test_response["reference_range"] = ref_range   # gender-resolved
                                         if test_detail.get("sub_title"):
-                                            test_response["sub_title"] = test_detail.get("sub_title")
+                                            test_response["sub_title"]       = test_detail.get("sub_title")
                                     else:
+                                        # No core_test — use raw values from test_detail
                                         if test_detail.get("method"):
-                                            test_response["method"] = test_detail.get("method")
+                                            test_response["method"]          = test_detail.get("method")
                                         if test_detail.get("specimen_type"):
-                                            test_response["specimen_type"] = test_detail.get("specimen_type")
+                                            test_response["specimen_type"]   = test_detail.get("specimen_type")
                                         if test_detail.get("value"):
-                                            test_response["value"] = test_detail.get("value")
+                                            test_response["value"]           = test_detail.get("value")
                                         if test_detail.get("unit"):
-                                            test_response["unit"] = test_detail.get("unit")
+                                            test_response["unit"]            = test_detail.get("unit")
                                         if test_detail.get("reference_range"):
                                             test_response["reference_range"] = test_detail.get("reference_range")
                                         if test_detail.get("sub_title"):
-                                            test_response["sub_title"] = test_detail.get("sub_title")
+                                            test_response["sub_title"]       = test_detail.get("sub_title")
+
                                 patient_details["testdetails"].append(test_response)
+
                         except (json.JSONDecodeError, AttributeError) as e:
                             print(f"Error processing test: {str(e)}")
                             continue
@@ -2930,7 +3015,7 @@ def get_batch_corporate_health_reports(request):
 
                 results[barcode] = {
                     "patient_data": patient_details,
-                    "signatures": signatures_data
+                    "signatures":   signatures_data,
                 }
 
             except Exception as e:
@@ -2941,14 +3026,15 @@ def get_batch_corporate_health_reports(request):
         client.close()
 
         return JsonResponse({
-            'success': True,
-            'results': results,
-            'total': len(barcodes),
-            'processed': len(results)
+            'success':   True,
+            'results':   results,
+            'total':     len(barcodes),
+            'processed': len(results),
         })
 
     except Exception as e:
         print(f"Batch processing error: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
+    
+    
