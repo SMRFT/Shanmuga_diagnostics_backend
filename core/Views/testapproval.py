@@ -32,6 +32,10 @@ def normalize_testname(name):
     normalized = normalized.replace('&', 'and').replace('/', ' ')
     return normalized
 
+
+@api_view(["GET"])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def get_test_values(request):
     client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
     db = client.franchise
@@ -41,11 +45,11 @@ def get_test_values(request):
     corp = client.Corporatehealthcheckup
     billing_collection = corp.core_billing
     patient_collection = corp.core_employeeregistration
-    
+
     # BarcodeTestDetails collection
     diagnostics = client.Diagnostics
     barcode_test_col = diagnostics.core_barcodetestdetails
-    # NEW: core_testdetails collection for test metadata
+    # core_testdetails collection for test metadata
     test_details_col = diagnostics.core_testdetails
 
     from_date = request.GET.get('from_date')
@@ -54,7 +58,7 @@ def get_test_values(request):
     testname_filter = request.GET.get('testname')
     emergency_filter = request.GET.get('emergency')
 
-    # Date filters - apply early
+    # Date filters
     patients = TestValue.objects.all()
     if from_date and to_date:
         try:
@@ -66,91 +70,122 @@ def get_test_values(request):
 
     patients = patients.order_by('-date')
     patients_list = list(patients)
-    
+
     if not patients_list:
         return JsonResponse([], safe=False)
 
     # Extract all barcodes upfront
     barcodes = [str(p.barcode).zfill(0) for p in patients_list]
-    
+
     # ============================================
     # BULK FETCH ALL DATA SOURCES AT ONCE
     # ============================================
-    
-    # 1. Fetch all BarcodeTestDetails with is_emergency and patient_history
+
+    # 1. Fetch all BarcodeTestDetails
+    #    Fields: barcode, patient_id, is_emergency, patient_history,
+    #            patientname, age, gender (core_barcodetestdetails has these)
     barcode_details_docs = list(barcode_test_col.find(
         {"barcode": {"$in": barcodes}},
-        {"barcode": 1, "patient_id": 1, "is_emergency": 1, "patient_history": 1, "_id": 0}
+        {
+            "barcode": 1,
+            "patient_id": 1,
+            "is_emergency": 1,
+            "patient_history": 1,
+            "patientname": 1,
+            "age": 1,
+            "gender": 1,       # <-- gender from core_barcodetestdetails
+            "_id": 0
+        }
     ))
     barcode_details_dict = {
         doc['barcode']: {
-            'patient_id': doc.get('patient_id'),
-            'is_emergency': doc.get('is_emergency', False),
-            'patient_history': doc.get('patient_history', '')
+            'patient_id':     doc.get('patient_id'),
+            'is_emergency':   doc.get('is_emergency', False),
+            'patient_history': doc.get('patient_history', ''),
+            'patientname':    doc.get('patientname'),
+            'age':            doc.get('age'),
+            'gender':         doc.get('gender'),     # gender from barcode doc
         }
         for doc in barcode_details_docs
     }
-    
+
     # Get all patient IDs from barcode details
     barcode_patient_ids = [info['patient_id'] for info in barcode_details_dict.values() if info['patient_id']]
-    
-    # Fetch all Patient records
+
+    # Fetch all Patient records (Django ORM)
     patients_dict = {
         p.patient_id: {'name': p.patientname, 'age': p.age}
         for p in Patient.objects.filter(patient_id__in=barcode_patient_ids).only('patient_id', 'patientname', 'age')
     }
-    
-    # 2. NEW: Fetch patient details from Hmsbarcode (PRIMARY SOURCE)
+
+    # 2. Fetch patient details from Hmsbarcode (PRIMARY SOURCE)
+    #    Hmsbarcode has: patient_id, patientname, age, age_type, billnumber,
+    #                    gender, phone, ref_doctor, testdetails
     hms_barcodes_dict = {
         b.barcode: {
-            'patient_id': b.patient_id,
-            'name': b.patientname,
-            'age': b.age,
-            'billnumber': b.billnumber,
-            'gender': b.gender,
-            'ref_doctor': b.ref_doctor,
-            'testdetails': b.testdetails
+            'patient_id':  b.patient_id,
+            'name':        b.patientname,
+            'age':         b.age,
+            'age_type':    b.age_type,          # <-- age_type
+            'billnumber':  b.billnumber,
+            'gender':      b.gender,            # <-- gender
+            'phone':       b.phone,             # <-- phone
+            'ref_doctor':  b.ref_doctor,        # <-- ref_doctor
+            'testdetails': b.testdetails,
         }
         for b in Hmsbarcode.objects.filter(barcode__in=barcodes).only(
-            'barcode', 'patient_id', 'patientname', 'age', 'billnumber', 'gender', 'ref_doctor', 'testdetails'
+            'barcode', 'patient_id', 'patientname', 'age', 'age_type',
+            'billnumber', 'gender', 'phone', 'ref_doctor', 'testdetails'
         )
     }
-    
-    # 3. MongoDB franchise - bulk fetch (fallback)
+
+    # 3. MongoDB franchise_patient - bulk fetch (fallback)
+    #    franchise_patient has: patient_id, patientname, age, gender, phoneNumber
     mongo_billing_docs = list(billing_col.find(
         {"barcode": {"$in": barcodes}},
         {"barcode": 1, "patient_id": 1, "_id": 0}
     ))
     mongo_billing_dict = {doc['barcode']: doc.get('patient_id') for doc in mongo_billing_docs}
-    
+
     mongo_patient_ids = list(mongo_billing_dict.values())
     mongo_patient_docs = list(patient_col.find(
         {"patient_id": {"$in": mongo_patient_ids}},
-        {"patient_id": 1, "patientname": 1, "age": 1, "_id": 0}
+        {"patient_id": 1, "patientname": 1, "age": 1, "gender": 1, "phoneNumber": 1, "_id": 0}
     ))
     mongo_patient_dict = {
-        doc['patient_id']: {'name': doc.get('patientname', 'N/A'), 'age': doc.get('age', 'N/A')}
+        doc['patient_id']: {
+            'name':   doc.get('patientname', 'N/A'),
+            'age':    doc.get('age', 'N/A'),
+            'gender': doc.get('gender'),            # <-- gender from franchise_patient
+            'phone':  doc.get('phoneNumber'),       # <-- phoneNumber from franchise_patient
+        }
         for doc in mongo_patient_docs
     }
-    
-    # 4. Corporate - bulk fetch (fallback)
+
+    # 4. Corporate core_employeeregistration - bulk fetch (fallback)
+    #    core_employeeregistration has: employee_id, employee_name, age, gender, mobile
     corp_billing_docs = list(billing_collection.find(
         {"barcode": {"$in": barcodes}},
         {"barcode": 1, "employee_id": 1, "_id": 0}
     ))
     corp_billing_dict = {doc['barcode']: doc.get('employee_id') for doc in corp_billing_docs}
-    
+
     corp_employee_ids = list(corp_billing_dict.values())
     corp_employee_docs = list(patient_collection.find(
         {"employee_id": {"$in": corp_employee_ids}},
-        {"employee_id": 1, "employee_name": 1, "age": 1, "_id": 0}
+        {"employee_id": 1, "employee_name": 1, "age": 1, "gender": 1, "mobile": 1, "_id": 0}
     ))
     corp_employee_dict = {
-        doc['employee_id']: {'name': doc.get('employee_name', 'N/A'), 'age': doc.get('age', 'N/A')}
+        doc['employee_id']: {
+            'name':   doc.get('employee_name', 'N/A'),
+            'age':    doc.get('age', 'N/A'),
+            'gender': doc.get('gender'),            # <-- gender from corp
+            'phone':  doc.get('mobile'),            # <-- mobile from corp
+        }
         for doc in corp_employee_docs
     }
-    
-    # NEW: Collect all unique test_ids from all patients
+
+    # Collect all unique test_ids
     all_test_ids = set()
     for patient in patients_list:
         try:
@@ -160,17 +195,17 @@ def get_test_values(request):
                     all_test_ids.add(test['test_id'])
         except (json.JSONDecodeError, TypeError):
             continue
-    
-    # NEW: Bulk fetch test details from MongoDB core_testdetails
+
+    # Bulk fetch test details from MongoDB core_testdetails
     test_metadata_docs = list(test_details_col.find(
         {"test_id": {"$in": list(all_test_ids)}},
         {
-            "test_id": 1, 
-            "test_name": 1, 
-            "specimen_type": 1, 
+            "test_id": 1,
+            "test_name": 1,
+            "specimen_type": 1,
             "collection_container": 1,
-            "department": 1, 
-            "device_id": 1, 
+            "department": 1,
+            "device_id": 1,
             "parameters": 1,
             "unit": 1,
             "method": 1,
@@ -178,260 +213,265 @@ def get_test_values(request):
             "_id": 0
         }
     ))
-    
-    # Create lookup dictionary: test_id -> test metadata
+
     test_metadata_dict = {doc['test_id']: doc for doc in test_metadata_docs}
-    
-    # Helper function to get parameter details from test metadata
-    def get_parameter_details(test_id, test_code, device_id=None, param_index=None):
-        """Get parameter details from MongoDB test metadata by test_code and index"""
+
+    def get_parameter_details(test_id, test_code, device_id=None, param_index=None, gender=None):
         test_meta = test_metadata_dict.get(test_id)
         if not test_meta:
             return None
-        
-        # Get parameters - it can be either a dict or a list
+
         params_data = test_meta.get('parameters', [])
-        
-        # Case 1: parameters is a dictionary with device_id keys
+
         if isinstance(params_data, dict):
-            # If device_id is provided and exists in parameters, use it
             if device_id and device_id in params_data:
                 params_list = params_data[device_id]
             else:
-                # Get first device's parameters
                 device_ids = test_meta.get('device_id', [])
                 if device_ids and len(device_ids) > 0:
                     first_device = device_ids[0]
                     params_list = params_data.get(first_device, [])
                 else:
-                    # No device_id found, try to get first value from dict
                     params_list = next(iter(params_data.values())) if params_data else []
-        
-        # Case 2: parameters is a list (current case for PT test)
         elif isinstance(params_data, list):
             params_list = params_data
-        
         else:
             return None
-        
-        # Ensure params_list is actually a list
+
         if not isinstance(params_list, list):
             params_list = []
-        
-        # If param_index is provided, use it directly (faster and more accurate)
+
+        def resolve_reference_range(param, gender):
+            """
+            Pick reference_range based on gender.
+            Parameters may store gender-specific ranges as 'male' / 'female' fields.
+            Falls back to the generic 'reference_range' field if gender-specific is absent.
+            """
+            gender_key = (gender or '').strip().lower()  # 'male', 'female', or ''
+            if gender_key == 'male' and param.get('male'):
+                return param['male']
+            if gender_key == 'female' and param.get('female'):
+                return param['female']
+            # Fallback: generic reference_range field (older / non-gendered parameters)
+            return param.get('reference_range') or ''
+
         if param_index is not None and 0 <= param_index < len(params_list):
             param = params_list[param_index]
             return {
                 'parameter_name': param.get('test_name'),
-                'unit': param.get('unit'),
-                'reference_range': param.get('reference_range'),
-                'method': param.get('method'),
-                'department': param.get('department') or test_meta.get('department'),
-                'sub_title': param.get('sub_title', ''),
-                'value_option': param.get('value_option', [])
+                'unit':            param.get('unit'),
+                'reference_range': resolve_reference_range(param, gender),
+                'method':          param.get('method'),
+                'department':      param.get('department') or test_meta.get('department'),
+                'sub_title':       param.get('sub_title', ''),
+                'value_option':    param.get('value_option', [])
             }
-        
-        # Fallback: Find matching parameter by test_code (may not be unique!)
+
         matching_params = [p for p in params_list if isinstance(p, dict) and p.get('test_code') == test_code]
-        
         if matching_params:
-            # If multiple params have same test_code, return first one
-            # (This is a limitation - ideally use param_index)
             param = matching_params[0]
             return {
                 'parameter_name': param.get('test_name'),
-                'unit': param.get('unit'),
-                'reference_range': param.get('reference_range'),
-                'method': param.get('method'),
-                'department': param.get('department') or test_meta.get('department'),
-                'sub_title': param.get('sub_title', ''),
-                'value_option': param.get('value_option', [])
+                'unit':            param.get('unit'),
+                'reference_range': resolve_reference_range(param, gender),
+                'method':          param.get('method'),
+                'department':      param.get('department') or test_meta.get('department'),
+                'sub_title':       param.get('sub_title', ''),
+                'value_option':    param.get('value_option', [])
             }
-        
+
         return None
-    
+
     # ============================================
-    # PROCESS PATIENTS USING PRE-FETCHED DATA
+    # PROCESS PATIENTS
     # ============================================
-    
+
     filter_normalized = None
     if testname_filter and testname_filter != 'undefined':
         testname_filter = unquote_plus(testname_filter)
         filter_normalized = normalize_testname(testname_filter)
-    
+
     patient_data = []
-    
+
     for patient in patients_list:
         barcode_val = str(patient.barcode).zfill(0)
-        
+
         try:
             test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails
         except (json.JSONDecodeError, TypeError):
             test_details = []
-        
-        # Initialize variables
-        patient_name, patient_age, current_patient_id = "N/A", "N/A", None
-        is_emergency = False
-        patient_history = ""
-        
-        # PRIORITY 1: Get from Hmsbarcode (PRIMARY SOURCE)
+
+        # Initialize all fields
+        patient_name       = "N/A"
+        patient_age        = "N/A"
+        current_patient_id = None
+        is_emergency       = False
+        patient_history    = ""
+        age_type           = ""
+        gender             = ""
+        phone              = ""
+        ref_doctor         = ""
+
+        # ── PRIORITY 1: Hmsbarcode (richest source — has age_type, phone, ref_doctor, gender) ──
         if barcode_val in hms_barcodes_dict:
-            hms_info = hms_barcodes_dict[barcode_val]
+            hms_info           = hms_barcodes_dict[barcode_val]
             current_patient_id = hms_info['patient_id']
-            patient_name = hms_info['name']
-            patient_age = hms_info['age']
-        
-        # PRIORITY 2: BarcodeTestDetails lookup (includes emergency status and history)
+            patient_name       = hms_info['name']
+            patient_age        = hms_info['age']
+            age_type           = hms_info.get('age_type', '')
+            gender             = hms_info.get('gender', '')
+            phone              = hms_info.get('phone', '')
+            ref_doctor         = hms_info.get('ref_doctor', '')
+
+        # ── PRIORITY 2: core_barcodetestdetails (has is_emergency, patient_history, gender fallback) ──
         if barcode_val in barcode_details_dict:
-            barcode_info = barcode_details_dict[barcode_val]
+            barcode_info    = barcode_details_dict[barcode_val]
+            is_emergency    = barcode_info['is_emergency']
+            patient_history = barcode_info['patient_history']
+
             if not current_patient_id:
                 current_patient_id = barcode_info['patient_id']
-            is_emergency = barcode_info['is_emergency']
-            patient_history = barcode_info['patient_history']
-            
-            if current_patient_id in patients_dict and patient_name == "N/A":
+
+            # Fill patient name/age from Django ORM Patient model if not set yet
+            if patient_name == "N/A" and current_patient_id in patients_dict:
                 patient_info = patients_dict[current_patient_id]
                 patient_name = patient_info['name']
-                patient_age = patient_info['age']
-        
-        # PRIORITY 3: MongoDB franchise lookup (fallback)
+                patient_age  = patient_info['age']
+
+            # gender fallback from barcode doc
+            if not gender and barcode_info.get('gender'):
+                gender = barcode_info['gender']
+
+        # ── PRIORITY 3: franchise_patient (fallback — has gender, phoneNumber) ──
         if not current_patient_id and barcode_val in mongo_billing_dict:
             current_patient_id = mongo_billing_dict[barcode_val]
             if current_patient_id in mongo_patient_dict:
                 patient_info = mongo_patient_dict[current_patient_id]
-                patient_name = patient_info['name']
-                patient_age = patient_info['age']
-        
-        # PRIORITY 4: Corporate lookup (fallback)
+                if patient_name == "N/A":
+                    patient_name = patient_info['name']
+                    patient_age  = patient_info['age']
+                if not gender and patient_info.get('gender'):
+                    gender = patient_info['gender']
+                if not phone and patient_info.get('phone'):
+                    phone = patient_info['phone']
+
+        # ── PRIORITY 4: core_employeeregistration (fallback — has gender, mobile) ──
         if not current_patient_id and barcode_val in corp_billing_dict:
             current_patient_id = corp_billing_dict[barcode_val]
             if current_patient_id in corp_employee_dict:
                 corp_info = corp_employee_dict[current_patient_id]
-                patient_name = corp_info['name']
-                patient_age = corp_info['age']
-        
-        # Final fallback
+                if patient_name == "N/A":
+                    patient_name = corp_info['name']
+                    patient_age  = corp_info['age']
+                if not gender and corp_info.get('gender'):
+                    gender = corp_info['gender']
+                if not phone and corp_info.get('phone'):
+                    phone = corp_info['phone']
+
+        # Final fallback for patient_id
         if not current_patient_id:
             current_patient_id = getattr(patient, 'patient_id', None)
-        
+
         # Patient ID filter
         if patient_id_filter and current_patient_id != patient_id_filter:
             continue
-        
+
         # Emergency filter
         if emergency_filter:
             if emergency_filter == 'emergency' and not is_emergency:
                 continue
             elif emergency_filter == 'normal' and is_emergency:
                 continue
-        
-        # NEW: Enrich test details with metadata from MongoDB
+
+        # Enrich test details with metadata from MongoDB
         enriched_test_details = []
         for test in test_details:
-            test_id = test.get('test_id')
-            test_code = test.get('test_code')
-            device_id = test.get('device_id')
+            test_id    = test.get('test_id')
+            test_code  = test.get('test_code')
+            device_id  = test.get('device_id')
             parameters = test.get('parameters', [])
-            
-            # Get test metadata
+
             test_meta = test_metadata_dict.get(test_id, {})
-            
-            # Check if test has parameters array (like CBC with 20 parameters or PT with 4 parameters)
+
             if parameters and isinstance(parameters, list) and len(parameters) > 0:
-                # This is a test with multiple parameters (e.g., CBC, PT)
-                # Enrich each parameter with its metadata
                 enriched_parameters = []
-                
                 for param_index, param in enumerate(parameters):
                     param_test_code = param.get('test_code')
-                    param_value = param.get('value')
-                    param_comment = param.get('comment', '')
-                    
-                    # Get parameter-specific details from MongoDB using INDEX
-                    # This is more reliable than test_code when multiple params share the same test_code
-                    param_details = get_parameter_details(test_id, param_test_code, device_id, param_index=param_index)
-                    
+                    param_value     = param.get('value')
+                    param_comment   = param.get('comment', '')
+
+                    param_details = get_parameter_details(test_id, param_test_code, device_id, param_index=param_index, gender=gender)
+
                     if param_details:
                         enriched_param = {
-                            'test_code': param_test_code,
-                            'parameter_name': param_details.get('parameter_name'),
-                            'value': param_value,
-                            'unit': param_details.get('unit', 'N/A'),
+                            'test_code':       param_test_code,
+                            'parameter_name':  param_details.get('parameter_name'),
+                            'value':           param_value,
+                            'unit':            param_details.get('unit', 'N/A'),
                             'reference_range': param_details.get('reference_range', 'N/A'),
-                            'method': param_details.get('method', 'N/A'),
-                            'department': param_details.get('department', 'N/A'),
-                            'sub_title': param_details.get('sub_title', ''),
-                            'value_option': param_details.get('value_option', []),
-                            'comment': param_comment
+                            'method':          param_details.get('method', 'N/A'),
+                            'department':      param_details.get('department', 'N/A'),
+                            'sub_title':       param_details.get('sub_title', ''),
+                            'value_option':    param_details.get('value_option', []),
+                            'comment':         param_comment,
                         }
                     else:
-                        # No matching parameter found in MongoDB
                         enriched_param = {
-                            'test_code': param_test_code,
-                            'parameter_name': None,
-                            'value': param_value,
-                            'unit': 'N/A',
+                            'test_code':       param_test_code,
+                            'parameter_name':  None,
+                            'value':           param_value,
+                            'unit':            'N/A',
                             'reference_range': 'N/A',
-                            'method': 'N/A',
-                            'department': 'N/A',
-                            'sub_title': '',
-                            'value_option': [],
-                            'comment': param_comment
+                            'method':          'N/A',
+                            'department':      'N/A',
+                            'sub_title':       '',
+                            'value_option':    [],
+                            'comment':         param_comment,
                         }
-                    
+
                     enriched_parameters.append(enriched_param)
-                
-                # Create enriched test with parameters
+
                 enriched_test = {
-                    **test,  # Keep all existing fields
-                    'test_name': test_meta.get('test_name', test.get('test_name', 'N/A')),
-                    'specimen_type': test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
+                    **test,
+                    'test_name':            test_meta.get('test_name', test.get('test_name', 'N/A')),
+                    'specimen_type':        test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
                     'collection_container': test_meta.get('collection_container', test.get('collection_container', 'N/A')),
-                    'department': test_meta.get('department', test.get('department', 'N/A')),
-                    'parameters': enriched_parameters  # Replace with enriched parameters
+                    'department':           test_meta.get('department', test.get('department', 'N/A')),
+                    'parameters':           enriched_parameters,
                 }
-                
+
             else:
-                # This is a single test WITHOUT parameters array
-                # For these tests, unit/method/reference_range are at the TEST LEVEL, not in parameters
                 enriched_test = {
-                    **test,  # Keep all existing fields from core_testvalue
-                    'test_name': test_meta.get('test_name', test.get('test_name', 'N/A')),
-                    'specimen_type': test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
+                    **test,
+                    'test_name':            test_meta.get('test_name', test.get('test_name', 'N/A')),
+                    'specimen_type':        test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
                     'collection_container': test_meta.get('collection_container', test.get('collection_container', 'N/A')),
-                    'department': test_meta.get('department', test.get('department', 'N/A')),
-                    # FIXED: Get unit, method, reference_range from test-level fields
-                    'unit': test_meta.get('unit', test.get('unit', 'N/A')),
-                    'method': test_meta.get('method', test.get('method', 'N/A')),
-                    'reference_range': test_meta.get('reference_range', test.get('reference_range', 'N/A')),
+                    'department':           test_meta.get('department', test.get('department', 'N/A')),
+                    'unit':                 test_meta.get('unit', test.get('unit', 'N/A')),
+                    'method':               test_meta.get('method', test.get('method', 'N/A')),
+                    'reference_range':      test_meta.get('reference_range', test.get('reference_range', 'N/A')),
                 }
-                
-                # Only if test_code exists AND parameters array exists in metadata, try to get parameter-specific details
-                # This handles edge cases where a test might have optional parameters
+
                 if test_code and test_code != 'N/A' and test_meta.get('parameters'):
-                    param_details = get_parameter_details(test_id, test_code, device_id)
-                    
+                    param_details = get_parameter_details(test_id, test_code, device_id, gender=gender)
                     if param_details:
-                        # Override ONLY if parameter details are found
-                        # This handles cases where parameters array exists but is optional
                         enriched_test.update({
-                            'parameter_name': param_details.get('parameter_name'),
-                            'unit': param_details.get('unit', enriched_test['unit']),
+                            'parameter_name':  param_details.get('parameter_name'),
+                            'unit':            param_details.get('unit', enriched_test['unit']),
                             'reference_range': param_details.get('reference_range', enriched_test['reference_range']),
-                            'method': param_details.get('method', enriched_test['method']),
-                            'department': param_details.get('department', enriched_test['department']),
+                            'method':          param_details.get('method', enriched_test['method']),
+                            'department':      param_details.get('department', enriched_test['department']),
                         })
-            
+
             enriched_test_details.append(enriched_test)
-        
-        # Replace test_details with enriched version
+
         test_details = enriched_test_details
-        
+
         # Testname filtering
         if filter_normalized:
             filtered_test_details = []
             for test in test_details:
-                test_name = test.get('test_name', '')
+                test_name       = test.get('test_name', '')
                 test_normalized = normalize_testname(test_name)
                 match_found = (
                     test_normalized == filter_normalized or
@@ -442,40 +482,34 @@ def get_test_values(request):
                 if match_found:
                     filtered_test_details.append(test)
             test_details = filtered_test_details
-        
+
         # Only pending tests
         filtered_tests = [
             test for test in test_details
             if not test.get('approve', False) and not test.get('rerun', False)
         ]
-        
+
         if not filtered_tests:
             continue
-        
+
         patient_data.append({
-            "patient_id": current_patient_id,
-            "patientname": patient_name,
-            "age": patient_age,
-            "locationId": patient.locationId,
-            "barcode": barcode_val,
-            "date": patient.date,
-            "created_date": patient.created_date,
-            "is_emergency": is_emergency,
+            "patient_id":      current_patient_id,
+            "patientname":     patient_name,
+            "age":             patient_age,
+            "age_type":        age_type,       # NEW
+            "gender":          gender,         # NEW
+            "phone":           phone,          # NEW
+            "ref_doctor":      ref_doctor,     # NEW
+            "locationId":      patient.locationId,
+            "barcode":         barcode_val,
+            "date":            patient.date,
+            "created_date":    patient.created_date,
+            "is_emergency":    is_emergency,
             "patient_history": patient_history,
-            "testdetails": filtered_tests
+            "testdetails":     filtered_tests,
         })
-    
+
     return JsonResponse(patient_data, safe=False)
-def normalize_testname(name):
-    """Helper function for test name normalization"""
-    if not name:
-        return ""
-    normalized = re.sub(r'\s+', ' ', name.strip().lower())
-    normalized = normalized.replace('&', 'and')
-    normalized = normalized.replace('/', ' ')
-    return normalized
-
-
 
 @api_view(["PATCH"])
 @csrf_exempt

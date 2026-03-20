@@ -975,337 +975,328 @@ def patient_test_sorting(request):
 @permission_classes([HasRoleAndDataPermission])
 def get_patient_test_details(request):
     barcode = request.GET.get('barcode')
-    # Check if barcode is provided
     if not barcode:
         return JsonResponse({'error': 'Barcode is required'}, status=400)
+
     try:
-        # Get patient_id and bill_no from BarcodeTestDetails using barcode
         barcode_details = BarcodeTestDetails.objects.filter(barcode=barcode).first()
         if not barcode_details:
             return JsonResponse({'error': 'No barcode details found for the given barcode'}, status=404)
+
         patient_id = barcode_details.patient_id
-        bill_no = barcode_details.bill_no
-        # Get TestValue records using patient_id and barcode
+        bill_no    = barcode_details.bill_no
+
         test_values = TestValue.objects.filter(barcode=barcode)
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
-        # Get patient details from Patient model using patient_id
+
         patient = Patient.objects.filter(patient_id=patient_id).first()
-        # Get billing details from Billing model using bill_no
         billing = Billing.objects.filter(bill_no=bill_no).first()
-        # Get sample status
         sample_status = SampleStatus.objects.filter(patient_id=patient_id)
-        # Get barcodes information
+
         barcodes = []
         try:
-            tests = json.loads(barcode_details.testdetails) if isinstance(barcode_details.testdetails, str) else barcode_details.testdetails
+            tests    = json.loads(barcode_details.testdetails) if isinstance(barcode_details.testdetails, str) else barcode_details.testdetails
             barcodes = [test.get("barcode") for test in tests if test.get("barcode")]
         except (json.JSONDecodeError, AttributeError):
             barcodes = []
-        
-        # Connect to MongoDB
-        mongo_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-        mongo_db = mongo_client.Diagnostics
+
+        # ── Resolve patient gender for reference range selection ──────────────
+        # gender is stored on the Patient model; normalise to lowercase for matching
+        patient_gender = (patient.gender or '') if patient else ''
+
+        mongo_client             = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        mongo_db                 = mongo_client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
-        
-        # Connect to global database for employee profiles
-        global_db = mongo_client.Global
+
+        global_db          = mongo_client.Global
         profile_collection = global_db.backend_diagnostics_profile
-        fs = gridfs.GridFS(global_db)
-        
-        # Helper function to get parameter details by index or test_code
+        fs                 = gridfs.GridFS(global_db)
+
+        # ── Gender-aware reference_range / low / high resolver ────────────────
+        def resolve_gender_fields(meta, gender):
+            """
+            Pick reference_range from male/female fields based on patient gender.
+            Falls back to generic reference_range when gender-specific value absent.
+            Returns (reference_range, _, _) — low/high not used in this view.
+            """
+            gender_key = (gender or '').strip().lower()   # 'male', 'female', or ''
+
+            if gender_key == 'male' and meta.get('male'):
+                reference_range = meta['male']
+            elif gender_key == 'female' and meta.get('female'):
+                reference_range = meta['female']
+            else:
+                reference_range = meta.get('reference_range', '') or ''
+
+            return reference_range, '', ''
+
+        # ── Parameter helper ──────────────────────────────────────────────────
         def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
-            """
-            Get parameter details from core_testdetails
-            Supports both dict (device_id-keyed) and list formats
-            Uses param_index for accurate matching when available
-            """
             core_parameters = core_test.get("parameters", {})
             params_list = []
-            
-            # Case 1: parameters is a dictionary with device_id keys
+
             if isinstance(core_parameters, dict):
-                # Try to get parameters for the specific device_id
                 if device_id and device_id != "N/A" and device_id in core_parameters:
                     params_list = core_parameters[device_id]
                 else:
-                    # Use first available device's parameters
                     if len(core_parameters) > 0:
                         first_device = list(core_parameters.keys())[0]
                         params_list = core_parameters[first_device]
-            
-            # Case 2: parameters is a list (like PT test)
             elif isinstance(core_parameters, list):
                 params_list = core_parameters
-            
-            # Ensure params_list is actually a list
+
             if not isinstance(params_list, list):
                 return None
-            
-            # If param_index is provided, use it directly (most accurate)
+
             if param_index is not None and 0 <= param_index < len(params_list):
                 return params_list[param_index]
-            
-            # Fallback: Find by test_code (may not be unique)
+
             if test_code:
                 matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
                 if matching_params:
                     return matching_params[0]
-            
+
             return None
-        
-        # Helper function to get employee signature data
+
+        # ── Signature helper ──────────────────────────────────────────────────
         def get_employee_signature_data(employee_id):
-            """
-            Fetch employee profile and signature image from MongoDB
-            Returns dict with employeeName, designation, and signature base64
-            """
             if not employee_id:
                 return None
-            
             try:
-                # Get employee profile
                 profile = profile_collection.find_one({"employeeId": employee_id})
                 if not profile:
                     return None
-                
-                employee_name = profile.get("employeeName", "")
-                designation = profile.get("designation", "")
-                signature_file_id = profile.get("signatureFileId")
-                
-                signature_base64 = None
+
+                employee_name      = profile.get("employeeName", "")
+                designation        = profile.get("designation", "")
+                signature_file_id  = profile.get("signatureFileId")
+                signature_base64   = None
+
                 if signature_file_id:
                     try:
-                        # Convert string ID to ObjectId if needed
                         from bson import ObjectId
+                        import base64
                         if isinstance(signature_file_id, str):
                             signature_file_id = ObjectId(signature_file_id)
-                        
-                        # Fetch signature image from GridFS
-                        signature_file = fs.get(signature_file_id)
-                        signature_bytes = signature_file.read()
-                        
-                        # Convert to base64
-                        import base64
+                        signature_file   = fs.get(signature_file_id)
+                        signature_bytes  = signature_file.read()
                         signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
                     except Exception as e:
                         print(f"Error fetching signature for employee {employee_id}: {str(e)}")
-                
+
                 return {
-                    "employeeName": employee_name,
-                    "designation": designation,
-                    "signatureBase64": signature_base64
+                    "employeeName":    employee_name,
+                    "designation":     designation,
+                    "signatureBase64": signature_base64,
                 }
             except Exception as e:
                 print(f"Error fetching employee data for {employee_id}: {str(e)}")
                 return None
-        
-        all_results = []
-        # Collect all unique approvers across all test values
+
+        # ── Process each TestValue record ─────────────────────────────────────
+        all_results   = []
         all_approvers = set()
-        
-        # Process each TestValue record
+
         for test_value_record in test_values:
-            # Filter for approved tests only
             approved_tests = []
-            
-            # Parse testdetails if it's a string
+
             test_details_list = test_value_record.testdetails
             if isinstance(test_details_list, str):
                 try:
                     test_details_list = json.loads(test_details_list)
-                except:
+                except Exception:
                     test_details_list = []
-            
+
             if not isinstance(test_details_list, list):
                 test_details_list = []
-            
+
             for test in test_details_list:
-                # Check if the test is approved
-                if test.get("approve") == True:  # Only include approved tests
-                    test_id = test.get("test_id")
-                    device_id = test.get("device_id")
-                    parameters = test.get("parameters", [])
-                    approve_by = test.get("approve_by", "")
-                    dispatch_time = test.get("dispatch_time", "")
-                    
-                    # Collect approver ID
-                    if approve_by:
-                        all_approvers.add(approve_by)
-                    
-                    # Fetch test details from core_testdetails
-                    core_test = core_testdetails_collection.find_one({"test_id": test_id})
-                    
-                    if not core_test:
-                        # Fallback to original data if core_test not found
-                        testname = test.get("testname")
-                        department = test.get("department", "N/A")
-                        NABL = test.get("NABL", "N/A")
-                        specimen_type = test.get("specimen_type", "N/A")
-                    else:
-                        testname = core_test.get("test_name")
-                        department = core_test.get("department", "N/A")
-                        NABL = core_test.get("NABL", False)
-                        specimen_type = core_test.get("specimen_type", "N/A")
-                    
-                    outsourced = test.get("outsourced", False)
-                    comment = test.get("comment", "")
-                    verified_by = test.get("verified_by", "N/A")
-                    approve_time = test.get("approve_time", "N/A")
-                    
-                    # Get sample status information
-                    status = None
-                    if sample_status.exists():
-                        for sample_status_record in sample_status:
-                            status_details = sample_status_record.testdetails
-                            if isinstance(status_details, str):
-                                try:
-                                    status_details = json.loads(status_details)
-                                except:
-                                    status_details = []
-                            
-                            if isinstance(status_details, list):
-                                status = next(
-                                    (s for s in status_details if s.get("test_id") == test_id or s.get("testname") == testname),
-                                    None
-                                )
-                            if status:
-                                break
-                    
-                    samplecollected_time = status.get("samplecollected_time") if status else None
-                    received_time = status.get("received_time") if status else None
-                    
-                    test_detail = {
-                        "test_id": test_id,
-                        "department": department,
-                        "NABL": NABL,
-                        "outsourced": outsourced,
-                        "comment": comment,
-                        "testname": testname,
-                        "verified_by": verified_by,
-                        "approve_by": approve_by,  # Include approve_by in response
-                        "approve_time": approve_time,
-                        "dispatch_time": dispatch_time,
-                        "samplecollected_time": samplecollected_time,
-                        "received_time": received_time
-                    }
-                    
-                    # Handle parameters - match with core_testdetails using INDEX
-                    if parameters and len(parameters) > 0 and core_test:
-                        enriched_parameters = []
-                        
-                        # Use index-based matching for accurate parameter retrieval
-                        for param_index, param_value in enumerate(parameters):
-                            test_code = param_value.get("test_code")
-                            value = param_value.get("value", "")
-                            param_comment = param_value.get("comment", "")
-                            
-                            # Get parameter definition using INDEX (most accurate)
-                            param_def = get_parameter_from_core(
-                                core_test, 
-                                device_id, 
-                                test_code=test_code, 
-                                param_index=param_index
+                if test.get("approve") is not True:
+                    continue
+
+                test_id     = test.get("test_id")
+                device_id   = test.get("device_id")
+                parameters  = test.get("parameters", [])
+                approve_by  = test.get("approve_by", "")
+                dispatch_time = test.get("dispatch_time", "")
+
+                if approve_by:
+                    all_approvers.add(approve_by)
+
+                core_test = core_testdetails_collection.find_one({"test_id": test_id})
+
+                if not core_test:
+                    testname     = test.get("testname")
+                    department   = test.get("department", "N/A")
+                    NABL         = test.get("NABL", "N/A")
+                    specimen_type = test.get("specimen_type", "N/A")
+                else:
+                    testname      = core_test.get("test_name")
+                    department    = core_test.get("department", "N/A")
+                    NABL          = core_test.get("NABL", False)
+                    specimen_type = core_test.get("specimen_type", "N/A")
+
+                outsourced  = test.get("outsourced", False)
+                comment     = test.get("comment", "")
+                verified_by = test.get("verified_by", "N/A")
+                approve_time = test.get("approve_time", "N/A")
+
+                status = None
+                if sample_status.exists():
+                    for sample_status_record in sample_status:
+                        status_details = sample_status_record.testdetails
+                        if isinstance(status_details, str):
+                            try:
+                                status_details = json.loads(status_details)
+                            except Exception:
+                                status_details = []
+                        if isinstance(status_details, list):
+                            status = next(
+                                (s for s in status_details
+                                 if s.get("test_id") == test_id or s.get("testname") == testname),
+                                None,
                             )
-                            
-                            if param_def:
-                                enriched_param = {
-                                    "name": param_def.get("test_name", ""),
-                                    "test_code": test_code,
-                                    "value": value,
-                                    "unit": param_def.get("unit", ""),
-                                    "reference_range": param_def.get("reference_range", ""),
-                                    "method": param_def.get("method", ""),
-                                    "specimen_type": specimen_type,
-                                    "sub_title": param_def.get("sub_title", ""),
-                                    "value_option": param_def.get("value_option", []),
-                                    "comment": param_comment
-                                }
-                                enriched_parameters.append(enriched_param)
-                            else:
-                                # Fallback if parameter definition not found
-                                enriched_param = {
-                                    "name": param_value.get("name", "N/A"),
-                                    "test_code": test_code,
-                                    "value": value,
-                                    "unit": param_value.get("unit", "N/A"),
-                                    "reference_range": param_value.get("reference_range", "N/A"),
-                                    "method": param_value.get("method", "N/A"),
-                                    "specimen_type": specimen_type,
-                                    "sub_title": param_value.get("sub_title", ""),
-                                    "value_option": [],
-                                    "comment": param_comment
-                                }
-                                enriched_parameters.append(enriched_param)
-                        
-                        test_detail["parameters"] = enriched_parameters
-                    elif parameters and len(parameters) > 0:
-                        # No core_test found, use original parameters
-                        test_detail["parameters"] = parameters
-                    else:
-                        # No parameters - single test with value
-                        if core_test:
-                            test_detail.update({
-                                "method": core_test.get("method", ""),
-                                "specimen_type": specimen_type,
-                                "value": test.get("value", ""),
-                                "unit": core_test.get("unit", ""),
-                                "reference_range": core_test.get("reference_range", ""),
-                                "sub_title": test.get("sub_title", "")
-                            })
+                        if status:
+                            break
+
+                samplecollected_time = status.get("samplecollected_time") if status else None
+                received_time        = status.get("received_time")         if status else None
+
+                test_detail = {
+                    "test_id":             test_id,
+                    "department":          department,
+                    "NABL":                NABL,
+                    "outsourced":          outsourced,
+                    "comment":             comment,
+                    "testname":            testname,
+                    "verified_by":         verified_by,
+                    "approve_by":          approve_by,
+                    "approve_time":        approve_time,
+                    "dispatch_time":       dispatch_time,
+                    "samplecollected_time": samplecollected_time,
+                    "received_time":       received_time,
+                }
+
+                # ── Parameterised test ────────────────────────────────────────
+                if parameters and len(parameters) > 0 and core_test:
+                    enriched_parameters = []
+
+                    for param_index, param_value in enumerate(parameters):
+                        test_code   = param_value.get("test_code")
+                        value       = param_value.get("value", "")
+                        param_comment = param_value.get("comment", "")
+
+                        param_def = get_parameter_from_core(
+                            core_test, device_id,
+                            test_code=test_code,
+                            param_index=param_index,
+                        )
+
+                        if param_def:
+                            # Resolve gender-based reference_range only
+                            ref_range, _, _ = resolve_gender_fields(param_def, patient_gender)
+
+                            enriched_param = {
+                                "name":            param_def.get("test_name", ""),
+                                "test_code":       test_code,
+                                "value":           value,
+                                "unit":            param_def.get("unit", ""),
+                                "reference_range": ref_range,   # gender-resolved
+                                "method":          param_def.get("method", ""),
+                                "specimen_type":   specimen_type,
+                                "sub_title":       param_def.get("sub_title", ""),
+                                "value_option":    param_def.get("value_option", []),
+                                "comment":         param_comment,
+                            }
                         else:
-                            test_detail.update({
-                                "method": test.get("method", ""),
-                                "specimen_type": test.get("specimen_type", ""),
-                                "value": test.get("value", ""),
-                                "unit": test.get("unit", ""),
-                                "reference_range": test.get("reference_range", ""),
-                                "sub_title": test.get("sub_title", "")
-                            })
-                    
-                    approved_tests.append(test_detail)
-            
-            # Only add patient details if there are approved tests
+                            # Fallback: no core definition found for this param
+                            enriched_param = {
+                                "name":            param_value.get("name", "N/A"),
+                                "test_code":       test_code,
+                                "value":           value,
+                                "unit":            param_value.get("unit", "N/A"),
+                                "reference_range": param_value.get("reference_range", "N/A"),
+                                "method":          param_value.get("method", "N/A"),
+                                "specimen_type":   specimen_type,
+                                "sub_title":       param_value.get("sub_title", ""),
+                                "value_option":    [],
+                                "comment":         param_comment,
+                            }
+
+                        enriched_parameters.append(enriched_param)
+
+                    test_detail["parameters"] = enriched_parameters
+
+                elif parameters and len(parameters) > 0:
+                    # No core_test found — pass raw parameters through unchanged
+                    test_detail["parameters"] = parameters
+
+                else:
+                    # ── Single-value test (no parameters array) ───────────────
+                    if core_test:
+                        # Resolve gender-based reference_range only
+                        ref_range, _, _ = resolve_gender_fields(core_test, patient_gender)
+
+                        test_detail.update({
+                            "method":          core_test.get("method", ""),
+                            "specimen_type":   specimen_type,
+                            "value":           test.get("value", ""),
+                            "unit":            core_test.get("unit", ""),
+                            "reference_range": ref_range,   # gender-resolved
+                            "sub_title":       test.get("sub_title", ""),
+                        })
+                    else:
+                        test_detail.update({
+                            "method":          test.get("method", ""),
+                            "specimen_type":   test.get("specimen_type", ""),
+                            "value":           test.get("value", ""),
+                            "unit":            test.get("unit", ""),
+                            "reference_range": test.get("reference_range", ""),
+                            "sub_title":       test.get("sub_title", ""),
+                        })
+
+                approved_tests.append(test_detail)
+
             if approved_tests:
                 patient_details = {
-                    "patient_id": patient_id,
+                    "patient_id":  patient_id,
                     "patientname": patient.patientname if patient else "N/A",
-                    "age": patient.age if patient else "N/A",
-                    "age_type": patient.age_type if patient else "Years",
-                    "gender": patient.gender if patient else "N/A",
-                    "date": test_value_record.date,
-                    "barcode": test_value_record.barcode,
-                    "bill_no": bill_no,
-                    "barcodes": barcodes,
+                    "age":         patient.age         if patient else "N/A",
+                    "age_type":    patient.age_type    if patient else "Years",
+                    "gender":      patient.gender      if patient else "N/A",   # already present — used for H/L in frontend
+                    "date":        test_value_record.date,
+                    "barcode":     test_value_record.barcode,
+                    "bill_no":     bill_no,
+                    "barcodes":    barcodes,
                     "testdetails": approved_tests,
-                    "refby": billing.refby if billing else "N/A",
-                    "B2B": billing.B2B if billing else False,
-                    "branch": billing.branch if billing else "N/A",
+                    "refby":       billing.refby   if billing else "N/A",
+                    "B2B":         billing.B2B     if billing else False,
+                    "branch":      billing.branch  if billing else "N/A",
                 }
                 all_results.append(patient_details)
-        
+
         if not all_results:
             return JsonResponse({'error': 'No approved test records found'}, status=404)
-        
+
         # Fetch signature data for all approvers
         signatures_data = []
         for approver_id in all_approvers:
             sig_data = get_employee_signature_data(approver_id)
             if sig_data:
                 signatures_data.append(sig_data)
-        
-        # Prepare final response
+
         response_data = {
             "patient_data": all_results[0] if len(all_results) == 1 else all_results,
-            "signatures": signatures_data
+            "signatures":   signatures_data,
         }
-        
+
         return JsonResponse(response_data, safe=False)
+
     except Exception as e:
         import traceback
         print(traceback.format_exc())
-        return JsonResponse({'error': str(e)}, status=500)
-    
+        return JsonResponse({'error': str(e)}, status=500)  
 
 @csrf_exempt
 def send_email(request):
