@@ -399,6 +399,7 @@ def get_test_values(request):
                     param_test_code = param.get('test_code')
                     param_value     = param.get('value')
                     param_comment   = param.get('comment', '')
+                    param_status   = param.get('status')
 
                     param_details = get_parameter_details(test_id, param_test_code, device_id, param_index=param_index, gender=gender)
 
@@ -414,6 +415,7 @@ def get_test_values(request):
                             'sub_title':       param_details.get('sub_title', ''),
                             'value_option':    param_details.get('value_option', []),
                             'comment':         param_comment,
+                            'status':          param_status,
                         }
                     else:
                         enriched_param = {
@@ -427,6 +429,7 @@ def get_test_values(request):
                             'sub_title':       '',
                             'value_option':    [],
                             'comment':         param_comment,
+                            'status':          param_status,
                         }
 
                     enriched_parameters.append(enriched_param)
@@ -523,14 +526,18 @@ def approve_test_detail(request, barcode):
         barcode = update_data.get("barcode")
         created_date_str = update_data.get("created_date")
         test_id = update_data.get("test_id")
-        approve_time = update_data.get("approve_time")  # Get from frontend
+        approve_time = update_data.get("approve_time")
+        status = update_data.get("status")  # "Normal" or "Abnormal" — sent only for CHC locations
+
         if not (barcode and created_date_str and test_id):
             return JsonResponse({
                 "error": "barcode, created_date, and test_id required"
             }, status=400)
+
         created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
         return JsonResponse({"error": f"Invalid request format: {str(e)}"}, status=400)
+
     # Query with barcode and created_date
     query = {"barcode": barcode, "created_date": created_date}
     test_value = collection.find_one(query)
@@ -538,26 +545,32 @@ def approve_test_detail(request, barcode):
         return JsonResponse({
             "error": "Patient record not found for given barcode & created_date."
         }, status=404)
+
     try:
         test_details = json.loads(test_value.get("testdetails", "[]"))
     except json.JSONDecodeError:
         return JsonResponse({"error": "Failed to decode test details."}, status=500)
-    # Find the test by test_id
+
+    # Find the test by test_id and update
     test_found = False
     for test_detail in test_details:
         if test_detail.get("test_id") == test_id:
             test_detail["approve"] = update_data.get("approve", False)
             if test_detail["approve"]:
-                # Use approve_time from frontend if provided
                 if approve_time:
                     test_detail["approve_time"] = approve_time
                 if "approve_by" in update_data:
                     test_detail["approve_by"] = update_data["approve_by"]
+                # Save Normal/Abnormal status when provided (CHC locations)
+                if status in ("Normal", "Abnormal"):
+                    test_detail["status"] = status
             test_found = True
             break
+
     if not test_found:
         return JsonResponse({"error": "Test not found with given test_id."}, status=404)
-    # Update the document
+
+    # Persist the updated test details
     result = collection.update_one(
         query,
         {"$set": {"testdetails": json.dumps(test_details)}}
@@ -565,6 +578,7 @@ def approve_test_detail(request, barcode):
     if result.modified_count > 0:
         return JsonResponse({"message": "Test detail approved successfully."})
     return JsonResponse({"error": "Failed to update test detail."}, status=500)
+
 
 @api_view(["PATCH"])
 @csrf_exempt

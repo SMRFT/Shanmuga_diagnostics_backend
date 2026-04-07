@@ -1367,7 +1367,6 @@ def save_test_value(request):
 
                         approve = existing_test.get('approve', False)
                         rerun   = existing_test.get('rerun',   False)
-
                         # Block: approve=True (already approved — cannot overwrite)
                         if approve is True:
                             blocked_tests.append({
@@ -1379,6 +1378,15 @@ def save_test_value(request):
                         # Block: approve=False AND rerun=False
                         # (data exists but not flagged for rerun — duplicate entry)
                         if approve is False and rerun is False:
+                            blocked_tests.append({
+                                'test_id': incoming_test_id,
+                                'reason': 'already exists and not flagged for rerun'
+                            })
+                            break
+
+                        # Block: approve=None AND rerun=False
+                        # (saved but pending manual approval — not flagged for rerun)
+                        if approve is None and rerun is False:
                             blocked_tests.append({
                                 'test_id': incoming_test_id,
                                 'reason': 'already exists and not flagged for rerun'
@@ -1399,15 +1407,20 @@ def save_test_value(request):
                     status=status.HTTP_409_CONFLICT
                 )
 
-            # ── All checks passed — save the record ───────────────────────────
+            # ── All checks passed — inject approve_by and save ────────────────
+            AUTO_APPROVE_BY = "60463"
+
+            for test in test_details_json:
+                if test.get('approve') is True:
+                    test['approve_by'] = AUTO_APPROVE_BY
+
             test_value_record = TestValue.objects.create(
                 created_by=employee_id,
                 date=payload.get('date'),
                 barcode=barcode,
                 locationId=locationId,
                 testdetails=test_details_json,
-            )
-
+)
             # ── Update processing status for interface records ─────────────────
             update_success_count = 0
             update_errors        = []
