@@ -14,6 +14,8 @@ from bson import json_util
 import gridfs
 import base64
 from bson.objectid import ObjectId
+import re
+
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -1510,6 +1512,97 @@ def corporate_patient_test_details(request):
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
 
+NORMAL_NOTES_WHITELIST = {
+    "normal study.",
+    "no significant finding in the lungs or mediastinum.",
+    "no significant abnormality detected.",
+}
+
+
+# ── HELPER: Check if a notes string is a whitelisted normal statement ─────────
+NORMAL_NOTES_WHITELIST = {
+    "normal study.",
+    "no significant finding in the lungs or mediastinum.",
+    "no significant abnormality detected.",
+}
+
+NORMAL_VITAL_STATUSES = {"bp_status", "bmi_status", "spo2_status"}
+
+
+def _is_normal_notes(notes: str) -> bool:
+    if not notes or not notes.strip():
+        return False
+    return notes.strip().lower() in NORMAL_NOTES_WHITELIST
+
+
+def _is_vitals_normal(vitals: dict) -> bool:
+    """
+    Returns True only when all three vital status fields are present
+    and each equals "Normal" (case-insensitive).
+    Returns False if any field is missing, empty, or not "Normal".
+    """
+    if not vitals or not isinstance(vitals, dict):
+        return False
+
+    for key in NORMAL_VITAL_STATUSES:
+        value = vitals.get(key, "")
+        if not value or str(value).strip().lower() != "normal":
+            return False
+
+    return True
+
+
+def _compute_corporate_approval_status(
+    bc,
+    approval_status_map,
+    chc_tests_with_status,
+    lab_test_values,
+    no_of_tests,
+    investigation_status,
+    vitals=None,           # ← new parameter
+):
+    """
+    Returns "Approved" when ALL of:
+      1. core_investigation.status == "approved", AND
+         All CHC test notes are exactly a whitelisted normal statement, AND
+      2. All ordered lab tests are approved AND all have status == "Normal", AND
+      3. All vital statuses (BP_status, bmi_status, spo2_status) == "Normal"
+    Falls back to existing overallApproval-based logic otherwise.
+    """
+    # ── 1. CHC notes check ───────────────────────────────────────────────────
+    chc_all_normal = (
+        investigation_status == "approved"
+        and len(chc_tests_with_status) > 0
+        and all(_is_normal_notes(ct.get("notes", "")) for ct in chc_tests_with_status)
+    )
+
+    # ── 2. Lab test status check ─────────────────────────────────────────────
+    valid_lab_tests = [
+        t for t in lab_test_values
+        if not t.get("rerun", False) and t.get("approve", False)
+    ]
+
+    lab_all_normal = (
+        no_of_tests > 0
+        and len(valid_lab_tests) >= no_of_tests
+        and all(
+            t.get("status", "").strip().lower() == "normal"
+            for t in valid_lab_tests
+        )
+    )
+
+    # ── 3. Vitals status check ────────────────────────────────────────────────
+    vitals_all_normal = _is_vitals_normal(vitals)
+
+    if chc_all_normal and lab_all_normal and vitals_all_normal:
+        return "Approved"
+
+    # ── 4. Fallback: overallApproval collection ───────────────────────────────
+    if bc and bc in approval_status_map:
+        return "Approved"
+
+    return "Pending"
+
 
 @api_view(['GET', 'PATCH'])
 @csrf_exempt
@@ -1522,7 +1615,7 @@ def corporate_approval_report(request):
         sample_status_colletion = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
         overall_approval_collection = db.overallApproval
-        investigation_collection = db.core_investigation  # NEW
+        investigation_collection = db.core_investigation
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
@@ -1556,14 +1649,14 @@ def corporate_approval_report(request):
         employee_ids = [p.get("employee_id") for p in patients if p.get("employee_id")]
         barcodes = [p.get("barcode") for p in patients if p.get("barcode")]
 
-        # Employee detail map
+        # ── Employee detail map ───────────────────────────────────────────────
         patient_details_map = {}
         if employee_ids:
             patient_details = franchise_patient_collection.find({"employee_id": {"$in": employee_ids}})
             for patient_detail in patient_details:
                 patient_details_map[patient_detail.get("employee_id")] = patient_detail
 
-        # Overall approval map
+        # ── Overall approval map ──────────────────────────────────────────────
         approval_status_map = {}
         if barcodes:
             approval_records = overall_approval_collection.find({"barcode": {"$in": barcodes}})
@@ -1577,7 +1670,7 @@ def corporate_approval_report(request):
                         "remarks": approval.get("remarks")
                     }
 
-        # Sample status records
+        # ── Sample status records ─────────────────────────────────────────────
         sample_status_records = []
         if barcodes:
             sample_status_records = list(sample_status_colletion.find({"barcode": {"$in": barcodes}}))
@@ -1590,13 +1683,13 @@ def corporate_approval_report(request):
                 if bc and testdetails:
                     sample_status_list.append({"barcode": bc, "testdetails": testdetails})
 
-        # barcode → employee_id
+        # ── barcode → employee_id map ─────────────────────────────────────────
         barcode_to_patient_map = {}
         for patient in patients:
             if patient.get("barcode") and patient.get("employee_id"):
                 barcode_to_patient_map[patient.get("barcode")] = patient.get("employee_id")
 
-        # Build sample_status_map with enriched test names
+        # ── Build sample_status_map with enriched test names ──────────────────
         sample_status_map = {}
         for record in sample_status_list:
             if record and isinstance(record, dict):
@@ -1626,14 +1719,43 @@ def corporate_approval_report(request):
                     if enriched_testdetails:
                         sample_status_map.setdefault(employee_id_key, []).extend(enriched_testdetails)
 
-        # ── NEW: Fetch investigation records and build CHC status map ────────
+        # ── Fetch investigation records and build CHC status map ──────────────
         investigation_records = []
         if barcodes:
             investigation_records = list(investigation_collection.find({"barcode": {"$in": barcodes}}))
 
         chc_status_by_barcode = _build_chc_status_from_investigation(investigation_records)
 
-        # Build formatted_data
+        # ── Build investigation status map by barcode ──────────────────────────
+        investigation_status_by_barcode = {}
+        for inv in investigation_records:
+            inv_bc = str(inv.get("barcode", ""))
+            if inv_bc:
+                investigation_status_by_barcode[inv_bc] = inv.get("status", "").strip().lower()
+
+        # ── Build vitals map by barcode (already have investigation_records) ──────────
+        vitals_by_barcode = {}
+        for inv in investigation_records:
+            inv_bc = str(inv.get("barcode", ""))
+            if inv_bc:
+                raw = inv.get("vitals", {})
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except Exception:
+                        raw = {}
+                vitals_by_barcode[inv_bc] = raw
+
+        # ── Bulk-fetch TestValue records for all barcodes ─────────────────────
+        lab_tests_by_barcode = {}
+        for record in TestValue.objects.filter(barcode__in=barcodes):
+            bc = str(record.barcode)
+            td = record.testdetails
+            parsed = json.loads(td) if isinstance(td, str) else (td or [])
+            if isinstance(parsed, list):
+                lab_tests_by_barcode.setdefault(bc, []).extend(parsed)
+
+        # ── Build formatted_data ──────────────────────────────────────────────
         formatted_data = []
         for patient in patients:
             if not isinstance(patient, dict):
@@ -1646,6 +1768,7 @@ def corporate_approval_report(request):
             if not isinstance(patient_detail, dict):
                 patient_detail = {}
 
+            # ── 1. sample_tests and no_of_tests ──────────────────────────────
             sample_tests = sample_status_map.get(pid, [])
             testnames = ", ".join([
                 test.get("testname", "") if isinstance(test, dict) else str(test)
@@ -1657,7 +1780,7 @@ def corporate_approval_report(request):
             age_type = patient_detail.get("age_type", "")
             age = f"{age_value} {age_type}" if age_type else str(age_value)
 
-            # ── NEW: Parse chctestdetails from billing ───────────────────────
+            # ── 2. Parse chctestdetails from billing ──────────────────────────
             chc_raw = patient.get("chctestdetails", "[]")
             chc_tests = []
             if isinstance(chc_raw, str):
@@ -1668,7 +1791,7 @@ def corporate_approval_report(request):
             elif isinstance(chc_raw, list):
                 chc_tests = chc_raw
 
-            # ── NEW: Get per-test CHC status for this barcode ────────────────
+            # ── 3. Per-test CHC status for this barcode ───────────────────────
             chc_status_map_for_barcode = chc_status_by_barcode.get(str(bc), {})
 
             chc_tests_with_status = []
@@ -1690,11 +1813,21 @@ def corporate_approval_report(request):
                 chc_tests, chc_status_map_for_barcode
             )
 
-            # Overall approval status
-            if bc and bc in approval_status_map:
-                status = "Approved"
-            else:
-                status = "Pending"
+            # ── 4. Lab test values and investigation status for this barcode ──
+            raw_lab_tests = lab_tests_by_barcode.get(str(bc), [])
+            investigation_status = investigation_status_by_barcode.get(str(bc), "")
+            vitals = vitals_by_barcode.get(str(bc), {})
+
+            # ── 5. Compute final approval status ──────────────────────────────
+            status = _compute_corporate_approval_status(
+                bc=bc,
+                approval_status_map=approval_status_map,
+                chc_tests_with_status=chc_tests_with_status,
+                lab_test_values=raw_lab_tests,
+                no_of_tests=no_of_tests,
+                investigation_status=investigation_status,
+                vitals=vitals, 
+            )
 
             created_date = patient.get("created_date")
             if created_date:
@@ -1721,9 +1854,9 @@ def corporate_approval_report(request):
                 "no_of_tests": no_of_tests,
                 "barcode": bc,
                 "status": status,
-                # ── NEW CHC fields ─────────────────────────────────────────────
+                # ── CHC fields ─────────────────────────────────────────────────
                 "chc_tests": chc_tests_with_status,
-                "chc_investigation_status": chc_overall,   # "All Approved" | "Partial" | "Pending" | "No CHC Tests"
+                "chc_investigation_status": chc_overall,
                 "chc_pending_tests": chc_pending,
                 "chc_approved_tests": chc_approved,
             })
@@ -1907,27 +2040,56 @@ def corporate_health_report(request):
         if franchise_investigation:
             chc_ophthalmology = franchise_investigation.get("CHCT001")
             if chc_ophthalmology:
-                ophthalmology_data = {}
-                distance = chc_ophthalmology.get("distance", {})
-                if distance:
-                    ophthalmology_data["distance"] = {"right": str(distance.get("right", "")), "left": str(distance.get("left", ""))}
-                near_vision = chc_ophthalmology.get("nearVision", {})
-                if near_vision:
-                    ophthalmology_data["near_vision"] = {"right": str(near_vision.get("right", "")), "left": str(near_vision.get("left", ""))}
-                colour_vision = chc_ophthalmology.get("colourVision", {})
-                if colour_vision:
-                    ophthalmology_data["color_vision"] = {"right": str(colour_vision.get("right", "")), "left": str(colour_vision.get("left", ""))}
+                
+                # ── Helper: check if a nested dict has any non-empty value ────────────
+                def has_data(d):
+                    if not d:
+                        return False
+                    return any(str(v).strip() for v in d.values() if v is not None)
+
+                distance       = chc_ophthalmology.get("distance", {})
+                near_vision    = chc_ophthalmology.get("nearVision", {})
+                colour_vision  = chc_ophthalmology.get("colourVision", {})
                 ocular_movement = chc_ophthalmology.get("ocularmovement", {})
-                if ocular_movement:
-                    ophthalmology_data["ocularmovement"] = {"right": str(ocular_movement.get("right", "")), "left": str(ocular_movement.get("left", ""))}
-                complaints = chc_ophthalmology.get("complaints")
-                if complaints:
-                    ophthalmology_data["complaints"] = complaints
-                remarks = chc_ophthalmology.get("remarks")
-                if remarks:
-                    ophthalmology_data["remarks"] = remarks
-                if not ophthalmology_data:
-                    ophthalmology_data = None
+                complaints     = (chc_ophthalmology.get("complaints") or "").strip()
+                remarks        = (chc_ophthalmology.get("remarks") or "").strip()
+
+                # Only include ophthalmology if at least one field has real data
+                any_data = (
+                    has_data(distance)
+                    or has_data(near_vision)
+                    or has_data(colour_vision)
+                    or has_data(ocular_movement)
+                    or bool(complaints)
+                    or bool(remarks)
+                )
+
+                if any_data:
+                    ophthalmology_data = {}
+                    if has_data(distance):
+                        ophthalmology_data["distance"] = {
+                            "right": str(distance.get("right", "")),
+                            "left":  str(distance.get("left", ""))
+                        }
+                    if has_data(near_vision):
+                        ophthalmology_data["near_vision"] = {
+                            "right": str(near_vision.get("right", "")),
+                            "left":  str(near_vision.get("left", ""))
+                        }
+                    if has_data(colour_vision):
+                        ophthalmology_data["color_vision"] = {
+                            "right": str(colour_vision.get("right", "")),
+                            "left":  str(colour_vision.get("left", ""))
+                        }
+                    if has_data(ocular_movement):
+                        ophthalmology_data["ocularmovement"] = {
+                            "right": str(ocular_movement.get("right", "")),
+                            "left":  str(ocular_movement.get("left", ""))
+                        }
+                    if complaints:
+                        ophthalmology_data["complaints"] = complaints
+                    if remarks:
+                        ophthalmology_data["remarks"] = remarks
 
         barcodes = []
         try:
@@ -1951,6 +2113,9 @@ def corporate_health_report(request):
             "patientname": franchise_patient.get("employee_name"),
             "age":         franchise_patient.get("age"),
             "gender":      franchise_patient.get("gender"),
+            "doj":      franchise_patient.get("doj"),
+            "designation":      franchise_patient.get("designation"),
+            "employee_type":      franchise_patient.get("employee_type"),
             "date":        franchise_billing.get("created_date"),
             "barcode":     barcode,
             "barcodes":    barcodes,
@@ -1965,7 +2130,7 @@ def corporate_health_report(request):
             patient_details["dob"] = franchise_patient.get("dob")
         if vitals_data:
             patient_details["vitals"] = {}
-            for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2"]:
+            for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2", "BP_status", "bmi_status", "spo2_status"]:
                 if vitals_data.get(key):
                     display_key = key.replace("_cm", "").replace("_kg", "")
                     patient_details["vitals"][display_key] = vitals_data.get(key)
@@ -2162,6 +2327,8 @@ def corporate_health_report(request):
 
     except Exception as e:
         return JsonResponse({'error': str(e)}, status=500)
+
+
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
@@ -2776,27 +2943,56 @@ def get_batch_corporate_health_reports(request):
                 if franchise_investigation:
                     chc_ophthalmology = franchise_investigation.get("CHCT001")
                     if chc_ophthalmology:
-                        ophthalmology_data = {}
-                        distance = chc_ophthalmology.get("distance", {})
-                        if distance:
-                            ophthalmology_data["distance"] = {"right": str(distance.get("right", "")), "left": str(distance.get("left", ""))}
-                        near_vision = chc_ophthalmology.get("nearVision", {})
-                        if near_vision:
-                            ophthalmology_data["near_vision"] = {"right": str(near_vision.get("right", "")), "left": str(near_vision.get("left", ""))}
-                        colour_vision = chc_ophthalmology.get("colourVision", {})
-                        if colour_vision:
-                            ophthalmology_data["color_vision"] = {"right": str(colour_vision.get("right", "")), "left": str(colour_vision.get("left", ""))}
+                        
+                        # ── Helper: check if a nested dict has any non-empty value ────────────
+                        def has_data(d):
+                            if not d:
+                                return False
+                            return any(str(v).strip() for v in d.values() if v is not None)
+
+                        distance       = chc_ophthalmology.get("distance", {})
+                        near_vision    = chc_ophthalmology.get("nearVision", {})
+                        colour_vision  = chc_ophthalmology.get("colourVision", {})
                         ocular_movement = chc_ophthalmology.get("ocularmovement", {})
-                        if ocular_movement:
-                            ophthalmology_data["ocularmovement"] = {"right": str(ocular_movement.get("right", "")), "left": str(ocular_movement.get("left", ""))}
-                        complaints = chc_ophthalmology.get("complaints")
-                        if complaints:
-                            ophthalmology_data["complaints"] = complaints
-                        remarks = chc_ophthalmology.get("remarks")
-                        if remarks:
-                            ophthalmology_data["remarks"] = remarks
-                        if not ophthalmology_data:
-                            ophthalmology_data = None
+                        complaints     = (chc_ophthalmology.get("complaints") or "").strip()
+                        remarks        = (chc_ophthalmology.get("remarks") or "").strip()
+
+                        # Only include ophthalmology if at least one field has real data
+                        any_data = (
+                            has_data(distance)
+                            or has_data(near_vision)
+                            or has_data(colour_vision)
+                            or has_data(ocular_movement)
+                            or bool(complaints)
+                            or bool(remarks)
+                        )
+
+                        if any_data:
+                            ophthalmology_data = {}
+                            if has_data(distance):
+                                ophthalmology_data["distance"] = {
+                                    "right": str(distance.get("right", "")),
+                                    "left":  str(distance.get("left", ""))
+                                }
+                            if has_data(near_vision):
+                                ophthalmology_data["near_vision"] = {
+                                    "right": str(near_vision.get("right", "")),
+                                    "left":  str(near_vision.get("left", ""))
+                                }
+                            if has_data(colour_vision):
+                                ophthalmology_data["color_vision"] = {
+                                    "right": str(colour_vision.get("right", "")),
+                                    "left":  str(colour_vision.get("left", ""))
+                                }
+                            if has_data(ocular_movement):
+                                ophthalmology_data["ocularmovement"] = {
+                                    "right": str(ocular_movement.get("right", "")),
+                                    "left":  str(ocular_movement.get("left", ""))
+                                }
+                            if complaints:
+                                ophthalmology_data["complaints"] = complaints
+                            if remarks:
+                                ophthalmology_data["remarks"] = remarks
 
                 # Sample testdetails
                 sample_testdetails = []
@@ -2811,6 +3007,8 @@ def get_batch_corporate_health_reports(request):
                     "patientname": franchise_patient.get("employee_name"),
                     "age":         franchise_patient.get("age"),
                     "gender":      franchise_patient.get("gender"),
+                    "doj":      franchise_patient.get("doj"),
+                    "employee_type":      franchise_patient.get("employee_type"),
                     "date":        franchise_billing.get("created_date"),
                     "barcode":     barcode,
                     "testdetails": [],
@@ -2824,7 +3022,7 @@ def get_batch_corporate_health_reports(request):
                     patient_details["dob"] = franchise_patient.get("dob")
                 if vitals_data:
                     patient_details["vitals"] = {}
-                    for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2"]:
+                    for key in ["height_cm", "weight_kg", "bmi", "blood_pressure", "pulse", "spo2", "BP_status", "bmi_status", "spo2_status"]:
                         if vitals_data.get(key):
                             display_key = key.replace("_cm", "").replace("_kg", "")
                             patient_details["vitals"][display_key] = vitals_data.get(key)
