@@ -809,6 +809,11 @@ def get_rejected_samples(request):
                 except ValueError:
                     return JsonResponse({"error": "Invalid to_date format. Use YYYY-MM-DD"}, status=400)
 
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Diagnostics
+            test_details_collection = db.core_testdetails
+            test_id_cache = {}
+
             rejected_data = []
 
             for sample in samples_query:
@@ -826,13 +831,32 @@ def get_rejected_samples(request):
 
                 for detail in test_details:
                     if detail.get("samplestatus") == "Rejected":
+                        test_id = detail.get("test_id")
+                        testname = detail.get("testname", "N/A")
+                        container = detail.get("container", "N/A")
+                        
+                        if test_id and (testname == "N/A" or container == "N/A"):
+                            if test_id not in test_id_cache:
+                                td_doc = test_details_collection.find_one({"test_id": test_id}, {"test_name": 1, "collection_container": 1})
+                                if td_doc:
+                                    test_id_cache[test_id] = {
+                                        "name": td_doc.get("test_name", "N/A"),
+                                        "container": td_doc.get("collection_container", "N/A")
+                                    }
+                                else:
+                                    test_id_cache[test_id] = {"name": testname, "container": container}
+                                    
+                            cached = test_id_cache[test_id]
+                            testname = cached["name"] if cached["name"] != "N/A" else testname
+                            container = cached["container"] if cached["container"] != "N/A" else container
+
                         rejected_data.append({
                             "id": str(sample.id) if hasattr(sample, 'id') else str(sample.pk),
                             "date": sample.date.isoformat() if sample.date else None,
                             "patient_id": sample.patient_id,
                             "barcode": sample.barcode,
-                            "testname": detail.get("testname", "N/A"),
-                            "container": detail.get("container", "N/A"),
+                            "testname": testname,
+                            "container": container,
                             "samplecollector": detail.get("samplecollector", "N/A"),
                             "samplestatus": detail.get("samplestatus", "N/A"),
                             "rejected_time": detail.get("rejected_time", "N/A"),
@@ -886,6 +910,11 @@ def get_outsourced_samples(request):
                 except ValueError:
                     return JsonResponse({"error": "Invalid to_date format. Use YYYY-MM-DD"}, status=400)
 
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Diagnostics
+            test_details_collection = db.core_testdetails
+            test_id_cache = {}
+
             # First pass: Collect outsourced candidates
             temp_outsourced = []
             barcodes = set()
@@ -905,13 +934,32 @@ def get_outsourced_samples(request):
 
                 for detail in test_details:
                     if detail.get("samplestatus") == "Outsource":
+                        test_id = detail.get("test_id")
+                        testname = detail.get("testname", "N/A")
+                        container = detail.get("container", "N/A")
+                        
+                        if test_id and (testname == "N/A" or container == "N/A"):
+                            if test_id not in test_id_cache:
+                                td_doc = test_details_collection.find_one({"test_id": test_id}, {"test_name": 1, "collection_container": 1})
+                                if td_doc:
+                                    test_id_cache[test_id] = {
+                                        "name": td_doc.get("test_name", "N/A"),
+                                        "container": td_doc.get("collection_container", "N/A")
+                                    }
+                                else:
+                                    test_id_cache[test_id] = {"name": testname, "container": container}
+                                    
+                            cached = test_id_cache[test_id]
+                            testname = cached["name"] if cached["name"] != "N/A" else testname
+                            container = cached["container"] if cached["container"] != "N/A" else container
+
                         item = {
                             "id": str(sample.id) if hasattr(sample, 'id') else str(sample.pk),
                             "date": sample.date.isoformat() if sample.date else None,
                             "patient_id": sample.patient_id,
                             "barcode": sample.barcode,
-                            "testname": detail.get("testname", "N/A"),
-                            "container": detail.get("container", "N/A"),
+                            "testname": testname,
+                            "container": container,
                             "samplecollector": detail.get("samplecollector", "N/A"),
                             "samplestatus": detail.get("samplestatus", "N/A"),
                             "outsourced_to": detail.get("outsource_lab", "N/A"), 
