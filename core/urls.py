@@ -226,6 +226,7 @@ urlpatterns = [
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
+    path('hms-test-count/', mis.HMSTestCountView.as_view(), name='hms_test_count'),
 
     #Invoice URLs
     path("generate-invoice/", generate_invoice, name="generate-invoice"),
