@@ -1106,7 +1106,7 @@ class FranchiseConsolidatedDataView(APIView):
                 "error": str(e)
             }, status=500)
 
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 class HMSTestCountView(APIView):
     def post(self, request):
         from_date = request.data.get('from_date')
