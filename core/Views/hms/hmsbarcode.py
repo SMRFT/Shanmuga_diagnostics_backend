@@ -251,7 +251,17 @@ def get_hms_barcode_by_date(request):
                 test_lookup_by_code[t["hms_testcode"]] = t
 
         # ------------------------------------------------
-        # STEP 4: RESPONSE (DEDUPLICATION SAFE)
+        # STEP 4: CHECK EXISTING BARCODES (STATUS)
+        # ------------------------------------------------
+        from core.models import Hmsbarcode
+        
+        # Get all billnumbers that already have barcodes generated
+        existing_billnumbers = set(Hmsbarcode.objects.filter(
+            date__range=[from_date, to_date]
+        ).values_list('billnumber', flat=True))
+
+        # ------------------------------------------------
+        # STEP 5: RESPONSE (DEDUPLICATION SAFE)
         # ------------------------------------------------
         patient_data = []
 
@@ -294,6 +304,9 @@ def get_hms_barcode_by_date(request):
                         "shortcut": t.get("shortcut", ""),
                     })
 
+            bill_no = rec["bill_no"]
+            status = "Generated" if bill_no in existing_billnumbers else "Pending"
+
             patient_data.append({
                 "patient_id": rec["patient_id"],
                 "patientname": rec["patientname"],
@@ -302,12 +315,13 @@ def get_hms_barcode_by_date(request):
                 "gender": rec["gender"],
                 "IPOPType": rec["IPOPType"],
                 "phone": rec["phone"],
-                "bill_no": rec["bill_no"],
+                "bill_no": bill_no,
                 "BillType": rec["BillType"],
                 "date": rec["date"],
                 "ref_doctor": rec["ref_doctor"],
                 "testdetails": testdetails,
-                "source": rec["source"]
+                "source": rec["source"],
+                "barcode_status": status
             })
 
         return JsonResponse({
@@ -317,6 +331,7 @@ def get_hms_barcode_by_date(request):
                 "date_range": {"from": from_date, "to": to_date}
             }
         }, safe=False)
+
 
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)  

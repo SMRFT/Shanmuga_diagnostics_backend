@@ -198,6 +198,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
+    r'^/_b_a_c_k_e_n_d/LIS/hms-test-count/?(\?.*)?$':'SD-P-MIS',
 
 
     r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',

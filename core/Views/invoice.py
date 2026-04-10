@@ -72,13 +72,13 @@ def get_all_patients(request):
     if from_date:
         from_date_parsed = parse_date(from_date)
         if from_date_parsed:
-            patients_qs = patients_qs.filter(date__gte=from_date_parsed)
+            patients_qs = patients_qs.filter(bill_date__gte=from_date_parsed)
 
     if to_date:
         to_date_parsed = parse_date(to_date)
         if to_date_parsed:
             next_day = to_date_parsed + timedelta(days=1)
-            patients_qs = patients_qs.filter(date__lt=next_day)
+            patients_qs = patients_qs.filter(bill_date__lt=next_day)
 
     # Exclude already invoiced patients
     collection = get_mongo_collection()
@@ -94,7 +94,7 @@ def get_all_patients(request):
     if invoiced_patient_ids:
         patients_qs = patients_qs.exclude(patient_id__in=list(invoiced_patient_ids))
 
-    patients_qs = patients_qs.order_by('-date')
+    patients_qs = patients_qs.order_by('-bill_date')
 
     # Convert to list & apply credit filter
     patients = list(patients_qs)

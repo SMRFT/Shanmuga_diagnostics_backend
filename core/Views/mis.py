@@ -1105,3 +1105,63 @@ class FranchiseConsolidatedDataView(APIView):
             return Response({
                 "error": str(e)
             }, status=500)
+
+@permission_classes([HasRoleAndDataPermission])
+class HMSTestCountView(APIView):
+    def post(self, request):
+        from_date = request.data.get('from_date')
+        to_date = request.data.get('to_date')
+        
+        if not from_date or not to_date:
+            return Response({"error": "from_date and to_date are required"}, status=400)
+        
+        try:
+            # The date in Hmsbarcode is models.DateField()
+            # We filter directly on the date objects
+            from_date_obj = datetime.strptime(from_date, '%Y-%m-%d').date()
+            to_date_obj = datetime.strptime(to_date, '%Y-%m-%d').date()
+        except ValueError:
+            return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
+
+        # Filter Hmsbarcode records in the given date range
+        # Note: In Mongo via Djongo, __range or __gte/__lte works on DateField
+        qs = Hmsbarcode.objects.filter(date__gte=from_date_obj, date__lte=to_date_obj)
+        
+        test_counts = {}
+        
+        for record in qs:
+            td = record.testdetails
+            if isinstance(td, str):
+                try:
+                    td = json.loads(td)
+                except:
+                    continue
+            
+            if not isinstance(td, list):
+                continue
+                
+            for test in td:
+                test_id = test.get('test_id')
+                # Try to get the most specific name available
+                test_name = test.get('testname') or test.get('test_name') or "Unknown Test"
+                
+                if test_id:
+                    # Use a unique key for grouping
+                    key = (test_id, test_name)
+                    if key not in test_counts:
+                        test_counts[key] = {
+                            "test_id": test_id,
+                            "test_name": test_name,
+                            "count": 0
+                        }
+                    test_counts[key]["count"] += 1
+
+        # Convert to list and sort by count descending
+        report_data = list(test_counts.values())
+        report_data.sort(key=lambda x: x['count'], reverse=True)
+        
+        return Response({
+            "data": report_data,
+            "total_records": len(report_data),
+            "total_test_sum": sum(item['count'] for item in report_data)
+        }, status=200)
