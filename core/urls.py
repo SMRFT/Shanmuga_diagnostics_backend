@@ -77,7 +77,7 @@ urlpatterns = [
     path('logistics/pickup/<int:task_id>/', logistic.pickup_task, name='pickup_task'),
     path('logistics-dashboard/', logistic.logistics_dashboard, name='logistics_dashboard'),
     path('logistics-tat-report/', logistic.logistics_tat_report, name='logistics_tat_report'),
-    # path('sample-collector-location/', location.create_sample_collector_location, name='create_sample_collector_location'),
+    path('sample-collector-location/', location.sample_collector_location, name='sample_collector_location'),
     # path('collector-route-stats/', location.collector_route_stats, name='collector_route_stats'),
 
     #Barcode:
