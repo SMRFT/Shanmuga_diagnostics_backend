@@ -44,6 +44,7 @@ PAGE_MAPPING = {
 
     #sales
     '/_b_a_c_k_e_n_d/LIS/SalesVisitLog/':'SD-P-SVF',
+    '/_b_a_c_k_e_n_d/LIS/salesdashboard/':'SD-P-SVD',
     '/_b_a_c_k_e_n_d/LIS/hospitallabform/':'SD-P-SHF',
     '/_b_a_c_k_e_n_d/LIS/get_all_clinicalnames/':'SD-P-SGAC',
     r'^/_b_a_c_k_e_n_d/LIS/getsalesindividual/?(\?.*)?$':'SD-P-SIR',
