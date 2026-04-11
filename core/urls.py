@@ -118,6 +118,9 @@ urlpatterns = [
     path('test-values/', testapproval.get_test_values, name='get_test_values'),
     path('test-approval/<str:barcode>/approve/', testapproval.approve_test_detail, name='approve_test_detail'),
     path('test-rerun/<str:barcode>/rerun/', testapproval.rerun_test_detail, name='rerun_test_detail'),
+    path('test-approved-values/', testapproval.get_approved_values, name='get_approved_values'),
+    path('test-edit/<str:barcode>/edit/', testapproval.edit_test_value, name='edit_test_value'),
+
 
     #Diagnostics Reports:
     path('overall_report/', report.overall_report, name='overall_report'),    

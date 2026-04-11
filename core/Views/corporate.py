@@ -696,9 +696,9 @@ def corporate_overall_report(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
         patients_collection = db.core_billing
-        sample_status_colletion = db.core_sample
+        sample_status_collection = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
-        investigation_collection = db.core_investigation  # NEW
+        investigation_collection = db.core_investigation
 
         diagnostics_db = client.Diagnostics
         test_details_collection = diagnostics_db.core_testdetails
@@ -709,158 +709,170 @@ def corporate_overall_report(request):
         employee_id = request.GET.get("employee_id")
 
         print("Received query parameters:", request.GET)
-        print(f"from_date: {from_date}, to_date: {to_date}, selected_date: {selected_date}, employee_id: {employee_id}")
 
         try:
             if selected_date:
                 selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
                 from_date = selected_date_parsed
                 to_date = selected_date_parsed + timedelta(days=1)
-                print(f"Using selected_date: {selected_date}, parsed from_date: {from_date}, to_date: {to_date}")
             elif from_date and to_date:
                 from_date = datetime.strptime(from_date, "%Y-%m-%d")
                 to_date = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                print(f"Using date range - parsed from_date: {from_date}, to_date: {to_date}")
             else:
-                print("Missing date parameters")
                 return JsonResponse({"error": "Either 'selected_date' or both 'from_date' and 'to_date' are required"}, status=400)
         except ValueError:
-            print("Invalid date format received")
             return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-        query = {}
-        if employee_id:
-            query["employee_id"] = employee_id
-        query["created_date"] = {"$gte": from_date, "$lt": to_date}
+        # ── STEP 1: Query core_sample first by date ───────────────────────────
+        sample_query = {
+            "date": {"$gte": from_date, "$lt": to_date}
+        }
+        sample_records = list(sample_status_collection.find(sample_query))
+        print(f"Found {len(sample_records)} core_sample records")
 
-        print(f"Corporate billing query: {query}")
-
-        patients = list(patients_collection.find(query))
-        print(f"Found {len(patients)} corporate billing records")
-        if patients:
-            print("Sample corporate billing record:", patients[0])
-
-        if not patients:
+        if not sample_records:
             return JsonResponse([], safe=False)
 
-        employee_ids = [p.get("employee_id") for p in patients if p.get("employee_id")]
-        barcodes = [p.get("barcode") for p in patients if p.get("barcode")]
+        # ── STEP 2: Extract barcodes from sample records ───────────────────────
+        barcodes = [r.get("barcode") for r in sample_records if r.get("barcode")]
+        barcodes = list(set(barcodes))  # deduplicate
+        print(f"Barcodes from core_sample: {barcodes}")
 
-        print(f"Employee IDs for querying: {employee_ids}")
-        print(f"Barcodes for querying: {barcodes}")
+        # Build sample date map and sample status map by barcode
+        sample_date_by_barcode = {}
+        sample_records_by_barcode = {}
+        for record in sample_records:
+            bc = record.get("barcode")
+            if not bc:
+                continue
+            # sample date
+            date_val = record.get("date")
+            if date_val:
+                if isinstance(date_val, datetime):
+                    sample_date_by_barcode[bc] = date_val.strftime("%Y-%m-%d")
+                else:
+                    try:
+                        sample_date_by_barcode[bc] = datetime.strptime(
+                            str(date_val), "%Y-%m-%d %H:%M:%S"
+                        ).strftime("%Y-%m-%d")
+                    except Exception:
+                        sample_date_by_barcode[bc] = str(date_val)
+            sample_records_by_barcode[bc] = record
 
-        # Get patient details from franchise_patient collection
+        # Build sample status list (testdetails per barcode)
+        sample_status_map_by_barcode = {}
+        for record in sample_records:
+            bc = record.get("barcode")
+            testdetails = record.get("testdetails")
+            if not bc or not testdetails:
+                continue
+            parsed = []
+            if isinstance(testdetails, str):
+                try:
+                    parsed = json.loads(testdetails)
+                except json.JSONDecodeError:
+                    parsed = []
+            elif isinstance(testdetails, list):
+                parsed = testdetails
+            if parsed:
+                sample_status_map_by_barcode[bc] = parsed
+
+        # ── STEP 3: Get billing records using barcodes ─────────────────────────
+        billing_query = {"barcode": {"$in": barcodes}}
+        if employee_id:
+            billing_query["employee_id"] = employee_id
+
+        billing_records = list(patients_collection.find(billing_query))
+        print(f"Found {len(billing_records)} billing records")
+
+        if not billing_records:
+            return JsonResponse([], safe=False)
+
+        # Build barcode → billing and barcode → employee_id maps
+        barcode_to_billing = {}
+        barcode_to_employee_id = {}
+        employee_ids = []
+        for bill in billing_records:
+            bc = bill.get("barcode")
+            eid = bill.get("employee_id")
+            if bc:
+                barcode_to_billing[bc] = bill
+            if bc and eid:
+                barcode_to_employee_id[bc] = eid
+                employee_ids.append(eid)
+
+        employee_ids = list(set(employee_ids))
+
+        # ── STEP 4: Get patient details using employee_ids ─────────────────────
         patient_details_map = {}
         if employee_ids:
-            patient_details = franchise_patient_collection.find({"employee_id": {"$in": employee_ids}})
-            for patient_detail in patient_details:
-                patient_details_map[patient_detail.get("employee_id")] = patient_detail
+            patient_details = franchise_patient_collection.find(
+                {"employee_id": {"$in": employee_ids}}
+            )
+            for pd in patient_details:
+                patient_details_map[pd.get("employee_id")] = pd
 
-        print(f"Fetched {len(patient_details_map)} employee detail records")
+        print(f"Fetched {len(patient_details_map)} patient detail records")
 
-        # Status data - fetch from core_sample using barcode
-        sample_status_records = []
-        if barcodes:
-            sample_status_records = list(sample_status_colletion.find({"barcode": {"$in": barcodes}}))
-
-        sample_status_list = []
-        for record in sample_status_records:
-            if record and isinstance(record, dict):
-                barcode = record.get("barcode")
-                testdetails = record.get("testdetails")
-                if barcode and testdetails:
-                    sample_status_list.append({"barcode": barcode, "testdetails": testdetails})
-
-        print(f"Fetched {len(sample_status_list)} corporate sample status records")
-
-        # For TestValue objects, use barcode to link with franchise_billing
+        # ── STEP 5: TestValue records by barcode ───────────────────────────────
         test_value_records = TestValue.objects.filter(
             barcode__in=barcodes,
             date__range=(from_date.date(), to_date.date())
         ).values("barcode", "testdetails", "created_date")
 
-        print(f"Fetched {len(test_value_records)} TestValue records")
-
-        # Create a mapping from barcode to employee_id from billing records
-        barcode_to_patient_map = {}
-        for patient in patients:
-            if patient.get("barcode") and patient.get("employee_id"):
-                barcode_to_patient_map[patient.get("barcode")] = patient.get("employee_id")
-
-        # Organize sample status data using barcode mapping
-        sample_status_map = {}
-        for record in sample_status_list:
-            if record and isinstance(record, dict):
-                barcode = record.get("barcode")
-                testdetails = record.get("testdetails")
-                if barcode and barcode in barcode_to_patient_map and testdetails:
-                    employee_id_key = barcode_to_patient_map[barcode]
-                    parsed_testdetails = []
-                    if isinstance(testdetails, str):
-                        try:
-                            parsed_testdetails = json.loads(testdetails)
-                        except json.JSONDecodeError:
-                            parsed_testdetails = []
-                    elif isinstance(testdetails, list):
-                        parsed_testdetails = testdetails
-                    if parsed_testdetails:
-                        sample_status_map.setdefault(employee_id_key, []).extend(parsed_testdetails)
-
-        # Organize test value data using barcode mapping
-        test_value_map = {}
+        test_value_map = {}  # barcode → { testdetails, created_date }
         for record in test_value_records:
-            if not isinstance(record, dict):
-                continue
-            barcode = record.get("barcode")
+            bc = record.get("barcode")
             created_date = record.get("created_date")
             testdetails = record.get("testdetails")
-            if not barcode or barcode not in barcode_to_patient_map:
+            if not bc:
                 continue
-            employee_id = barcode_to_patient_map[barcode]
             if isinstance(testdetails, str):
                 try:
                     testdetails = json.loads(testdetails.strip('"'))
                 except json.JSONDecodeError:
                     testdetails = []
-            if employee_id not in test_value_map:
-                test_value_map[employee_id] = {"barcode": barcode, "testdetails": [], "created_date": created_date}
+            if bc not in test_value_map:
+                test_value_map[bc] = {"testdetails": [], "created_date": created_date}
             if isinstance(testdetails, list):
-                test_value_map[employee_id]["testdetails"].extend(testdetails)
-            if created_date and test_value_map[employee_id]["created_date"]:
-                if created_date > test_value_map[employee_id]["created_date"]:
-                    test_value_map[employee_id]["created_date"] = created_date
-            elif created_date:
-                test_value_map[employee_id]["created_date"] = created_date
+                test_value_map[bc]["testdetails"].extend(testdetails)
+            if created_date:
+                existing = test_value_map[bc]["created_date"]
+                if not existing or created_date > existing:
+                    test_value_map[bc]["created_date"] = created_date
 
-        print(f"Processed test value map with {len(test_value_map)} unique employee IDs")
-
-        # ── NEW: Fetch investigation records and build CHC status map ────────
-        investigation_records = []
-        if barcodes:
-            investigation_records = list(investigation_collection.find({"barcode": {"$in": barcodes}}))
-
+        # ── STEP 6: Investigation records ─────────────────────────────────────
+        investigation_records = list(investigation_collection.find(
+            {"barcode": {"$in": barcodes}}
+        ))
         chc_status_by_barcode = _build_chc_status_from_investigation(investigation_records)
 
-        # Final result
+        # ── STEP 7: Build response — iterate over barcodes from core_sample ───
         formatted_data = []
-        for patient in patients:
-            if not isinstance(patient, dict):
-                print(f"Warning: Patient record is not a dict: {type(patient)}")
-                continue
 
-            pid = patient.get("employee_id", "N/A")
-            patient_detail = patient_details_map.get(pid, {})
+        for bc in barcodes:
+            billing = barcode_to_billing.get(bc)
+            if not billing:
+                continue  # no billing record for this barcode, skip
+
+            eid = barcode_to_employee_id.get(bc, "N/A")
+            patient_detail = patient_details_map.get(eid, {})
             if not isinstance(patient_detail, dict):
                 patient_detail = {}
 
-            sample_tests = sample_status_map.get(pid, [])
+            sample_tests = sample_status_map_by_barcode.get(bc, [])
+            sample_date = sample_date_by_barcode.get(bc, "N/A")
 
+            # Build test list from sample testdetails
             test_list = []
             test_ids = []
             departments_set = set()
 
             if isinstance(sample_tests, list):
-                test_ids = [test.get("test_id") for test in sample_tests if isinstance(test, dict) and test.get("test_id")]
+                test_ids = [
+                    t.get("test_id") for t in sample_tests
+                    if isinstance(t, dict) and t.get("test_id")
+                ]
 
             if test_ids:
                 for test_id in test_ids:
@@ -883,8 +895,8 @@ def corporate_overall_report(request):
                 test_list = sample_tests
 
             testnames = ", ".join([
-                test.get("testname", test.get("test_name", "")) if isinstance(test, dict) else str(test)
-                for test in test_list
+                t.get("testname", t.get("test_name", "")) if isinstance(t, dict) else str(t)
+                for t in test_list
             ])
             no_of_tests = len(test_list)
             department = ", ".join(sorted(departments_set)) if departments_set else "N/A"
@@ -893,10 +905,8 @@ def corporate_overall_report(request):
             age_type = patient_detail.get("age_type", "")
             age = f"{age_value} {age_type}" if age_type else str(age_value)
 
-            barcode = patient.get("barcode")
-
-            # ── NEW: Parse chctestdetails from billing ───────────────────────
-            chc_raw = patient.get("chctestdetails", "[]")
+            # CHC tests from billing
+            chc_raw = billing.get("chctestdetails", "[]")
             chc_tests = []
             if isinstance(chc_raw, str):
                 try:
@@ -906,9 +916,7 @@ def corporate_overall_report(request):
             elif isinstance(chc_raw, list):
                 chc_tests = chc_raw
 
-            # ── NEW: Get per-test CHC status for this barcode ────────────────
-            chc_status_map_for_barcode = chc_status_by_barcode.get(str(barcode), {})
-
+            chc_status_map_for_barcode = chc_status_by_barcode.get(str(bc), {})
             chc_tests_with_status = []
             for ct in chc_tests:
                 tid = str(ct.get("test_id", ""))
@@ -928,74 +936,55 @@ def corporate_overall_report(request):
                 chc_tests, chc_status_map_for_barcode
             )
 
-            latest_test_data = test_value_map.get(pid, {})
-            all_test_values = latest_test_data.get("testdetails", [])
-            test_created_date = latest_test_data.get("created_date", None)
-
-            if not barcode and latest_test_data.get("barcode"):
-                barcode = latest_test_data.get("barcode")
+            # Test values
+            tv_data = test_value_map.get(bc, {})
+            all_test_values = tv_data.get("testdetails", [])
+            test_created_date = tv_data.get("created_date", None)
 
             valid_test_values = []
-            unapproved_tests = []
-            if all_test_values:
-                for test_record in all_test_values:
-                    if not test_record.get("rerun", False):
-                        valid_test_values.append(test_record)
-                        if not test_record.get("approve", False):
-                            unapproved_tests.append(test_record)
+            for test_record in all_test_values:
+                if not test_record.get("rerun", False):
+                    valid_test_values.append(test_record)
+
+            # Sample status flags
             all_collected = all(
-                t.get("samplestatus") == "Collected" if isinstance(t, dict) else False
-                for t in sample_tests
+                t.get("samplestatus") == "Collected" for t in sample_tests
             ) if sample_tests else False
             partially_collected = any(
-                t.get("samplestatus") == "Collected" if isinstance(t, dict) else False
-                for t in sample_tests
+                t.get("samplestatus") == "Collected" for t in sample_tests
             )
             all_transferred = all(
-                t.get("samplestatus") == "Transferred" if isinstance(t, dict) else False
-                for t in sample_tests
+                t.get("samplestatus") == "Transferred" for t in sample_tests
             ) if sample_tests else False
             partially_transferred = any(
-                t.get("samplestatus") == "Transferred" if isinstance(t, dict) else False
-                for t in sample_tests
+                t.get("samplestatus") == "Transferred" for t in sample_tests
             )
             all_received = all(
-                t.get("samplestatus") == "Received" if isinstance(t, dict) else False
-                for t in sample_tests
+                t.get("samplestatus") == "Received" for t in sample_tests
             ) if sample_tests else False
             partially_received = any(
-                t.get("samplestatus") == "Received" if isinstance(t, dict) else False
-                for t in sample_tests
+                t.get("samplestatus") == "Received" for t in sample_tests
             )
 
             collection_time_val = "N/A"
             collected_date_val = "N/A"
-            if sample_tests:
-                for t in sample_tests:
-                    st = t.get("samplecollected_time")
-                    if st:
-                        try:
-                            if isinstance(st, str):
-                                if 'T' in st:
-                                    dt = datetime.fromisoformat(st)
-                                else:
-                                    try:
-                                        dt = datetime.strptime(st, "%Y-%m-%d %H:%M:%S")
-                                    except ValueError:
-                                        dt = None
-                                if dt:
-                                    collection_time_val = dt.strftime("%I:%M %p")
-                                    collected_date_val = dt.strftime("%d-%m-%Y")
-                                else:
-                                    collection_time_val = st
-                            elif isinstance(st, datetime):
-                                collection_time_val = st.strftime("%I:%M %p")
-                                collected_date_val = st.strftime("%d-%m-%Y")
-                            if collection_time_val != "N/A":
-                                break
-                        except Exception:
-                            collection_time_val = str(st)
+            for t in sample_tests:
+                st = t.get("samplecollected_time")
+                if st:
+                    try:
+                        if isinstance(st, str):
+                            dt = datetime.fromisoformat(st) if 'T' in st else datetime.strptime(st, "%Y-%m-%d %H:%M:%S")
+                        elif isinstance(st, datetime):
+                            dt = st
+                        else:
+                            dt = None
+                        if dt:
+                            collection_time_val = dt.strftime("%I:%M %p")
+                            collected_date_val = dt.strftime("%d-%m-%Y")
                             break
+                    except Exception:
+                        collection_time_val = str(st)
+                        break
 
             status = "Registered"
             if all_collected:
@@ -1011,110 +1000,57 @@ def corporate_overall_report(request):
             elif partially_received:
                 status = "Partially Received"
 
+            # Individual test statuses
             individual_test_statuses = []
-            if pid and test_list:
-                for test in test_list:
-                    test_id = test.get('test_id')
-                    test_name = test.get('testname') or test.get('test_name', 'N/A')
-                    sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
-                    test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
-                    test_status = "Registered"
-                    if sample_info:
-                        if sample_info.get('samplestatus') == 'Collected':
-                            test_status = "Collected"
-                        if sample_info.get('samplestatus') == 'Transferred':
-                            test_status = "Transferred"
-                        if sample_info.get('samplestatus') == 'Received':
-                            test_status = "Received"
-                        if sample_info.get('samplestatus') == 'Rejected':
-                            test_status = "Rejected"
-                        if sample_info.get('samplestatus') == 'Outsourced':
-                            test_status = "Outsourced"
-                    if test_value_info:
-                        has_values = False
-                        parameters = test_value_info.get("parameters", [])
-                        if not parameters:
-                            has_values = bool(test_value_info.get("value"))
-                        else:
-                            has_values = any(
-                                param.get("value") is not None and str(param.get("value")).strip() != ""
-                                for param in parameters
-                            )
-                        if has_values:
-                            test_status = "Tested"
-                        if test_value_info.get('approve'):
-                            test_status = "Approved"
-                        if test_value_info.get('dispatch'):
-                            test_status = "Dispatched"
-                    individual_test_statuses.append({
-                        'test_id': test_id,
-                        'test_name': test_name,
-                        'status': test_status,
-                    })
+            for test in test_list:
+                test_id = test.get("test_id")
+                test_name = test.get("testname") or test.get("test_name", "N/A")
+                sample_info = next((t for t in sample_tests if t.get("test_id") == test_id), {})
+                test_value_info = next((t for t in valid_test_values if t.get("test_id") == test_id), {})
+                test_status = "Registered"
+                if sample_info:
+                    ss = sample_info.get("samplestatus", "")
+                    if ss in ("Collected", "Transferred", "Received", "Rejected", "Outsourced"):
+                        test_status = ss
+                if test_value_info:
+                    parameters = test_value_info.get("parameters", [])
+                    has_values = (
+                        any(p.get("value") is not None and str(p.get("value")).strip() != "" for p in parameters)
+                        if parameters else bool(test_value_info.get("value"))
+                    )
+                    if has_values:
+                        test_status = "Tested"
+                    if test_value_info.get("approve"):
+                        test_status = "Approved"
+                    if test_value_info.get("dispatch"):
+                        test_status = "Dispatched"
+                individual_test_statuses.append({
+                    "test_id": test_id,
+                    "test_name": test_name,
+                    "status": test_status,
+                })
 
+            # Approval / dispatch status
             if valid_test_values:
-                def has_test_values(test):
-                    parameters = test.get("parameters", [])
-                    if not parameters:
-                        return bool(test.get("value"))
-                    return any(
-                        param.get("value") is not None and str(param.get("value")).strip() != ""
-                        for param in parameters
+                def has_test_values(t):
+                    params = t.get("parameters", [])
+                    return (
+                        any(p.get("value") is not None and str(p.get("value")).strip() != "" for p in params)
+                        if params else bool(t.get("value"))
                     )
 
                 all_tested = all(has_test_values(t) for t in valid_test_values)
                 partially_tested = any(has_test_values(t) for t in valid_test_values)
 
-                all_ordered_test_ids = {
-                    str(test.get("test_id", "")).strip()
-                    for test in test_list
-                    if isinstance(test, dict) and test.get("test_id")
-                }
-                approved_test_ids = {
-                    str(t.get("test_id", "")).strip()
-                    for t in valid_test_values
-                    if t.get("approve", False) and t.get("test_id")
-                }
-                dispatch_test_ids = {
-                    str(t.get("test_id", "")).strip()
-                    for t in valid_test_values
-                    if t.get("dispatch", False) and t.get("test_id")
-                }
+                all_ordered_ids = {str(t.get("test_id", "")).strip() for t in test_list if t.get("test_id")}
+                approved_ids = {str(t.get("test_id", "")).strip() for t in valid_test_values if t.get("approve")}
+                dispatch_ids = {str(t.get("test_id", "")).strip() for t in valid_test_values if t.get("dispatch")}
 
-                all_approved = False
-                partially_approved = False
-                if len(all_ordered_test_ids) > 0:
-                    if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
-                        all_approved = True
-                    elif len(approved_test_ids) > 0:
-                        partially_approved = True
-                    if not all_approved and valid_test_values:
-                        approved_count = sum(1 for t in valid_test_values if t.get("approve", False))
-                        total_expected = no_of_tests
-                        if approved_count == total_expected and approved_count > 0:
-                            all_approved = True
-                            partially_approved = False
-                        elif approved_count > 0:
-                            partially_approved = True
+                all_approved = all_ordered_ids.issubset(approved_ids) and len(approved_ids) == len(all_ordered_ids) if all_ordered_ids else False
+                partially_approved = bool(approved_ids) and not all_approved
 
-                all_dispatched = False
-                partially_dispatched = False
-                if len(all_ordered_test_ids) > 0:
-                    if all_ordered_test_ids.issubset(dispatch_test_ids) and len(dispatch_test_ids) == len(all_ordered_test_ids):
-                        all_dispatched = True
-                    elif len(dispatch_test_ids) > 0:
-                        partially_dispatched = True
-                    if not all_dispatched and valid_test_values:
-                        dispatch_count = sum(1 for t in valid_test_values if t.get("dispatch", False))
-                        total_expected = no_of_tests
-                        if dispatch_count == total_expected and dispatch_count > 0:
-                            all_dispatched = True
-                            partially_dispatched = False
-                        elif dispatch_count > 0:
-                            partially_dispatched = True
-
-                print(f"Approval status for Employee {pid}: all_approved={all_approved}, partially_approved={partially_approved}")
-                print(f"Dispatch status for Employee {pid}: all_dispatched={all_dispatched}, partially_dispatched={partially_dispatched}")
+                all_dispatched = all_ordered_ids.issubset(dispatch_ids) and len(dispatch_ids) == len(all_ordered_ids) if all_ordered_ids else False
+                partially_dispatched = bool(dispatch_ids) and not all_dispatched
 
                 if all_tested:
                     status = "Tested"
@@ -1129,13 +1065,14 @@ def corporate_overall_report(request):
                 elif partially_dispatched:
                     status = "Partially Dispatched"
 
-            department_statuses = {}
-            if pid and test_list:
-                department_statuses = get_department_status_corporate(
-                    test_list, pid, sample_status_map, test_value_map
-                )
+            department_statuses = get_department_status_corporate(
+                test_list, eid, 
+                {eid: sample_tests},   # wrap to match expected signature
+                {eid: tv_data}
+            ) if test_list else {}
 
-            created_date = patient.get("created_date")
+            # Billing created_date (registration date)
+            created_date = billing.get("created_date")
             formatted_date = "N/A"
             registration_date = "N/A"
             if created_date:
@@ -1153,15 +1090,16 @@ def corporate_overall_report(request):
 
             test_created_date_formatted = None
             if test_created_date:
-                if isinstance(test_created_date, datetime):
-                    test_created_date_formatted = test_created_date.isoformat()
-                else:
-                    test_created_date_formatted = str(test_created_date)
+                test_created_date_formatted = (
+                    test_created_date.isoformat()
+                    if isinstance(test_created_date, datetime)
+                    else str(test_created_date)
+                )
 
-            formatted_data.append({
-                "date": formatted_date,
+            formatted_data.append({                  # ← from core_sample.date
+                "date": sample_date,                        # ← from billing.created_date
                 "registration_date": registration_date,
-                "patient_id": pid,
+                "patient_id": eid,
                 "patient_name": patient_detail.get("employee_name", "N/A"),
                 "gender": patient_detail.get("gender", "N/A"),
                 "age": age,
@@ -1173,14 +1111,13 @@ def corporate_overall_report(request):
                 "department_statuses": department_statuses,
                 "test_statuses": individual_test_statuses,
                 "no_of_tests": no_of_tests,
-                "barcode": barcode,
+                "barcode": bc,
                 "status": status,
                 "test_created_date": test_created_date_formatted,
                 "collection_time": collection_time_val,
                 "collected_date": collected_date_val,
-                # ── NEW CHC fields ─────────────────────────────────────────────
                 "chc_tests": chc_tests_with_status,
-                "chc_investigation_status": chc_overall,   # "All Approved" | "Partial" | "Pending" | "No CHC Tests"
+                "chc_investigation_status": chc_overall,
                 "chc_pending_tests": chc_pending,
                 "chc_approved_tests": chc_approved,
             })
@@ -1192,7 +1129,6 @@ def corporate_overall_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
-
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
@@ -1612,7 +1548,7 @@ def corporate_approval_report(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
         patients_collection = db.core_billing
-        sample_status_colletion = db.core_sample
+        sample_status_collection = db.core_sample
         franchise_patient_collection = db.core_employeeregistration
         overall_approval_collection = db.overallApproval
         investigation_collection = db.core_investigation
@@ -1632,112 +1568,131 @@ def corporate_approval_report(request):
         except ValueError:
             return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-        query = {}
-        if employee_id:
-            query["employee_id"] = employee_id
+        # ── STEP 1: Query core_sample first by date ───────────────────────────
+        sample_query = {}
         if from_date and to_date:
-            query["created_date"] = {"$gte": from_date, "$lt": to_date}
+            sample_query["date"] = {"$gte": from_date, "$lt": to_date}
         elif from_date:
-            query["created_date"] = {"$gte": from_date}
+            sample_query["date"] = {"$gte": from_date}
         elif to_date:
-            query["created_date"] = {"$lt": to_date}
+            sample_query["date"] = {"$lt": to_date}
 
-        patients = list(patients_collection.find(query))
-        if not patients:
+        sample_records = list(sample_status_collection.find(sample_query))
+        print(f"Found {len(sample_records)} core_sample records")
+
+        if not sample_records:
             return JsonResponse([], safe=False)
 
-        employee_ids = [p.get("employee_id") for p in patients if p.get("employee_id")]
-        barcodes = [p.get("barcode") for p in patients if p.get("barcode")]
+        # ── STEP 2: Extract barcodes from sample records ──────────────────────
+        barcodes = list(set(r.get("barcode") for r in sample_records if r.get("barcode")))
+        print(f"Barcodes from core_sample: {barcodes}")
 
-        # ── Employee detail map ───────────────────────────────────────────────
+        # Build sample date map and testdetails map by barcode
+        sample_date_by_barcode = {}
+        sample_testdetails_by_barcode = {}
+
+        for record in sample_records:
+            bc = record.get("barcode")
+            if not bc:
+                continue
+
+            # sample date
+            date_val = record.get("date")
+            if date_val:
+                if isinstance(date_val, datetime):
+                    sample_date_by_barcode[bc] = date_val.strftime("%Y-%m-%d")
+                else:
+                    try:
+                        sample_date_by_barcode[bc] = datetime.strptime(
+                            str(date_val), "%Y-%m-%d %H:%M:%S"
+                        ).strftime("%Y-%m-%d")
+                    except Exception:
+                        sample_date_by_barcode[bc] = str(date_val)
+
+            # testdetails
+            testdetails = record.get("testdetails")
+            if testdetails:
+                parsed = []
+                if isinstance(testdetails, str):
+                    try:
+                        parsed = json.loads(testdetails)
+                    except json.JSONDecodeError:
+                        parsed = []
+                elif isinstance(testdetails, list):
+                    parsed = testdetails
+
+                # Enrich with test names from core_testdetails
+                enriched = []
+                for test in parsed:
+                    if isinstance(test, dict):
+                        test_id = test.get("test_id")
+                        if test_id:
+                            core_test = core_testdetails_collection.find_one({"test_id": test_id})
+                            if core_test:
+                                test["testname"] = core_test.get("test_name", test.get("testname", ""))
+                        enriched.append(test)
+
+                if enriched:
+                    sample_testdetails_by_barcode[bc] = enriched
+
+        # ── STEP 3: Get billing records using barcodes ────────────────────────
+        billing_query = {"barcode": {"$in": barcodes}}
+        if employee_id:
+            billing_query["employee_id"] = employee_id
+
+        billing_records = list(patients_collection.find(billing_query))
+        print(f"Found {len(billing_records)} billing records")
+
+        if not billing_records:
+            return JsonResponse([], safe=False)
+
+        # Build barcode → billing and barcode → employee_id maps
+        barcode_to_billing = {}
+        barcode_to_employee_id = {}
+        employee_ids = []
+
+        for bill in billing_records:
+            bc = bill.get("barcode")
+            eid = bill.get("employee_id")
+            if bc:
+                barcode_to_billing[bc] = bill
+            if bc and eid:
+                barcode_to_employee_id[bc] = eid
+                employee_ids.append(eid)
+
+        employee_ids = list(set(employee_ids))
+
+        # ── STEP 4: Get patient details using employee_ids ────────────────────
         patient_details_map = {}
         if employee_ids:
-            patient_details = franchise_patient_collection.find({"employee_id": {"$in": employee_ids}})
-            for patient_detail in patient_details:
-                patient_details_map[patient_detail.get("employee_id")] = patient_detail
+            for pd in franchise_patient_collection.find({"employee_id": {"$in": employee_ids}}):
+                patient_details_map[pd.get("employee_id")] = pd
 
-        # ── Overall approval map ──────────────────────────────────────────────
+        print(f"Fetched {len(patient_details_map)} patient detail records")
+
+        # ── STEP 5: Overall approval map ──────────────────────────────────────
         approval_status_map = {}
-        if barcodes:
-            approval_records = overall_approval_collection.find({"barcode": {"$in": barcodes}})
-            for approval in approval_records:
-                bc = approval.get("barcode")
-                if bc:
-                    approval_status_map[bc] = {
-                        "status": approval.get("status", "approved"),
-                        "approved_date": approval.get("approved_date"),
-                        "impression": approval.get("impression"),
-                        "remarks": approval.get("remarks")
-                    }
+        approval_records = overall_approval_collection.find({"barcode": {"$in": barcodes}})
+        for approval in approval_records:
+            bc = approval.get("barcode")
+            if bc:
+                approval_status_map[bc] = {
+                    "status": approval.get("status", "approved"),
+                    "approved_date": approval.get("approved_date"),
+                    "impression": approval.get("impression"),
+                    "remarks": approval.get("remarks"),
+                }
 
-        # ── Sample status records ─────────────────────────────────────────────
-        sample_status_records = []
-        if barcodes:
-            sample_status_records = list(sample_status_colletion.find({"barcode": {"$in": barcodes}}))
-
-        sample_status_list = []
-        for record in sample_status_records:
-            if record and isinstance(record, dict):
-                bc = record.get("barcode")
-                testdetails = record.get("testdetails")
-                if bc and testdetails:
-                    sample_status_list.append({"barcode": bc, "testdetails": testdetails})
-
-        # ── barcode → employee_id map ─────────────────────────────────────────
-        barcode_to_patient_map = {}
-        for patient in patients:
-            if patient.get("barcode") and patient.get("employee_id"):
-                barcode_to_patient_map[patient.get("barcode")] = patient.get("employee_id")
-
-        # ── Build sample_status_map with enriched test names ──────────────────
-        sample_status_map = {}
-        for record in sample_status_list:
-            if record and isinstance(record, dict):
-                bc = record.get("barcode")
-                testdetails = record.get("testdetails")
-                if bc and bc in barcode_to_patient_map and testdetails:
-                    employee_id_key = barcode_to_patient_map[bc]
-                    parsed_testdetails = []
-                    if isinstance(testdetails, str):
-                        try:
-                            parsed_testdetails = json.loads(testdetails)
-                        except json.JSONDecodeError:
-                            parsed_testdetails = []
-                    elif isinstance(testdetails, list):
-                        parsed_testdetails = testdetails
-
-                    enriched_testdetails = []
-                    for test in parsed_testdetails:
-                        if isinstance(test, dict):
-                            test_id = test.get("test_id")
-                            if test_id:
-                                core_test = core_testdetails_collection.find_one({"test_id": test_id})
-                                if core_test:
-                                    test["testname"] = core_test.get("test_name", test.get("testname", ""))
-                            enriched_testdetails.append(test)
-
-                    if enriched_testdetails:
-                        sample_status_map.setdefault(employee_id_key, []).extend(enriched_testdetails)
-
-        # ── Fetch investigation records and build CHC status map ──────────────
-        investigation_records = []
-        if barcodes:
-            investigation_records = list(investigation_collection.find({"barcode": {"$in": barcodes}}))
-
+        # ── STEP 6: Investigation records ─────────────────────────────────────
+        investigation_records = list(investigation_collection.find({"barcode": {"$in": barcodes}}))
         chc_status_by_barcode = _build_chc_status_from_investigation(investigation_records)
 
-        # ── Build investigation status map by barcode ──────────────────────────
         investigation_status_by_barcode = {}
-        for inv in investigation_records:
-            inv_bc = str(inv.get("barcode", ""))
-            if inv_bc:
-                investigation_status_by_barcode[inv_bc] = inv.get("status", "").strip().lower()
-
-        # ── Build vitals map by barcode (already have investigation_records) ──────────
         vitals_by_barcode = {}
         for inv in investigation_records:
             inv_bc = str(inv.get("barcode", ""))
             if inv_bc:
+                investigation_status_by_barcode[inv_bc] = inv.get("status", "").strip().lower()
                 raw = inv.get("vitals", {})
                 if isinstance(raw, str):
                     try:
@@ -1746,7 +1701,7 @@ def corporate_approval_report(request):
                         raw = {}
                 vitals_by_barcode[inv_bc] = raw
 
-        # ── Bulk-fetch TestValue records for all barcodes ─────────────────────
+        # ── STEP 7: Bulk-fetch TestValue records ──────────────────────────────
         lab_tests_by_barcode = {}
         for record in TestValue.objects.filter(barcode__in=barcodes):
             bc = str(record.barcode)
@@ -1755,24 +1710,25 @@ def corporate_approval_report(request):
             if isinstance(parsed, list):
                 lab_tests_by_barcode.setdefault(bc, []).extend(parsed)
 
-        # ── Build formatted_data ──────────────────────────────────────────────
+        # ── STEP 8: Build response — iterate over barcodes from core_sample ───
         formatted_data = []
-        for patient in patients:
-            if not isinstance(patient, dict):
-                print(f"Warning: Patient record is not a dict: {type(patient)}")
-                continue
 
-            pid = patient.get("employee_id", "N/A")
-            bc = patient.get("barcode")
-            patient_detail = patient_details_map.get(pid, {})
+        for bc in barcodes:
+            billing = barcode_to_billing.get(bc)
+            if not billing:
+                continue  # no billing record for this barcode, skip
+
+            eid = barcode_to_employee_id.get(bc, "N/A")
+            patient_detail = patient_details_map.get(eid, {})
             if not isinstance(patient_detail, dict):
                 patient_detail = {}
 
-            # ── 1. sample_tests and no_of_tests ──────────────────────────────
-            sample_tests = sample_status_map.get(pid, [])
+            sample_tests = sample_testdetails_by_barcode.get(bc, [])
+            sample_date = sample_date_by_barcode.get(bc, "N/A")
+
             testnames = ", ".join([
-                test.get("testname", "") if isinstance(test, dict) else str(test)
-                for test in sample_tests
+                t.get("testname", "") if isinstance(t, dict) else str(t)
+                for t in sample_tests
             ])
             no_of_tests = len(sample_tests)
 
@@ -1780,8 +1736,8 @@ def corporate_approval_report(request):
             age_type = patient_detail.get("age_type", "")
             age = f"{age_value} {age_type}" if age_type else str(age_value)
 
-            # ── 2. Parse chctestdetails from billing ──────────────────────────
-            chc_raw = patient.get("chctestdetails", "[]")
+            # CHC tests from billing
+            chc_raw = billing.get("chctestdetails", "[]")
             chc_tests = []
             if isinstance(chc_raw, str):
                 try:
@@ -1791,9 +1747,7 @@ def corporate_approval_report(request):
             elif isinstance(chc_raw, list):
                 chc_tests = chc_raw
 
-            # ── 3. Per-test CHC status for this barcode ───────────────────────
             chc_status_map_for_barcode = chc_status_by_barcode.get(str(bc), {})
-
             chc_tests_with_status = []
             for ct in chc_tests:
                 tid = str(ct.get("test_id", ""))
@@ -1813,12 +1767,10 @@ def corporate_approval_report(request):
                 chc_tests, chc_status_map_for_barcode
             )
 
-            # ── 4. Lab test values and investigation status for this barcode ──
             raw_lab_tests = lab_tests_by_barcode.get(str(bc), [])
             investigation_status = investigation_status_by_barcode.get(str(bc), "")
             vitals = vitals_by_barcode.get(str(bc), {})
 
-            # ── 5. Compute final approval status ──────────────────────────────
             status = _compute_corporate_approval_status(
                 bc=bc,
                 approval_status_map=approval_status_map,
@@ -1826,25 +1778,26 @@ def corporate_approval_report(request):
                 lab_test_values=raw_lab_tests,
                 no_of_tests=no_of_tests,
                 investigation_status=investigation_status,
-                vitals=vitals, 
+                vitals=vitals,
             )
 
-            created_date = patient.get("created_date")
+            # Billing created_date
+            created_date = billing.get("created_date")
+            formatted_date = "N/A"
             if created_date:
                 if isinstance(created_date, datetime):
                     formatted_date = created_date.strftime("%Y-%m-%d")
                 else:
                     try:
-                        parsed_date = datetime.strptime(str(created_date), "%Y-%m-%d")
-                        formatted_date = parsed_date.strftime("%Y-%m-%d")
+                        formatted_date = datetime.strptime(
+                            str(created_date), "%Y-%m-%d"
+                        ).strftime("%Y-%m-%d")
                     except Exception:
                         formatted_date = str(created_date)
-            else:
-                formatted_date = "N/A"
 
-            formatted_data.append({
-                "date": formatted_date,
-                "patient_id": pid,
+            formatted_data.append({        # ← from core_sample.date
+                "date": sample_date,               # ← from billing.created_date
+                "patient_id": eid,
                 "patient_name": patient_detail.get("employee_name", "N/A"),
                 "gender": patient_detail.get("gender", "N/A"),
                 "age": age,
@@ -1854,7 +1807,6 @@ def corporate_approval_report(request):
                 "no_of_tests": no_of_tests,
                 "barcode": bc,
                 "status": status,
-                # ── CHC fields ─────────────────────────────────────────────────
                 "chc_tests": chc_tests_with_status,
                 "chc_investigation_status": chc_overall,
                 "chc_pending_tests": chc_pending,
@@ -1868,7 +1820,6 @@ def corporate_approval_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
-
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
