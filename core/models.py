@@ -231,16 +231,23 @@ class Logistics(AuditModel):
     
 
 class SampleCollectorLocation(models.Model):
+    location_id = models.IntegerField(primary_key=True)
     sampleCollector = models.CharField(max_length=255)
     date = models.DateField()
     startTime = models.DateTimeField(null=True, blank=True)
     endTime = models.DateTimeField(null=True, blank=True)
+    is_location_active = models.IntegerField(default=1) # 1 = Active, 0 = Inactive
     location_history = models.JSONField(default=list, blank=True)  # To store multiple points as a list
     distance_travelled = models.CharField(max_length=255, null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if self.location_id is None:
+            last = SampleCollectorLocation.objects.order_by('-location_id').first()
+            self.location_id = (last.location_id + 1) if last else 1
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.sampleCollector} - {self.date}"
-    class Meta:
-        unique_together = ('sampleCollector', 'date')
+        return f"{self.sampleCollector} - {self.date} - ID: {self.location_id}"
 
 #HMS PART
 class HmspatientBilling(AuditModel):

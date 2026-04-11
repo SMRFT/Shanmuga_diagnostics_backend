@@ -67,8 +67,6 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/logistics-tat-report/?(\?.*)?$': 'SD-P-LTR',
     r'^/_b_a_c_k_e_n_d/LIS/logistics(/.*)?/?(\?.*)?$': 'SD-P-LTM',
     '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
-    '/_b_a_c_k_e_n_d/LIS/collector-route-stats/': 'SD-P-LSR',
-
 
     #Sample Status: 
     r'^/_b_a_c_k_e_n_d/LIS/sample_patient/?(\?.*)?$':'SD-P-SS',
