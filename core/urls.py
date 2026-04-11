@@ -78,7 +78,6 @@ urlpatterns = [
     path('logistics-dashboard/', logistic.logistics_dashboard, name='logistics_dashboard'),
     path('logistics-tat-report/', logistic.logistics_tat_report, name='logistics_tat_report'),
     path('sample-collector-location/', location.sample_collector_location, name='sample_collector_location'),
-    # path('collector-route-stats/', location.collector_route_stats, name='collector_route_stats'),
 
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),

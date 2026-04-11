@@ -23,6 +23,53 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     r = 6371000
     return c * r
 
+def get_route(item):
+    if not item or not item.location_history:
+        return []
+    if isinstance(item.location_history, str):
+        try:
+            return json.loads(item.location_history)
+        except json.JSONDecodeError:
+            return []
+    elif isinstance(item.location_history, list):
+        return item.location_history
+    return []
+
+def format_location_response(item):
+    route = get_route(item)
+    lat_start = route[0].get("lat") if route else None
+    lng_start = route[0].get("lng") if route else None
+    lat_end = route[-1].get("lat") if route and item.endTime else None
+    lng_end = route[-1].get("lng") if route and item.endTime else None
+    curr_lat = route[-1].get("lat") if route else lat_start
+    curr_lng = route[-1].get("lng") if route else lng_start
+    last_val_time = route[-1].get("timestamp") if route else None
+
+    # Calculate total duration in seconds if both start and end exist
+    total_duration = None
+    if item.startTime and item.endTime:
+        duration = (item.endTime - item.startTime).total_seconds()
+        total_duration = str(duration)
+
+    return {
+        "id": str(item.location_id),
+        "sampleCollector": item.sampleCollector,
+        "date": item.date.isoformat() if item.date else None,
+        "latitudeStart": lat_start,
+        "longitudeStart": lng_start,
+        "latitudeEnd": lat_end,
+        "longitudeEnd": lng_end,
+        "currentLatitude": curr_lat,
+        "currentLongitude": curr_lng,
+        "distance_travelled": item.distance_travelled or "0.00",
+        "startTime": item.startTime.isoformat() if item.startTime else None,
+        "endTime": item.endTime.isoformat() if item.endTime else None,
+        "totalDuration": total_duration,
+        "isActive": getattr(item, 'is_location_active', 0) == 1 if hasattr(item, 'is_location_active') else bool(item.startTime and not item.endTime),
+        "lastUpdated": last_val_time or (item.startTime.isoformat() if item.startTime else timezone.now().isoformat()),
+        "routePoints": route
+    }
+
 
 @api_view(['GET', 'POST', 'PUT'])
 @csrf_exempt
@@ -41,29 +88,7 @@ def sample_collector_location(request):
             # ---------------------------
             if not date and not sample_collector:
                 all_data = SampleCollectorLocation.objects.all().order_by('-date', '-startTime')
-                response = []
-
-                for item in all_data:
-                    route = item.location_history or []
-
-                    response.append({
-                        "id": str(item.id),
-                        "sampleCollector": item.sampleCollector,
-                        "date": item.date.isoformat() if item.date else None,
-                        "latitudeStart": item.latitudeStart,
-                        "longitudeStart": item.longitudeStart,
-                        "latitudeEnd": item.latitudeEnd,
-                        "longitudeEnd": item.longitudeEnd,
-                        "currentLatitude": route[-1]["lat"] if route else item.latitudeStart,
-                        "currentLongitude": route[-1]["lng"] if route else item.longitudeStart,
-                        "distance_travelled": item.distance_travelled or "0.00",
-                        "startTime": item.startTime.isoformat() if item.startTime else None,
-                        "endTime": item.endTime.isoformat() if item.endTime else None,
-                        "isActive": bool(item.latitudeStart and not item.latitudeEnd),
-                        "lastUpdated": item.startTime.isoformat() if item.startTime else timezone.now().isoformat(),
-                        "routePoints": route
-                    })
-
+                response = [format_location_response(item) for item in all_data]
                 return JsonResponse(response, safe=False)
 
             # ---------------------------
@@ -72,51 +97,29 @@ def sample_collector_location(request):
             if date and not sample_collector:
                 date_obj = datetime.strptime(date, "%Y-%m-%d").date()
                 records = SampleCollectorLocation.objects.filter(date=date_obj).order_by('-startTime')
-
-                response = []
-                for item in records:
-                    route = item.location_history or []
-                    response.append({
-                        "id": str(item.id),
-                        "sampleCollector": item.sampleCollector,
-                        "date": item.date.isoformat(),
-                        "latitudeStart": item.latitudeStart,
-                        "longitudeStart": item.longitudeStart,
-                        "latitudeEnd": item.latitudeEnd,
-                        "longitudeEnd": item.longitudeEnd,
-                        "currentLatitude": route[-1]["lat"] if route else item.latitudeStart,
-                        "currentLongitude": route[-1]["lng"] if route else item.longitudeStart,
-                        "distance_travelled": item.distance_travelled or "0.00",
-                        "startTime": item.startTime.isoformat(),
-                        "endTime": item.endTime.isoformat() if item.endTime else None,
-                        "isActive": bool(item.latitudeStart and not item.latitudeEnd),
-                        "routePoints": route
-                    })
+                response = [format_location_response(item) for item in records]
                 return JsonResponse(response, safe=False)
 
             # ---------------------------
             # GET BY DATE + COLLECTOR
             # ---------------------------
             date_obj = datetime.strptime(date, "%Y-%m-%d").date()
-            item = SampleCollectorLocation.objects.get(sampleCollector=sample_collector, date=date_obj)
+            
+            # Check for any active global tracking session first
+            active_items = SampleCollectorLocation.objects.filter(
+                sampleCollector=sample_collector, 
+                is_location_active=1
+            ).order_by('location_id')
+            if active_items.exists():
+                return JsonResponse([format_location_response(active_items.last())], safe=False)
 
-            route = item.location_history or []
-            return JsonResponse([{
-                "id": str(item.id),
-                "sampleCollector": item.sampleCollector,
-                "date": item.date.isoformat(),
-                "latitudeStart": item.latitudeStart,
-                "longitudeStart": item.longitudeStart,
-                "latitudeEnd": item.latitudeEnd,
-                "longitudeEnd": item.longitudeEnd,
-                "currentLatitude": route[-1]["lat"] if route else item.latitudeStart,
-                "currentLongitude": route[-1]["lng"] if route else item.longitudeStart,
-                "distance_travelled": item.distance_travelled or "0.00",
-                "startTime": item.startTime.isoformat(),
-                "endTime": item.endTime.isoformat() if item.endTime else None,
-                "isActive": bool(item.latitudeStart and not item.latitudeEnd),
-                "routePoints": route
-            }], safe=False)
+            # Fallback to fetching today's last tracking session history
+            items = SampleCollectorLocation.objects.filter(sampleCollector=sample_collector, date=date_obj).order_by('location_id')
+            if items.exists():
+                item = items.last()
+                return JsonResponse([format_location_response(item)], safe=False)
+            else:
+                return JsonResponse([], safe=False)
 
         except SampleCollectorLocation.DoesNotExist:
             return JsonResponse([], safe=False)
@@ -138,29 +141,27 @@ def sample_collector_location(request):
 
             date_obj = datetime.strptime(date, "%Y-%m-%d").date()
 
-            location, created = SampleCollectorLocation.objects.update_or_create(
+            new_history = [{
+                "lat": lat,
+                "lng": lng,
+                "timestamp": timezone.now().isoformat()
+            }]
+
+            # Always create a new document. A collector can have multiple trips per day.
+            location = SampleCollectorLocation.objects.create(
                 sampleCollector=sample_collector,
                 date=date_obj,
-                defaults={
-                    "latitudeStart": lat,
-                    "longitudeStart": lng,
-                    "startTime": timezone.now(),
-                    "latitudeEnd": None,
-                    "longitudeEnd": None,
-                    "endTime": None,
-                    "distance_travelled": None,
-                    "location_history": [{
-                        "lat": lat,
-                        "lng": lng,
-                        "timestamp": timezone.now().isoformat()
-                    }]
-                }
+                startTime=timezone.now(),
+                endTime=None,
+                is_location_active=1,
+                distance_travelled=None,
+                location_history=new_history
             )
 
             return JsonResponse({
                 "success": True,
                 "message": "Tracking started",
-                "data": {"id": str(location.id)}
+                "data": {"id": str(location.location_id)}
             })
 
         except Exception as e:
@@ -176,11 +177,17 @@ def sample_collector_location(request):
             sample_collector = data.get("sampleCollector")
             date = data.get("date")
 
-            date_obj = datetime.strptime(date, "%Y-%m-%d").date()
-
-            item = SampleCollectorLocation.objects.get(sampleCollector=sample_collector, date=date_obj)
-
-            route = item.location_history or []
+            # Global lookup for active location, bypassing strict date_obj mapping for midnight crossover
+            items = SampleCollectorLocation.objects.filter(
+                sampleCollector=sample_collector, 
+                is_location_active=1
+            ).order_by('location_id')
+            
+            if not items.exists():
+                return JsonResponse({"success": False, "message": "No active tracking"}, status=404)
+            
+            item = items.last()
+            route = get_route(item)
 
             # ------------------------------------------------
             # END TRACKING
@@ -199,21 +206,25 @@ def sample_collector_location(request):
                 total = 0
                 for i in range(1, len(route)):
                     total += calculate_distance(
-                        route[i-1]["lat"], route[i-1]["lng"],
-                        route[i]["lat"], route[i]["lng"]
+                        route[i-1].get("lat", 0), route[i-1].get("lng", 0),
+                        route[i].get("lat", 0), route[i].get("lng", 0)
                     )
 
-                item.latitudeEnd = end_lat
-                item.longitudeEnd = end_lng
+                total_distance = f"{total:.2f}"
                 item.endTime = timezone.now()
-                item.distance_travelled = f"{total:.2f}"
-                item.location_history = route
-                item.save()
+                item.distance_travelled = total_distance
+                
+                SampleCollectorLocation.objects.filter(location_id=item.location_id).update(
+                    endTime=timezone.now(),
+                    is_location_active=0,
+                    distance_travelled=total_distance,
+                    location_history=json.dumps(route) if isinstance(item.location_history, str) else route
+                )
 
                 return JsonResponse({
                     "success": True,
                     "message": "Tracking ended",
-                    "distance": item.distance_travelled
+                    "distance": total_distance
                 })
 
             # ------------------------------------------------
@@ -229,8 +240,9 @@ def sample_collector_location(request):
                     "timestamp": timezone.now().isoformat()
                 })
 
-                item.location_history = route
-                item.save()
+                SampleCollectorLocation.objects.filter(location_id=item.location_id).update(
+                    location_history=json.dumps(route) if isinstance(item.location_history, str) else route
+                )
 
                 return JsonResponse({"success": True, "message": "Location updated"})
 
@@ -251,19 +263,25 @@ def get_active_collectors(request):
         today = datetime.now().date()
         active_collectors = SampleCollectorLocation.objects.filter(
             date=today,
-            isActive=True
-        ).values(
-            'sampleCollector',
-            'currentLatitude',
-            'currentLongitude',
-            'startTime',
-            'lastUpdated',
-            'distance_travelled'
+            endTime__isnull=True,
+            startTime__isnull=False
         )
         
+        data_list = []
+        for item in active_collectors:
+            resp = format_location_response(item)
+            data_list.append({
+                'sampleCollector': resp['sampleCollector'],
+                'currentLatitude': resp['currentLatitude'],
+                'currentLongitude': resp['currentLongitude'],
+                'startTime': resp['startTime'],
+                'lastUpdated': resp['lastUpdated'],
+                'distance_travelled': resp['distance_travelled']
+            })
+            
         return JsonResponse({
             'success': True,
-            'data': list(active_collectors)
+            'data': data_list
         })
         
     except Exception as e:
@@ -288,29 +306,21 @@ def get_collector_route(request):
         try:
             date_obj = datetime.strptime(date, '%Y-%m-%d').date()
             
-            location_data = SampleCollectorLocation.objects.get(
+            items = SampleCollectorLocation.objects.filter(
                 sampleCollector=sample_collector,
                 date=date_obj
             )
             
-            route_points = []
-            if location_data.routePoints:
-                try:
-                    route_points = json.loads(location_data.routePoints)
-                except json.JSONDecodeError:
-                    route_points = []
-            
-            return JsonResponse({
-                'success': True,
-                'data': {
-                    'sampleCollector': location_data.sampleCollector,
-                    'date': location_data.date,
-                    'routePoints': route_points,
-                    'distance_travelled': location_data.distance_travelled,
-                    'totalDuration': location_data.totalDuration,
-                    'isActive': location_data.isActive
-                }
-            })
+            if items.exists():
+                return JsonResponse({
+                    'success': True,
+                    'data': format_location_response(items.last())
+                })
+            else:
+                return JsonResponse({
+                    'success': False,
+                    'message': 'No route data found for the specified collector and date'
+                })
             
         except ValueError:
             return JsonResponse({
@@ -335,43 +345,15 @@ def get_live_tracking_data(request):
     try:
         today = datetime.now().date()
         
-        # Get all location data for today
+        # Get all location data for today ordered by startTime desc
         today_data = SampleCollectorLocation.objects.filter(
             date=today
-        ).order_by('-lastUpdated')
+        ).order_by('-startTime')
         
         response_data = {
             'success': True,
-            'data': []
+            'data': [format_location_response(item) for item in today_data]
         }
-        
-        for location_data in today_data:
-            # Parse route points if available
-            route_points = []
-            if location_data.routePoints:
-                try:
-                    route_points = json.loads(location_data.routePoints)
-                except json.JSONDecodeError:
-                    route_points = []
-            
-            response_data['data'].append({
-                'id': location_data.id,
-                'sampleCollector': location_data.sampleCollector,
-                'date': location_data.date,
-                'latitudeStart': location_data.latitudeStart,
-                'longitudeStart': location_data.longitudeStart,
-                'latitudeEnd': location_data.latitudeEnd,
-                'longitudeEnd': location_data.longitudeEnd,
-                'currentLatitude': location_data.currentLatitude,
-                'currentLongitude': location_data.currentLongitude,
-                'distance_travelled': location_data.distance_travelled or "0.00",
-                'startTime': location_data.startTime.isoformat() if location_data.startTime else None,
-                'endTime': location_data.endTime.isoformat() if location_data.endTime else None,
-                'totalDuration': location_data.totalDuration,
-                'isActive': location_data.isActive,
-                'lastUpdated': location_data.lastUpdated.isoformat(),
-                'routePoints': route_points
-            })
         
         return JsonResponse(response_data)
         
