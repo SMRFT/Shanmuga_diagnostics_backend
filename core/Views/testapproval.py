@@ -1135,11 +1135,13 @@ def edit_test_value(request, barcode):
         created_date_str = data.get("created_date")
         test_id = data.get("test_id")
         new_value = data.get("new_value")
+        new_status  = data.get("new_status")
+        new_comment = data.get("new_comment")
         history_entry = data.get("history_entry")  # {old_value, edited_by, reason, edited_at}
         param_index = data.get("param_index")       # None for test-level, int for parameter
 
-        if not (barcode and created_date_str and test_id and new_value and history_entry):
-            return JsonResponse({"error": "barcode, created_date, test_id, new_value, history_entry required"}, status=400)
+        if not (barcode and created_date_str and test_id and (new_value or new_status or new_comment) and history_entry):
+            return JsonResponse({"error": "barcode, created_date, test_id, and at least one of new_value, new_status, or new_comment are required"}, status=400)
 
         created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
@@ -1159,21 +1161,29 @@ def edit_test_value(request, barcode):
     for detail in test_details:
         if detail.get("test_id") == test_id:
             if param_index is not None:
-                # Edit a specific parameter value
                 params = detail.get("parameters", [])
                 if not (0 <= param_index < len(params)):
                     return JsonResponse({"error": "Invalid param_index."}, status=400)
                 if "history" not in params[param_index]:
                     params[param_index]["history"] = []
                 params[param_index]["history"].insert(0, history_entry)
-                params[param_index]["value"] = new_value
+                if new_value is not None:
+                    params[param_index]["value"] = new_value
+                if new_status is not None:
+                    params[param_index]["status"] = new_status
+                if new_comment is not None:              # ← add this
+                    params[param_index]["comment"] = new_comment
                 detail["parameters"] = params
             else:
-                # Edit the test-level value
                 if "history" not in detail:
                     detail["history"] = []
                 detail["history"].insert(0, history_entry)
-                detail["value"] = new_value
+                if new_value is not None:
+                    detail["value"] = new_value
+                if new_status is not None:
+                    detail["status"] = new_status
+                if new_comment is not None:              # ← add this
+                    detail["comment"] = new_comment
             test_found = True
             break
 
