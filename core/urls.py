@@ -75,9 +75,11 @@ urlpatterns = [
     path('logistics/accept/<int:task_id>/', logistic.accept_task, name='accept_task'),
     path('logistics/reject/<int:task_id>/', logistic.reject_task, name='reject_task'),
     path('logistics/pickup/<int:task_id>/', logistic.pickup_task, name='pickup_task'),
+    path('logistics/reassign/<int:task_id>/', logistic.reassign_task, name='reassign_task'),
     path('logistics-dashboard/', logistic.logistics_dashboard, name='logistics_dashboard'),
     path('logistics-tat-report/', logistic.logistics_tat_report, name='logistics_tat_report'),
     path('sample-collector-location/', location.sample_collector_location, name='sample_collector_location'),
+    path('sample-collector-location-history/', location.sample_collector_location_history, name='sample_collector_location_history'),
 
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),

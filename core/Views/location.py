@@ -362,3 +362,38 @@ def get_live_tracking_data(request):
             'success': False,
             'message': f'Error retrieving live tracking data: {str(e)}'
         }, status=500)
+
+
+@api_view(['GET'])
+@csrf_exempt
+def sample_collector_location_history(request):
+    """
+    GET endpoint for admin tracking history with date-range and collector filters.
+    Query params: from_date, to_date (YYYY-MM-DD), sampleCollector (optional)
+    """
+    try:
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
+        sample_collector = request.GET.get('sampleCollector')
+
+        if not from_date or not to_date:
+            return JsonResponse({"error": "from_date and to_date are required"}, status=400)
+
+        from_date_obj = datetime.strptime(from_date, "%Y-%m-%d").date()
+        to_date_obj = datetime.strptime(to_date, "%Y-%m-%d").date()
+
+        qs = SampleCollectorLocation.objects.filter(
+            date__gte=from_date_obj,
+            date__lte=to_date_obj
+        )
+
+        if sample_collector:
+            qs = qs.filter(sampleCollector=sample_collector)
+
+        qs = qs.order_by('-date', '-startTime')
+
+        response = [format_location_response(item) for item in qs]
+        return JsonResponse(response, safe=False)
+
+    except Exception as e:
+        return JsonResponse({"success": False, "message": str(e)}, status=500)

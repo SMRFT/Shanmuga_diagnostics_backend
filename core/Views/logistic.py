@@ -229,6 +229,54 @@ def pickup_task(request, task_id):
     except Logistics.DoesNotExist:
         return Response({'error': 'Task not found'}, status=status.HTTP_404_NOT_FOUND)
 
+
+@api_view(['PATCH'])
+@permission_classes([HasRoleAndDataPermission])
+def reassign_task(request, task_id):
+    """
+    PATCH endpoint for Admin to reassign a rejected task.
+    Takes new_collector in request data.
+    """
+    try:
+        task = Logistics.objects.get(task_id=task_id)
+        employee_id = request.headers.get("auth-user-id")
+        new_collector = request.data.get('new_collector', '').strip()
+
+        if not new_collector:
+            return Response(
+                {'error': 'New sample collector name is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Logic: If it was rejected, we clear the rejected mark or just overwrite.
+        # User said "If Rejected status...". We'll allow reassigning even if not rejected?
+        # Usually it's for rejected ones.
+        
+        task.sample_collector = new_collector
+        task.reassigned_to = new_collector
+        task.status = 'Assigned'
+        
+        # Reset times for the new collector
+        task.sampleacceptedtime = None
+        task.samplepickeduptime = None
+        
+        # Optionally update remarks to indicate reassignment
+        old_remarks = task.remarks or ""
+        task.remarks = f"{old_remarks}\n(Reassigned to {new_collector} by {employee_id})".strip()
+
+        task.lastmodified_by = employee_id
+        task.lastmodified_date = timezone.now()
+        task.save()
+
+        return Response(
+            {'message': 'Task reassigned successfully', 'data': LogisticsSerializer(task).data},
+            status=status.HTTP_200_OK
+        )
+
+    except Logistics.DoesNotExist:
+        return Response({'error': 'Task not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
     
 
 @api_view(['GET'])
