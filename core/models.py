@@ -222,6 +222,7 @@ class Logistics(AuditModel):
     samplepickeduptime = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=255, blank=True, null=True)
     remarks = models.TextField(blank=True, null=True)
+    reassigned_to = models.CharField(max_length=255, blank=True, null=True)
 
     def save(self, *args, **kwargs):
         if self.task_id is None:
