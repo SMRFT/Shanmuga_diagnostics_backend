@@ -410,7 +410,7 @@ class HMSConsolidatedDataView(APIView):
             barcode_records = list(
                 Hmsbarcode.objects.filter(
                     date__gte=from_date_ist,
-                    date__lte=to_date_ist + timedelta(days=1)
+                    date__lte=to_date_ist
                 ).order_by('-date', 'barcode')
             )
             
@@ -696,6 +696,7 @@ class HMSConsolidatedDataView(APIView):
             return Response({
                 "error": str(e)
             }, status=500)
+
 
 @permission_classes([HasRoleAndDataPermission])
 class FranchiseConsolidatedDataView(APIView):
