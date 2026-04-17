@@ -60,7 +60,6 @@ urlpatterns = [
     path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
     path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
     path('salesexecutive_report/', sales.Adminview_salesexecutive_report, name='salesexecutive_report'),
-    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
     path('clinical-names/', clinicalname.ClinicalNameViewSet.as_view({'get': 'list'}), name='clinical-names-list'),
@@ -126,7 +125,8 @@ urlpatterns = [
     #Diagnostics Reports:
     path('overall_report/', report.overall_report, name='overall_report'),    
     path('patient_test_sorting/', report.patient_test_sorting, name='patient_test_sorting'),
-    path('get_patient_test_details/', report.get_patient_test_details, name='get_patient_test_details'),
+    path('get_patient_test_details/', report.get_patient_test_details, name='get_patient_test_details'),    
+    path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
 
     #Invoice URLs
     path("generate-invoice/", generate_invoice, name="generate-invoice"),
@@ -172,7 +172,6 @@ urlpatterns = [
     #HMS Report:
     path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
     path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_hms_patient_test_details'),
-    path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
     path("test-summary/", dashboard.test_summary, name="test-summary"),
     path("m-dashboard-stats/", m_dashboard.m_dashboard_stats, name="m_dashboard_stats"),
     
@@ -224,7 +223,6 @@ urlpatterns = [
     #HMS Report:
     path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
     path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_hms_patient_test_details'),
-    path('hms_update_dispatch_status/<str:barcode>/', hmsreport.hms_update_dispatch_status, name='update_dispatch_status'),
 
     #MIS:
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),

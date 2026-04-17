@@ -278,6 +278,10 @@ def get_samplestatus_testvalue(request):
                 age = "Unknown"
                 gender = "Unknown"
                 IPOPType = "Unknown"
+                phone = "Unknown"
+                ref_doctor = "Unknown"
+                barcode_by = "Unknown"
+                barcode_date = "Unknown"
                 
                 barcode_details = hms_barcodes_dict.get(barcode)
                 if barcode_details:                    
@@ -287,6 +291,10 @@ def get_samplestatus_testvalue(request):
                         gender = barcode_details.gender
                         location_id = barcode_details.location_id
                         IPOPType = barcode_details.IPOPType
+                        phone = barcode_details.phone
+                        ref_doctor = barcode_details.ref_doctor
+                        barcode_by = barcode_details.created_by
+                        barcode_date = barcode_details.created_date
                 elif hasattr(sample_status, 'patient_id'):
                     patient_id = sample_status.patient_id
                 
@@ -311,12 +319,16 @@ def get_samplestatus_testvalue(request):
                     'id': sample_status.id,
                     'created_by': sample_status.created_by,
                     'created_date': safe_datetime_to_string(sample_status.created_date),
+                    'barcode_by': barcode_by,
+                    'barcode_date': safe_datetime_to_string(barcode_date),
                     'lastmodified_by': sample_status.lastmodified_by,
                     'lastmodified_date': safe_datetime_to_string(sample_status.lastmodified_date),
                     'patient_id': patient_id,
                     'patientname': patient_name,
                     'age': age,
                     'gender': gender,
+                    'phone': phone,
+                    'ref_doctor': ref_doctor,
                     'location_id': location_id,
                     'opiptype': IPOPType,
                     'barcode': barcode,
@@ -351,11 +363,15 @@ def get_samplestatus_testvalue(request):
                     gender = barcode_details.gender
                     is_emergency = barcode_details.is_emergency
                     patient_history = barcode_details.patient_history
+                    barcode_by = barcode_details.created_by
+                    barcode_date = barcode_details.created_date
                 else:
                     patient_name = "Unknown Patient"
                     patient_id = sample_status.patient_id if hasattr(sample_status, 'patient_id') else "Unknown ID"
                     age = "Unknown"
                     gender = "Unknown"
+                    barcode_by = "Unknown"
+                    barcode_date = "Unknown"
                 
                 ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology"]
                 # Enrich tests with MongoDB details and match test values
@@ -387,6 +403,8 @@ def get_samplestatus_testvalue(request):
                     'is_emergency': is_emergency,
                     'patient_history': patient_history,
                     'barcode': barcode,
+                    'barcode_by': barcode_by,
+                    'barcode_date': safe_datetime_to_string(barcode_date),
                     'date': safe_datetime_to_string(sample_status.date),
                     'testdetails': updated_tests,
                     'data_source': 'regular_django_model'
