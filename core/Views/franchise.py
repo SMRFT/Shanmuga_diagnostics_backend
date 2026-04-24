@@ -13,6 +13,7 @@ from ..models import  TestValue, MBTestValue
 load_dotenv()
 logger = logging.getLogger(__name__)
 import gridfs
+import re
 
 @api_view(['GET'])
 @csrf_exempt
@@ -499,82 +500,109 @@ def update_batch_received_status(request, batch_no):
         if client:
             client.close()
             
-def get_department_status_franchise(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map=None):
+
+def get_department_status_franchise(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map):
     """
-    Determine status for each department based on test details.
-    All maps are keyed by barcode — isolates data to the exact visit.
+    Determine status for each department based on test details
     Returns dict: {department_name: status}
     """
     department_status = {}
-
+    
+    # Group tests by department
     tests_by_dept = {}
     for test in test_list:
         dept = test.get('department', 'N/A')
-        if dept and dept != 'N/A':
+        if dept and dept != 'N/A':  # Skip N/A departments
             if dept not in tests_by_dept:
                 tests_by_dept[dept] = []
             tests_by_dept[dept].append(test)
-
+    
+    # If no valid departments found, return empty dict
     if not tests_by_dept:
         return {}
-
+    
+    # Determine status for each department
     for dept, tests in tests_by_dept.items():
-        dept_test_ids = {t.get('test_id') for t in tests if t.get('test_id')}
-
-        all_test_values = test_value_map.get(barcode, {}).get('testdetails', []).copy()
-        if mb_test_value_map:
-            mb_test_values = mb_test_value_map.get(barcode, {}).get('testdetails', [])
-            if mb_test_values:
-                all_test_values.extend(mb_test_values)
-
-        dept_test_values = [tv for tv in all_test_values
-                            if tv.get('test_id') in dept_test_ids and not tv.get('rerun', False)]
-
+        dept_test_ids = {int(t.get('test_id')) for t in tests if t.get('test_id')}
+        
+        # Get test values for this barcode
+        all_test_values = []
+        if barcode in test_value_map:
+            all_test_values.extend(test_value_map[barcode].get('testdetails', []))
+        if barcode in mb_test_value_map:
+            all_test_values.extend(mb_test_value_map[barcode].get('testdetails', []))
+        
+        # Filter test values for this department - match by test_id
+        dept_test_values = [
+    tv for tv in all_test_values 
+    if tv.get('test_id') and int(tv.get('test_id')) in dept_test_ids 
+    and not tv.get('rerun', False)
+]
+        
+        # Check sample collection status
         sample_tests = sample_status_map.get(barcode, [])
-        dept_samples  = [st for st in sample_tests if st.get('test_id') in dept_test_ids]
-
-        if dept_test_values:
-            def has_test_values(test):
-                parameters = test.get("parameters", [])
-                if not parameters:
-                    return bool(test.get("value"))
-                return any(
-                    param.get("value") is not None and str(param.get("value")).strip() != ""
-                    for param in parameters
-                )
-
-            all_tested     = all(has_test_values(tv) for tv in dept_test_values)
-            approved_test_ids = {tv.get('test_id') for tv in dept_test_values if tv.get('approve', False)}
-            all_approved   = dept_test_ids.issubset(approved_test_ids) and len(approved_test_ids) > 0
-            approved_dept_tests = [tv for tv in dept_test_values if tv.get('approve', False)]
-            all_dispatched = all(tv.get('dispatch', False) for tv in approved_dept_tests) if approved_dept_tests else False
-
-            if all_dispatched and all_approved:
-                department_status[dept] = 'Dispatched'
-            elif all_approved:
-                department_status[dept] = 'Approved'
-            elif all_tested:
-                department_status[dept] = 'Tested'
-            else:
-                if dept_samples:
-                    all_received = all(t.get('samplestatus') == 'Received' for t in dept_samples)
-                    department_status[dept] = 'Received' if all_received else 'In Progress'
-                else:
-                    department_status[dept] = 'In Progress'
-
-        elif dept_samples:
-            all_collected  = all(t.get('samplestatus') == 'Sample Collected' for t in dept_samples)
-            all_received   = all(t.get('samplestatus') == 'Received' for t in dept_samples)
-
-            if all_received:
-                department_status[dept] = 'Received'
-            elif all_collected:
-                department_status[dept] = 'Collected'
-            else:
-                department_status[dept] = 'Pending'
-        else:
+        dept_samples = [st for st in sample_tests 
+                       if st.get('test_id') in dept_test_ids]
+        
+        # Determine department status
+        if not dept_samples:
             department_status[dept] = 'Pending'
+        else:
+            all_collected = all(t.get('samplestatus') == 'Sample Collected' for t in dept_samples)
+            all_received = all(t.get('samplestatus') == 'Received' for t in dept_samples)
+            
+            if not dept_test_values:
+                if all_received:
+                    department_status[dept] = 'Received'
+                elif all_collected:
+                    department_status[dept] = 'Collected'
+                else:
+                    department_status[dept] = 'Pending'
+            else:
+                # Check if tests have values
+                def has_test_values(test):
+                    parameters = test.get("parameters", [])
 
+                    if parameters:
+                        return any(
+                            param.get("value") is not None and str(param.get("value")).strip() != ""
+                            for param in parameters
+                        )
+
+                    # Biochemistry
+                    if test.get("value") is not None and str(test.get("value")).strip() != "":
+                        return True
+
+                    # ✅ Microbiology FIX
+                    if test.get("remarks") or test.get("parameter_type"):
+                        return True
+
+                    return False
+                
+                any_tested = any(has_test_values(tv) for tv in dept_test_values)
+                # Collect statuses from all test values
+                any_dispatched = any(tv.get('dispatch', False) for tv in dept_test_values)
+                any_approved = any(tv.get('approve', False) for tv in dept_test_values)
+                any_tested = any(has_test_values(tv) for tv in dept_test_values)
+
+                if any_dispatched:
+                    department_status[dept] = 'Dispatched'
+
+                elif any_approved:
+                    department_status[dept] = 'Approved'
+
+                elif any_tested:
+                    department_status[dept] = 'Tested'
+
+                elif all_received:
+                    department_status[dept] = 'Received'
+
+                elif all_collected:
+                    department_status[dept] = 'Collected'
+
+                else:
+                    department_status[dept] = 'Pending'
+    
     return department_status
 
 
@@ -586,7 +614,7 @@ def franchise_overall_report(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.franchise
         patients_collection          = db.franchise_billing
-        sample_status_collection     = db.franchise_sample       # keyed by barcode
+        sample_status_collection     = db.franchise_sample
         franchise_patient_collection = db.franchise_patient
 
         diagnostics_db          = client.Diagnostics
@@ -599,6 +627,71 @@ def franchise_overall_report(request):
 
         print("Received query parameters:", request.GET)
 
+        # ── Helpers ───────────────────────────────────────────────────────────
+
+        def parse_tat_format(tat_str):
+            """Parse TAT format like '2D 3H 45M' and return total seconds."""
+            if not tat_str or tat_str == 'N/A':
+                return None
+            try:
+                total_seconds = 0
+                days    = re.search(r'(\d+)D', str(tat_str))
+                hours   = re.search(r'(\d+)H', str(tat_str))
+                minutes = re.search(r'(\d+)M', str(tat_str))
+                if days:    total_seconds += int(days.group(1))    * 86400
+                if hours:   total_seconds += int(hours.group(1))   * 3600
+                if minutes: total_seconds += int(minutes.group(1)) * 60
+                return total_seconds if total_seconds > 0 else None
+            except:
+                return None
+
+        def parse_datetime_str(dt_str):
+            """
+            Parse datetime strings including:
+            - Z suffix:           2026-01-29T05:39:12.053Z
+            - +00:00 suffix:      2026-01-29T05:39:12.053000+00:00
+            - microseconds:       2026-01-29T05:39:12.053000
+            - plain:              2026-01-29 05:39:12
+            Always returns naive datetime (tz stripped) or None.
+            """
+            if not dt_str or dt_str == 'null':
+                return None
+            try:
+                dt_str = str(dt_str).strip()
+
+                # Replace Z with +00:00 so fromisoformat can handle it on Python < 3.11
+                normalized = dt_str.replace('Z', '+00:00')
+
+                try:
+                    dt = datetime.fromisoformat(normalized)
+                except ValueError:
+                    # Fallback for any remaining edge-case formats
+                    for fmt in (
+                        "%Y-%m-%dT%H:%M:%S.%f",
+                        "%Y-%m-%dT%H:%M:%S",
+                        "%Y-%m-%d %H:%M:%S.%f",
+                        "%Y-%m-%d %H:%M:%S",
+                    ):
+                        try:
+                            dt = datetime.strptime(dt_str, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    else:
+                        print(f"parse_datetime_str: could not parse '{dt_str}'")
+                        return None
+
+                # Always strip timezone — work in naive UTC throughout
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                return dt
+
+            except Exception as e:
+                print(f"parse_datetime_str error for '{dt_str}': {e}")
+                return None
+
+        # ── Date range ────────────────────────────────────────────────────────
+
         try:
             if selected_date:
                 selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
@@ -608,14 +701,18 @@ def franchise_overall_report(request):
                 from_date = datetime.strptime(from_date, "%Y-%m-%d")
                 to_date   = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
             else:
-                return JsonResponse({"error": "Either 'selected_date' or both 'from_date' and 'to_date' are required"}, status=400)
+                return JsonResponse(
+                    {"error": "Either 'selected_date' or both 'from_date' and 'to_date' are required"},
+                    status=400,
+                )
         except ValueError:
             return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-        query = {}
+        # ── Fetch billing records ─────────────────────────────────────────────
+
+        query = {"created_date": {"$gte": from_date, "$lt": to_date}}
         if patient_id_req:
             query["patient_id"] = patient_id_req
-        query["created_date"] = {"$gte": from_date, "$lt": to_date}
 
         patients = list(patients_collection.find(query))
         print(f"Found {len(patients)} franchise billing records")
@@ -627,26 +724,22 @@ def franchise_overall_report(request):
         barcodes    = [p.get("barcode")    for p in patients if p.get("barcode")]
 
         # ── Patient details ───────────────────────────────────────────────────
+
         patient_details_map = {}
         if patient_ids:
             for pd in franchise_patient_collection.find({"patient_id": {"$in": patient_ids}}):
                 patient_details_map[pd.get("patient_id")] = pd
 
-        # ── barcode → patient_id mapping ──────────────────────────────────────
+        # ── barcode → patient_id ──────────────────────────────────────────────
+
         barcode_to_patient_map = {}
         for patient in patients:
             if patient.get("barcode") and patient.get("patient_id"):
                 barcode_to_patient_map[patient["barcode"]] = patient["patient_id"]
 
-        # ── Sample status — fetch by BARCODE (franchise_sample is barcode-keyed) ──
-        # BUG FIX: The original code queried franchise_sample by patient_id, but
-        # franchise_sample stores records keyed by barcode — same as core_sample
-        # in the corporate path.  Querying by patient_id always returned nothing,
-        # leaving sample_status_map empty and freezing status at "Registered".
-        sample_status_records = list(sample_status_collection.find({"barcode": {"$in": barcodes}}))
+        # ── Sample status keyed by barcode ────────────────────────────────────
 
-        # Keyed by BARCODE — prevents cross-barcode contamination for patients
-        # who have multiple barcodes (each visit is its own barcode).
+        sample_status_records = list(sample_status_collection.find({"barcode": {"$in": barcodes}}))
         sample_status_map = {}
         for record in sample_status_records:
             if not isinstance(record, dict):
@@ -668,13 +761,13 @@ def franchise_overall_report(request):
 
         print(f"Fetched {len(sample_status_records)} franchise sample status records")
 
-        # ── TestValue records ─────────────────────────────────────────────────
+        # ── TestValue records keyed by barcode ────────────────────────────────
+
         test_value_records = TestValue.objects.filter(
             barcode__in=barcodes,
-            date__range=(from_date.date(), to_date.date())
+            date__range=(from_date.date(), to_date.date()),
         ).values("barcode", "testdetails", "created_date")
 
-        # Keyed by BARCODE — one entry per barcode, never merges across visits.
         test_value_map = {}
         for record in test_value_records:
             if not isinstance(record, dict):
@@ -700,13 +793,13 @@ def franchise_overall_report(request):
 
         print(f"Processed test value map with {len(test_value_map)} unique barcodes")
 
-        # ── MBTestValue records ───────────────────────────────────────────────
+        # ── MBTestValue records keyed by barcode ──────────────────────────────
+
         mb_test_value_records = MBTestValue.objects.filter(
             barcode__in=barcodes,
-            date__range=(from_date.date(), to_date.date())
+            date__range=(from_date.date(), to_date.date()),
         ).values("barcode", "testdetails", "created_date")
 
-        # Keyed by BARCODE — isolates MB test values per visit.
         mb_test_value_map = {}
         for record in mb_test_value_records:
             if not isinstance(record, dict):
@@ -732,7 +825,8 @@ def franchise_overall_report(request):
 
         print(f"Processed MB test value map with {len(mb_test_value_map)} unique barcodes")
 
-        # ── Build formatted response ──────────────────────────────────────────
+        # ── Build response ────────────────────────────────────────────────────
+
         formatted_data = []
 
         for patient in patients:
@@ -752,7 +846,7 @@ def franchise_overall_report(request):
                     payment_details = raw
                 elif isinstance(raw, str):
                     try:
-                        cleaned = raw.strip('"')
+                        cleaned      = raw.strip('"')
                         payment_data = json.loads(cleaned) if cleaned else {}
                         payment_details = payment_data if isinstance(payment_data, dict) else {"paymentmethod": str(payment_data)}
                     except Exception:
@@ -772,8 +866,7 @@ def franchise_overall_report(request):
                     pass
 
             # Test list with department enrichment
-            test_list      = []
-            test_ids       = []
+            test_list       = []
             departments_set = set()
 
             test_field = patient.get("testdetails", [])
@@ -793,14 +886,14 @@ def franchise_overall_report(request):
                 for test_id in test_ids:
                     test_detail_doc = test_details_collection.find_one(
                         {"test_id": test_id},
-                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1}
+                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1},
                     )
                     if test_detail_doc:
                         dept = test_detail_doc.get("department", "N/A")
                         test_list.append({
-                            "test_id":   test_id,
-                            "testname":  test_detail_doc.get("test_name", "N/A"),
-                            "test_name": test_detail_doc.get("test_name", "N/A"),
+                            "test_id":    test_id,
+                            "testname":   test_detail_doc.get("test_name", "N/A"),
+                            "test_name":  test_detail_doc.get("test_name", "N/A"),
                             "department": dept,
                         })
                         if dept and dept != "N/A":
@@ -815,17 +908,19 @@ def franchise_overall_report(request):
                         elif not t.get('test_name') and t.get('testname'):
                             t['test_name'] = t['testname']
 
-            testnames    = ", ".join([t.get("test_name", t.get("testname", "")) if isinstance(t, dict) else str(t) for t in test_list])
-            no_of_tests  = len(test_list)
-            department   = ", ".join(sorted(departments_set)) if departments_set else "N/A"
+            testnames   = ", ".join([
+                t.get("test_name", t.get("testname", "")) if isinstance(t, dict) else str(t)
+                for t in test_list
+            ])
+            no_of_tests = len(test_list)
+            department  = ", ".join(sorted(departments_set)) if departments_set else "N/A"
 
             age_value = patient_detail.get("age", "N/A")
             age_type  = patient_detail.get("age_type", "")
             age       = f"{age_value} {age_type}" if age_type else str(age_value)
 
             try:
-                discount_percentage = float(patient.get('discountPercentage', 0) or 0)
-                discount = int(discount_percentage)
+                discount = int(float(patient.get('discountPercentage', 0) or 0))
             except Exception:
                 discount = 0
             try:
@@ -851,8 +946,7 @@ def franchise_overall_report(request):
 
             barcode = patient.get("barcode")
 
-            # Look up test values by BARCODE — avoids bleeding in values from
-            # other barcodes that belong to the same patient_id.
+            # Test values scoped to this barcode
             latest_test_data  = test_value_map.get(barcode, {})
             all_test_values   = latest_test_data.get("testdetails", []).copy()
             test_created_date = latest_test_data.get("created_date")
@@ -873,14 +967,22 @@ def franchise_overall_report(request):
                     if not test_record.get("approve", False):
                         unapproved_tests.append(test_record)
 
-            # Fetch sample tests for THIS barcode only
+            # Sample tests for this barcode
             sample_tests = sample_status_map.get(barcode, [])
 
             # Sample collection booleans
-            all_collected       = bool(sample_tests) and all(t.get("samplestatus") == "Sample Collected" for t in sample_tests if isinstance(t, dict))
-            partially_collected = any(t.get("samplestatus") == "Sample Collected" for t in sample_tests if isinstance(t, dict))
-            all_received        = bool(sample_tests) and all(t.get("samplestatus") == "Received" for t in sample_tests if isinstance(t, dict))
-            partially_received  = any(t.get("samplestatus") == "Received" for t in sample_tests if isinstance(t, dict))
+            all_collected       = bool(sample_tests) and all(
+                t.get("samplestatus") == "Sample Collected" for t in sample_tests if isinstance(t, dict)
+            )
+            partially_collected = any(
+                t.get("samplestatus") == "Sample Collected" for t in sample_tests if isinstance(t, dict)
+            )
+            all_received        = bool(sample_tests) and all(
+                t.get("samplestatus") == "Received" for t in sample_tests if isinstance(t, dict)
+            )
+            partially_received  = any(
+                t.get("samplestatus") == "Received" for t in sample_tests if isinstance(t, dict)
+            )
 
             # Collection timestamps
             collection_time_val = "N/A"
@@ -889,21 +991,15 @@ def franchise_overall_report(request):
                 st = t.get("samplecollected_time")
                 if not st:
                     continue
-                try:
-                    if isinstance(st, str):
-                        dt = datetime.fromisoformat(st) if 'T' in st else datetime.strptime(st, "%Y-%m-%d %H:%M:%S")
-                        collection_time_val = dt.strftime("%I:%M %p")
-                        collected_date_val  = dt.strftime("%d-%m-%Y")
-                    elif isinstance(st, datetime):
-                        collection_time_val = st.strftime("%I:%M %p")
-                        collected_date_val  = st.strftime("%d-%m-%Y")
-                    if collection_time_val != "N/A":
-                        break
-                except Exception:
+                dt = parse_datetime_str(st)
+                if dt:
+                    collection_time_val = dt.strftime("%I:%M %p")
+                    collected_date_val  = dt.strftime("%d-%m-%Y")
+                else:
                     collection_time_val = str(st)
-                    break
+                break
 
-            # Status determination
+            # Overall status
             status = "Registered"
             if all_collected:
                 status = "Collected"
@@ -914,45 +1010,137 @@ def franchise_overall_report(request):
             elif partially_received:
                 status = "Partially Received"
 
-            # Individual test statuses
+            # ── Individual test statuses WITH TAT ─────────────────────────────
             individual_test_statuses = []
             for test in test_list:
                 test_id   = test.get('test_id')
                 test_name = test.get('testname') or test.get('test_name', 'N/A')
-                sample_info     = next((t for t in sample_tests     if t.get('test_id') == test_id), {})
-                test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
+
+                sample_info     = next((t for t in sample_tests      if t.get('test_id') == test_id), {})
+                test_value_info = next((t for t in valid_test_values  if t.get('test_id') == test_id), {})
+
+                # TAT_Time from MongoDB
+                test_detail_tat = test_details_collection.find_one(
+                    {"test_id": test_id},
+                    {"_id": 0, "TAT_Time": 1},
+                )
+                tat_time = test_detail_tat.get("TAT_Time") if test_detail_tat else None
+
+                # Parse sample_collected_time
+                sample_collected_time = None
+                raw_sct = sample_info.get('samplecollected_time') if sample_info else None
+                if raw_sct:
+                    sample_collected_time = parse_datetime_str(raw_sct)
+                    if sample_collected_time:
+                        print(f"  [TAT] test_id={test_id} sample_collected_time={sample_collected_time}")
+                    else:
+                        print(f"  [TAT] test_id={test_id} FAILED to parse sample_collected_time: {raw_sct!r}")
+
+                # Parse approve_time
+                approve_time = None
+                raw_at = test_value_info.get('approve_time') if test_value_info else None
+                if raw_at:
+                    approve_time = parse_datetime_str(raw_at)
+                    if approve_time:
+                        print(f"  [TAT] test_id={test_id} approve_time={approve_time}")
+                    else:
+                        print(f"  [TAT] test_id={test_id} FAILED to parse approve_time: {raw_at!r}")
+
+                # TAT calculation
+                tat_status       = None
+                seconds_left     = None
+                tat_deadline_iso = None
+
+                if tat_time and sample_collected_time:
+                    tat_seconds = parse_tat_format(tat_time)
+                    if tat_seconds:
+                        tat_deadline     = sample_collected_time + timedelta(seconds=tat_seconds)
+                        tat_deadline_iso = tat_deadline.isoformat()
+                        if approve_time:
+                            # Completed — positive = finished within TAT, negative = overdue
+                            time_taken = (approve_time - sample_collected_time).total_seconds()
+                            seconds_left = tat_seconds - time_taken
+                            tat_status   = "completed"
+                        else:
+                            # Pending — positive = time remaining, negative = overdue
+                            seconds_left = (tat_deadline - datetime.now()).total_seconds()
+                            tat_status   = "pending"
+                        print(f"  [TAT] test_id={test_id} tat_time={tat_time} tat_seconds={tat_seconds} "
+                              f"tat_status={tat_status} seconds_left={seconds_left}")
+                    else:
+                        print(f"  [TAT] test_id={test_id} parse_tat_format returned None for tat_time={tat_time!r}")
+                else:
+                    print(f"  [TAT] test_id={test_id} skipped — "
+                          f"tat_time={tat_time!r} sample_collected_time={sample_collected_time!r}")
+
+                # Individual test status
                 test_status = "Registered"
                 if sample_info:
                     ss = sample_info.get('samplestatus', '')
-                    if ss == 'Collected':    test_status = "Collected"
-                    if ss == 'Transferred':  test_status = "Transferred"
-                    if ss == 'Received':     test_status = "Received"
-                    if ss == 'Rejected':     test_status = "Rejected"
-                    if ss == 'Outsourced':   test_status = "Outsourced"
-                if test_value_info:
-                    parameters = test_value_info.get("parameters", [])
-                    has_values = bool(test_value_info.get("value")) if not parameters else any(
-                        p.get("value") is not None and str(p.get("value")).strip() != "" for p in parameters
-                    )
-                    if has_values:               test_status = "Tested"
-                    if test_value_info.get('approve'):  test_status = "Approved"
-                    if test_value_info.get('dispatch'): test_status = "Dispatched"
-                individual_test_statuses.append({'test_id': test_id, 'test_name': test_name, 'status': test_status})
+                    if ss in ('Sample Collected', 'Collected'): test_status = "Collected"
+                    if ss == 'Transferred':                     test_status = "Transferred"
+                    if ss == 'Received':                        test_status = "Received"
+                    if ss == 'Rejected':                        test_status = "Rejected"
+                    if ss in ('Outsource', 'Outsourced'):       test_status = "Outsourced"
 
-            # Overall approval / dispatch status
+                if test_value_info:
+                    has_values = False
+                    parameters = test_value_info.get("parameters", [])
+                    if parameters:
+                        has_values = any(
+                            param.get("value") is not None and str(param.get("value")).strip() != ""
+                            for param in parameters
+                        )
+                    elif (
+                        test_value_info.get("value") is not None
+                        and str(test_value_info.get("value")).strip() != ""
+                    ):
+                        has_values = True
+                    elif test_value_info.get("remarks") or test_value_info.get("parameter_type"):
+                        has_values = True  # Microbiology
+
+                    if has_values:                          test_status = "Tested"
+                    if test_value_info.get('approve'):      test_status = "Approved"
+                    if test_value_info.get('dispatch'):     test_status = "Dispatched"
+
+                individual_test_statuses.append({
+                    'test_id':               test_id,
+                    'test_name':             test_name,
+                    'status':                test_status,
+                    'tat_time':              tat_time,
+                    'seconds_left':          int(seconds_left) if seconds_left is not None else None,
+                    'tat_status':            tat_status,
+                    'tat_deadline':          tat_deadline_iso,
+                    'sample_collected_time': sample_collected_time.isoformat() if sample_collected_time else None,
+                    'approve_time':          approve_time.isoformat() if approve_time else None,
+                })
+
+            # ── Overall approval / dispatch status ────────────────────────────
             if valid_test_values:
                 def has_test_values(test):
                     parameters = test.get("parameters", [])
                     if not parameters:
                         return bool(test.get("value"))
-                    return any(p.get("value") is not None and str(p.get("value")).strip() != "" for p in parameters)
+                    return any(
+                        p.get("value") is not None and str(p.get("value")).strip() != ""
+                        for p in parameters
+                    )
 
                 all_tested       = all(has_test_values(t) for t in valid_test_values)
                 partially_tested = any(has_test_values(t) for t in valid_test_values)
 
-                all_ordered_test_ids = {str(t.get("test_id", "")).strip() for t in test_list if isinstance(t, dict) and t.get("test_id")}
-                approved_test_ids    = {str(t.get("test_id", "")).strip() for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
-                dispatch_test_ids    = {str(t.get("test_id", "")).strip() for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")}
+                all_ordered_test_ids = {
+                    str(t.get("test_id", "")).strip()
+                    for t in test_list if isinstance(t, dict) and t.get("test_id")
+                }
+                approved_test_ids = {
+                    str(t.get("test_id", "")).strip()
+                    for t in valid_test_values if t.get("approve", False) and t.get("test_id")
+                }
+                dispatch_test_ids = {
+                    str(t.get("test_id", "")).strip()
+                    for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")
+                }
 
                 all_approved = partially_approved = False
                 if all_ordered_test_ids:
@@ -963,7 +1151,8 @@ def franchise_overall_report(request):
                     if not all_approved:
                         approved_count = sum(1 for t in valid_test_values if t.get("approve", False))
                         if approved_count == no_of_tests and approved_count > 0:
-                            all_approved = True; partially_approved = False
+                            all_approved = True
+                            partially_approved = False
                         elif approved_count > 0:
                             partially_approved = True
 
@@ -976,15 +1165,16 @@ def franchise_overall_report(request):
                     if not all_dispatched:
                         dispatch_count = sum(1 for t in valid_test_values if t.get("dispatch", False))
                         if dispatch_count == no_of_tests and dispatch_count > 0:
-                            all_dispatched = True; partially_dispatched = False
+                            all_dispatched = True
+                            partially_dispatched = False
                         elif dispatch_count > 0:
                             partially_dispatched = True
 
-                if all_tested:        status = "Tested"
-                elif partially_tested: status = "Partially Tested"
-                if all_approved:      status = "Approved"
-                elif partially_approved: status = "Partially Approved"
-                if all_dispatched:    status = "Dispatched"
+                if all_tested:             status = "Tested"
+                elif partially_tested:     status = "Partially Tested"
+                if all_approved:           status = "Approved"
+                elif partially_approved:   status = "Partially Approved"
+                if all_dispatched:         status = "Dispatched"
                 elif partially_dispatched: status = "Partially Dispatched"
 
             print(f"Final status for Patient {pid}: {status}")
@@ -992,15 +1182,13 @@ def franchise_overall_report(request):
             # Department statuses
             department_statuses = {}
             if pid and test_list:
-                # Pass barcode-scoped maps: helper receives all maps keyed by barcode,
-                # but uses pid internally — adapt to pass barcode directly.
                 department_statuses = get_department_status_franchise(
                     test_list, barcode, sample_status_map, test_value_map, mb_test_value_map
                 )
 
             # Date formatting
-            created_date    = patient.get("created_date")
-            formatted_date  = "N/A"
+            created_date      = patient.get("created_date")
+            formatted_date    = "N/A"
             registration_date = "N/A"
             if created_date:
                 if isinstance(created_date, datetime):
@@ -1023,33 +1211,33 @@ def franchise_overall_report(request):
                 )
 
             formatted_data.append({
-                "date":              formatted_date,
-                "registration_date": registration_date,
-                "patient_id":        pid,
-                "patient_name":      patient_detail.get("patientname", "N/A"),
-                "gender":            patient_detail.get("gender", "N/A"),
-                "refby":             patient.get("referredDoctor", "N/A"),
-                "age":               age,
-                "age_type":          age_type,
-                "email":             patient_detail.get("email", "N/A"),
-                "branch":            patient.get("franchise_id", "N/A"),
-                "total_amount":      total_amount,
-                "credit_amount":     credit_amount,
-                "credit_details":    credit_details,
-                "discount":          discount,
-                "payment_method":    payment_details,
-                "test_names":        testnames,
-                "department":        department,
+                "date":                formatted_date,
+                "registration_date":   registration_date,
+                "patient_id":          pid,
+                "patient_name":        patient_detail.get("patientname", "N/A"),
+                "gender":              patient_detail.get("gender", "N/A"),
+                "refby":               patient.get("referredDoctor", "N/A"),
+                "age":                 age,
+                "age_type":            age_type,
+                "email":               patient_detail.get("email", "N/A"),
+                "branch":              patient.get("franchise_id", "N/A"),
+                "total_amount":        total_amount,
+                "credit_amount":       credit_amount,
+                "credit_details":      credit_details,
+                "discount":            discount,
+                "payment_method":      payment_details,
+                "test_names":          testnames,
+                "department":          department,
                 "department_statuses": department_statuses,
-                "test_statuses":     individual_test_statuses,
-                "no_of_tests":       no_of_tests,
-                "bill_no":           patient.get("bill_no", "N/A"),
-                "registeredby":      patient.get("registeredBy", "N/A"),
-                "barcode":           barcode,
-                "status":            status,
-                "test_created_date": test_created_date_formatted,
-                "collection_time":   collection_time_val,
-                "collected_date":    collected_date_val,
+                "test_statuses":       individual_test_statuses,
+                "no_of_tests":         no_of_tests,
+                "bill_no":             patient.get("bill_no", "N/A"),
+                "registeredby":        patient.get("registeredBy", "N/A"),
+                "barcode":             barcode,
+                "status":              status,
+                "test_created_date":   test_created_date_formatted,
+                "collection_time":     collection_time_val,
+                "collected_date":      collected_date_val,
             })
 
         return JsonResponse(formatted_data, safe=False)
@@ -1058,6 +1246,7 @@ def franchise_overall_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
+
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -1253,13 +1442,21 @@ def franchise_patient_test_details(request):
 
             department    = core_test.get("department", "N/A")
             NABL          = core_test.get("NABL", False)
-            specimen_type = core_test.get("specimen_type", "N/A")
+            interpretation = core_test.get("interpretation", "")
+            critical_range = core_test.get("critical_range", "")
+            lod           = core_test.get("lod", "")
+            labels         = core_test.get("labels", "")
+            specimen_type = test_value_details.get("specimen_type") or core_test.get("specimen_type", "N/A")
 
             test_detail = {
                 "test_id":               test_id,
                 "testname":              core_test.get("test_name", testname),
                 "department":            department,
                 "NABL":                  NABL,
+                "interpretation":        interpretation,
+                "critical_range":        critical_range,
+                "lod":                   lod,
+                "labels":                labels,
                 "MRP":                   billing_test.get("MRP", "N/A"),
                 "specimen_type":         specimen_type,
                 "samplestatus":          sample_status.get("samplestatus", "N/A")          if sample_status else "N/A",

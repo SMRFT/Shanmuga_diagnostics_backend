@@ -310,6 +310,7 @@ class MBTestValue(AuditModel):
     date = models.DateField()
     barcode= models.CharField(max_length=50)
     locationId= models.CharField(max_length=50)
+    is_preliminary= models.BooleanField(default=False)
     testdetails = models.JSONField()  # Store all test details in JSON format   
     def save(self, *args, **kwargs):
         if not self._id:

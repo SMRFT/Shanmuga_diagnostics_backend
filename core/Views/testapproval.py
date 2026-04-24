@@ -205,6 +205,9 @@ def get_test_values(request):
             "specimen_type": 1,
             "collection_container": 1,
             "department": 1,
+            "critical_range": 1,
+            "interpretation": 1,
+            "lod": 1,
             "device_id": 1,
             "parameters": 1,
             "unit": 1,
@@ -437,9 +440,12 @@ def get_test_values(request):
                 enriched_test = {
                     **test,
                     'test_name':            test_meta.get('test_name', test.get('test_name', 'N/A')),
-                    'specimen_type':        test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
+                    'specimen_type':        test.get('specimen_type') or test_meta.get('specimen_type', 'N/A'),
                     'collection_container': test_meta.get('collection_container', test.get('collection_container', 'N/A')),
                     'department':           test_meta.get('department', test.get('department', 'N/A')),
+                    'interpretation':       test_meta.get('interpretation', test.get('interpretation', '')),
+                    'critical_range':       test_meta.get('critical_range', test.get('critical_range', '')),
+                    'lod':                  test_meta.get('lod', test.get('lod', '')),
                     'parameters':           enriched_parameters,
                 }
 
@@ -447,12 +453,15 @@ def get_test_values(request):
                 enriched_test = {
                     **test,
                     'test_name':            test_meta.get('test_name', test.get('test_name', 'N/A')),
-                    'specimen_type':        test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
+                    'specimen_type':        test.get('specimen_type') or test_meta.get('specimen_type', 'N/A'),
                     'collection_container': test_meta.get('collection_container', test.get('collection_container', 'N/A')),
                     'department':           test_meta.get('department', test.get('department', 'N/A')),
                     'unit':                 test_meta.get('unit', test.get('unit', 'N/A')),
                     'method':               test_meta.get('method', test.get('method', 'N/A')),
                     'reference_range':      test_meta.get('reference_range', test.get('reference_range', 'N/A')),
+                    'interpretation':       test_meta.get('interpretation', test.get('interpretation', '')),
+                    'critical_range':       test_meta.get('critical_range', test.get('critical_range', '')),
+                    'lod':                  test_meta.get('lod', test.get('lod', '')),
                 }
 
                 if test_code and test_code != 'N/A' and test_meta.get('parameters'):

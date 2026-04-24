@@ -246,6 +246,5 @@ urlpatterns = [
     path('preetham_hospital_ledger/', preetham_hospital_report.preetham_hospital_ledger, name='preetham_hospital_ledger'),
     
     path("test-summary/", dashboard.test_summary, name="test-summary"),
-    
 ]
 
