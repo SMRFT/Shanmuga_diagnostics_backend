@@ -119,6 +119,16 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/mb-test-approval(?:/[^/]+)+/$':'SD-P-MBDF',
     r'^/_b_a_c_k_e_n_d/LIS/mb-test-rerun(?:/[^/]+)+/$':'SD-P-MBDF',
 
+    #Mole/Bio Test Values:
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology_testvalue/?(\?.*)?$':'SD-P-MOLPD',       
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-compare_test_details/?(\?.*)?$':'SD-P-MOLPD',  
+    '/_b_a_c_k_e_n_d/LIS/mol_biology-test-value/save/':'SD-P-MOLPD',
+
+    #Mole/Bio Test Approval:
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-test-values/?(\?.*)?$':'SD-P-MOLDF',       
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-test-approval(?:/[^/]+)+/$':'SD-P-MOLDF',
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-test-rerun(?:/[^/]+)+/$':'SD-P-MOLDF',
+
     #Test Approval:
     r'^/_b_a_c_k_e_n_d/LIS/test-values/?(\?.*)?$':'SD-API-TV',       
     r'^/_b_a_c_k_e_n_d/LIS/test-approved-values/?(\?.*)?$':'SD-API-TV',       
