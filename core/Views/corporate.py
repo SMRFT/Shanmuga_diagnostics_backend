@@ -1274,7 +1274,7 @@ def corporate_patient_test_details(request):
             "date":        franchise_billing.get("created_date"),
             "barcode":     franchise_billing.get("barcode", ""),
             "barcodes":    barcodes,
-            "branch":      franchise_billing.get("franchise_id", ""),
+            "branch":      franchise_billing.get("company_id", ""),
             "refby":       "SELF",
             "testdetails": [],
         }
