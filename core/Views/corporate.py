@@ -3190,7 +3190,7 @@ def get_batch_corporate_health_reports(request):
 
 @api_view(['GET'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def corporate_credit_billing(request):
     """
     Get all corporate billing records where paymentMode is 'Credit'
@@ -3312,6 +3312,7 @@ def corporate_credit_billing(request):
 
 @api_view(['POST'])
 @csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def generate_corporate_invoice(request):
     """
     Generate and save a corporate invoice.
@@ -3389,6 +3390,7 @@ def generate_corporate_invoice(request):
 
 @api_view(['GET'])
 @csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def get_corporate_invoices(request):
     """
     Fetch all generated corporate invoices.
@@ -3419,6 +3421,7 @@ def get_corporate_invoices(request):
 
 @api_view(['POST', 'PUT'])
 @csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def update_corporate_invoice(request):
     """
     Update an existing corporate invoice.
@@ -3519,6 +3522,7 @@ def update_corporate_invoice(request):
 
 @api_view(['POST', 'DELETE'])
 @csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
 def delete_corporate_invoice(request):
     """
     Delete a corporate invoice.
