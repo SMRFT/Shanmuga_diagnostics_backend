@@ -200,7 +200,12 @@ urlpatterns = [
     path('save_overall_approval/', corporate.save_overall_approval, name='save_overall_approval'),
     path('get_batch_investigation_status/', corporate.get_batch_investigation_status, name='get_batch_investigation_status'),
     path('get_batch_corporate_health_reports/', corporate.get_batch_corporate_health_reports, name='get_batch_corporate_health_reports'),
-    
+    path('corporate_credit_billing/', corporate.corporate_credit_billing, name='corporate_credit_billing'),
+    path('generate_corporate_invoice/', corporate.generate_corporate_invoice, name='generate_corporate_invoice'),
+    path('get_corporate_invoices/', corporate.get_corporate_invoices, name='get_corporate_invoices'),
+    path('update_corporate_invoice/', corporate.update_corporate_invoice, name='update_corporate_invoice'),
+    path('delete_corporate_invoice/', corporate.delete_corporate_invoice, name='delete_corporate_invoice'),
+    path('export_corporate_invoice_pdf/', corporate.export_corporate_invoice_pdf, name='export_corporate_invoice_pdf'),
 
     #HMS Billing:
     path("hms_list_doctor/",hmsbilling.hms_get_doctor_list,name="doctor_list"),
