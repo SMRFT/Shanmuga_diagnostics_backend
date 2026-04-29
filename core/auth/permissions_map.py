@@ -165,6 +165,13 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/get-invoices/': 'SD-API-IVM',
     '/_b_a_c_k_e_n_d/LIS/generate-invoice/': 'SD-API-IVM',
     '/_b_a_c_k_e_n_d/LIS/all-patients/': 'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/corporate_credit_billing/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/generate_corporate_invoice/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/get_corporate_invoices/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/update_corporate_invoice/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/delete_corporate_invoice/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/export_corporate_invoice_pdf/?(\?.*)?$':'SD-API-IVM',
+
 
     #Hms Billing
     '/_b_a_c_k_e_n_d/LIS/hms_patient_billing/':'SD-P-HMSPB',
