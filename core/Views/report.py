@@ -701,12 +701,15 @@ def overall_report(request):
                             if sample_info.get('samplestatus') == 'Outsource':
                                 test_status = "Outsourced"
                         
+                        parameters = []
+                        has_values = False
+                        
                         if test_value_info:
                         # Check if test has values
-                            has_values = False
                             parameters = test_value_info.get("parameters", [])
 
                         # Biochemistry (parameters)
+                        print("parameters", parameters)
                         if parameters:
                             has_values = any(
                                 param.get("value") is not None and str(param.get("value")).strip() != ""
