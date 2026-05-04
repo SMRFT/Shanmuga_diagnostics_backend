@@ -15,6 +15,7 @@ import gridfs
 import base64
 from bson.objectid import ObjectId
 import re
+from datetime import timezone, timedelta
 
 
 load_dotenv()
@@ -492,9 +493,11 @@ def get_corporate_batch_generation_data(request):
                         logger.warning(f"Failed to parse specimen_count for batch {batch['_id']}")
                         batch['specimen_count'] = []
                 if 'created_date' in batch and batch['created_date']:
-                    batch['created_date'] = batch['created_date'].isoformat() if hasattr(batch['created_date'], 'isoformat') else str(batch['created_date'])
+                    cd = batch['created_date']
+                    batch['created_date'] = cd.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat() if hasattr(cd, 'isoformat') else str(cd)
                 if 'lastmodified_date' in batch and batch['lastmodified_date']:
-                    batch['lastmodified_date'] = batch['lastmodified_date'].isoformat() if hasattr(batch['lastmodified_date'], 'isoformat') else str(batch['lastmodified_date'])
+                    lmd = batch['lastmodified_date']
+                    batch['lastmodified_date'] = lmd.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat() if hasattr(lmd, 'isoformat') else str(lmd)
                 processed_data.append(batch)
 
             return JsonResponse({
