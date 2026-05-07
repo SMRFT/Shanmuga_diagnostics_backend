@@ -1590,9 +1590,10 @@ def corporate_approval_report(request):
         barcodes = list(set(r.get("barcode") for r in sample_records if r.get("barcode")))
         print(f"Barcodes from core_sample: {barcodes}")
 
-        # Build sample date map and testdetails map by barcode
+        # Build sample date map, testdetails map, and valid test count map by barcode
         sample_date_by_barcode = {}
         sample_testdetails_by_barcode = {}
+        valid_test_count_by_barcode = {}  # for lab_approval computation
 
         for record in sample_records:
             bc = record.get("barcode")
@@ -1614,19 +1615,19 @@ def corporate_approval_report(request):
 
             # testdetails
             testdetails = record.get("testdetails")
+            raw_tests = []
             if testdetails:
-                parsed = []
                 if isinstance(testdetails, str):
                     try:
-                        parsed = json.loads(testdetails)
+                        raw_tests = json.loads(testdetails)
                     except json.JSONDecodeError:
-                        parsed = []
+                        raw_tests = []
                 elif isinstance(testdetails, list):
-                    parsed = testdetails
+                    raw_tests = testdetails
 
                 # Enrich with test names from core_testdetails
                 enriched = []
-                for test in parsed:
+                for test in raw_tests:
                     if isinstance(test, dict):
                         test_id = test.get("test_id")
                         if test_id:
@@ -1637,6 +1638,14 @@ def corporate_approval_report(request):
 
                 if enriched:
                     sample_testdetails_by_barcode[bc] = enriched
+
+            # Count valid (non-Rejected, non-Outsource) tests per barcode
+            invalid_status = {"Rejected", "Outsource"}
+            valid_tests = [
+                t for t in (raw_tests or [])
+                if isinstance(t, dict) and t.get("samplestatus", "").strip() not in invalid_status
+            ]
+            valid_test_count_by_barcode[bc] = len(valid_tests)
 
         # ── STEP 3: Get billing records using barcodes ────────────────────────
         billing_query = {"barcode": {"$in": barcodes}}
@@ -1706,12 +1715,17 @@ def corporate_approval_report(request):
 
         # ── STEP 7: Bulk-fetch TestValue records ──────────────────────────────
         lab_tests_by_barcode = {}
+        approved_count_by_barcode = {}  # approved test count per barcode
+
         for record in TestValue.objects.filter(barcode__in=barcodes):
             bc = str(record.barcode)
             td = record.testdetails
             parsed = json.loads(td) if isinstance(td, str) else (td or [])
             if isinstance(parsed, list):
                 lab_tests_by_barcode.setdefault(bc, []).extend(parsed)
+                # Count tests where approve=True
+                approved = sum(1 for t in parsed if isinstance(t, dict) and t.get("approve"))
+                approved_count_by_barcode[bc] = approved_count_by_barcode.get(bc, 0) + approved
 
         # ── STEP 8: Build response — iterate over barcodes from core_sample ───
         formatted_data = []
@@ -1774,6 +1788,23 @@ def corporate_approval_report(request):
             investigation_status = investigation_status_by_barcode.get(str(bc), "")
             vitals = vitals_by_barcode.get(str(bc), {})
 
+            # Compute lab_approval per barcode
+            total_sample = valid_test_count_by_barcode.get(str(bc), 0)
+            approved_count = approved_count_by_barcode.get(str(bc), 0)
+            lab_approval = (
+                "Approved" if total_sample > 0 and approved_count >= total_sample
+                else "Pending"
+            )
+
+            # ── KEY FIX: Combined investigation status = lab + CHC both must be approved ──
+            # If lab is Pending → overall is Pending regardless of CHC status
+            # If lab is Approved but CHC has pending tests → Pending
+            # Only "All Approved" when BOTH lab and all CHC tests are approved
+            if lab_approval == "Pending" or chc_overall != "All Approved":
+                combined_investigation_status = "Pending"
+            else:
+                combined_investigation_status = "All Approved"
+
             status = _compute_corporate_approval_status(
                 bc=bc,
                 approval_status_map=approval_status_map,
@@ -1798,8 +1829,8 @@ def corporate_approval_report(request):
                     except Exception:
                         formatted_date = str(created_date)
 
-            formatted_data.append({        # ← from core_sample.date
-                "date": sample_date,               # ← from billing.created_date
+            formatted_data.append({
+                "date": sample_date,
                 "patient_id": eid,
                 "patient_name": patient_detail.get("employee_name", "N/A"),
                 "gender": patient_detail.get("gender", "N/A"),
@@ -1810,8 +1841,9 @@ def corporate_approval_report(request):
                 "no_of_tests": no_of_tests,
                 "barcode": bc,
                 "status": status,
+                "lab_approval": lab_approval,
                 "chc_tests": chc_tests_with_status,
-                "chc_investigation_status": chc_overall,
+                "chc_investigation_status": combined_investigation_status,  # lab + CHC combined
                 "chc_pending_tests": chc_pending,
                 "chc_approved_tests": chc_approved,
             })
@@ -1822,7 +1854,7 @@ def corporate_approval_report(request):
     except Exception as e:
         print("Critical Error:", str(e))
         print(traceback.format_exc())
-        return JsonResponse({"error": str(e)}, status=500)
+        return JsonResponse({"error": str(e)}, status=500)   
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
@@ -1955,6 +1987,27 @@ def corporate_health_report(request):
             except (json.JSONDecodeError, AttributeError):
                 vitals_data = {}
 
+        # ── Dynamic fields from investigation ────────────────────────────────────
+        dynamic_fields_data = []
+        if franchise_investigation:
+            raw_dynamic = franchise_investigation.get("dynamic_fields", [])
+            if isinstance(raw_dynamic, list):
+                for field in raw_dynamic:
+                    field_name = field.get("field_name", "")
+                    field_values = field.get("field_values", [])
+                    if field_name and isinstance(field_values, list) and field_values:
+                        # Only include entries with non-empty values
+                        valid_pairs = [
+                            {"key": fv.get("key", ""), "value": fv.get("value", "")}
+                            for fv in field_values
+                            if isinstance(fv, dict) and (fv.get("key") or fv.get("value"))
+                        ]
+                        if valid_pairs:
+                            dynamic_fields_data.append({
+                                "field_name": field_name,
+                                "field_values": valid_pairs,
+                            })
+
         investigation_file_ids = {}
         investigation_notes    = {}
 
@@ -2076,6 +2129,8 @@ def corporate_health_report(request):
             "testdetails": [],
         }
 
+        if company_data and company_data.get("company_id"):
+            patient_details["company_id"] = company_data.get("company_id")
         if company_data and company_data.get("company_name"):
             patient_details["company_name"] = company_data.get("company_name")
         if franchise_patient.get("department"):
@@ -2088,6 +2143,8 @@ def corporate_health_report(request):
                 if vitals_data.get(key):
                     display_key = key.replace("_cm", "").replace("_kg", "")
                     patient_details["vitals"][display_key] = vitals_data.get(key)
+        if dynamic_fields_data:
+            patient_details["dynamic_fields"] = dynamic_fields_data
         if medical_history_data:
             patient_details["medical_history"] = medical_history_data
         if clinical_examination_data:
@@ -2167,6 +2224,8 @@ def corporate_health_report(request):
                             test_response["approve_by"] = test_detail.get("approve_by")
                         if test_detail.get("approve_time"):
                             test_response["approve_time"] = test_detail.get("approve_time")
+                        if test_detail.get("status"):
+                            test_response["status"] = test_detail.get("status")
                         outsourced = test_detail.get("outsourced", False)
                         if outsourced:
                             test_response["outsourced"] = outsourced
@@ -2883,6 +2942,26 @@ def get_batch_corporate_health_reports(request):
                         if patient_history.lower() not in ["nil", "nil significant", "no previous history", "none"]:
                             medical_history_data["patient_history"] = patient_history
 
+                # ── NEW: dynamic fields ──────────────────────────────────────────
+                dynamic_fields_data = []
+                if franchise_investigation:
+                    raw_dynamic = franchise_investigation.get("dynamic_fields", [])
+                    if isinstance(raw_dynamic, list):
+                        for field in raw_dynamic:
+                            field_name = field.get("field_name", "")
+                            field_values = field.get("field_values", [])
+                            if field_name and isinstance(field_values, list) and field_values:
+                                valid_pairs = [
+                                    {"key": fv.get("key", ""), "value": fv.get("value", "")}
+                                    for fv in field_values
+                                    if isinstance(fv, dict) and (fv.get("key") or fv.get("value"))
+                                ]
+                                if valid_pairs:
+                                    dynamic_fields_data.append({
+                                        "field_name": field_name,
+                                        "field_values": valid_pairs,
+                                    })
+
                 # Clinical examination
                 clinical_examination_data = {}
                 if franchise_investigation:
@@ -2968,6 +3047,8 @@ def get_batch_corporate_health_reports(request):
                     "testdetails": [],
                 }
 
+                if company_data and company_data.get("company_id"):
+                    patient_details["company_id"] = company_data.get("company_id")
                 if company_data and company_data.get("company_name"):
                     patient_details["company_name"] = company_data.get("company_name")
                 if franchise_patient.get("department"):
@@ -2982,6 +3063,8 @@ def get_batch_corporate_health_reports(request):
                             patient_details["vitals"][display_key] = vitals_data.get(key)
                 if medical_history_data:
                     patient_details["medical_history"] = medical_history_data
+                if dynamic_fields_data:
+                    patient_details["dynamic_fields"] = dynamic_fields_data
                 if clinical_examination_data:
                     patient_details["clinical_examination"] = clinical_examination_data
                 if ophthalmology_data:
@@ -3057,6 +3140,8 @@ def get_batch_corporate_health_reports(request):
                                     test_response["approve_by"] = test_detail.get("approve_by")
                                 if test_detail.get("approve_time"):
                                     test_response["approve_time"] = test_detail.get("approve_time")
+                                if test_detail.get("status"):
+                                    test_response["status"] = test_detail.get("status")
                                 outsourced = test_detail.get("outsourced", False)
                                 if outsourced:
                                     test_response["outsourced"] = outsourced

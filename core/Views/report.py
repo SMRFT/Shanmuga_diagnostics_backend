@@ -1340,6 +1340,7 @@ def get_patient_test_details(request):
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)  
 
+
 @csrf_exempt
 def send_email(request):
     try:
