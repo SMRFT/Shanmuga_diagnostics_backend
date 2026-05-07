@@ -23,7 +23,7 @@ import gridfs
 
 # auth
 from rest_framework.decorators import api_view, permission_classes
-from pyauth.auth import HasRoleAndDataPermission
+from pyauth.auth import HasRolePermission
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,7 +38,7 @@ FS = gridfs.GridFS(MONGO_DB)
 
 
 @api_view(["GET", "POST"])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def appointment_booking(request):
 
     employee_id = (
@@ -81,7 +81,7 @@ def appointment_booking(request):
 
 @csrf_exempt
 @api_view(['POST'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def create_patient(request):
     try:
         data = request.data.copy()
@@ -146,7 +146,7 @@ def get_mongodb_connection():
 
 @csrf_exempt
 @api_view(['POST'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def create_bill(request):
     """
     Create a bill and upload prescription file to GridFS if provided.
@@ -295,7 +295,7 @@ def create_bill(request):
     
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_latest_patient_id(request):
     try:
         max_patient = Patient.objects.aggregate(max_pid=Max('patient_id'))['max_pid']
@@ -310,7 +310,7 @@ def get_latest_patient_id(request):
         return Response({"success": False, "error": "Failed to generate patient ID", "details": str(e)}, status=500)
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_latest_bill_no(request):
     try:
         today = datetime.now().strftime('%Y%m%d')
@@ -323,7 +323,7 @@ def get_latest_bill_no(request):
 
 @csrf_exempt
 @api_view(['PUT'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def update_bill(request):
     """
     Updated bill update function to handle MongoDB collection updates
@@ -558,7 +558,7 @@ def update_bill(request):
         
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def patient_get(request):
     """
     Get patient details by patient_id or phone.
@@ -716,7 +716,7 @@ def patient_get(request):
 
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_patients_by_date(request):
 
     start_date = request.GET.get('start_date')
@@ -852,7 +852,7 @@ def patient_overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_patientsbyb2b(request):
     """Fetch patients registered on a given date with payment mode options based on segment"""
     date_str = request.GET.get('date', None)
@@ -900,7 +900,7 @@ import os
 
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def dashboard_data(request):
     try:
         # -------------------------
@@ -1084,7 +1084,7 @@ def dashboard_data(request):
 
 
 @api_view(['PATCH'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def update_credit_amount(request):
     try:
         data = request.data
