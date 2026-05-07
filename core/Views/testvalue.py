@@ -1058,6 +1058,12 @@ def process_test_data(
                 all_barcode_records = list(interface_testvalue_collection.find(focused_query))
                 print(f"DEBUG [{data_source_type}]: Found {len(all_barcode_records)} focused records for test {test_name}")
 
+                # Resolve device_id from interface_testvalue; N/A if barcode not found there
+                device_id_from_interface = "N/A"
+                if all_barcode_records:
+                    first_record_device = all_barcode_records[0].get("DeviceID")
+                    device_id_from_interface = str(first_record_device) if first_record_device else "N/A"
+
                 interface_test_codes  = []
                 interface_device_ids  = []
                 if all_barcode_records:
@@ -1163,7 +1169,7 @@ def process_test_data(
 
                         test_info = {
                             "barcode":          barcode,
-                            "device_id":        selected_device,
+                            "device_id":        device_id_from_interface,
                             "test_id":          test_id,
                             "testname":         test_name,
                             "test_code":        test_code,
@@ -1222,6 +1228,8 @@ def process_test_data(
                 final_test_data.append(test_info)
 
     return {"test_data": final_test_data, "processed_records": processed_records}
+
+
 def update_processing_status(barcode, test_code, device_id, latest_record_id_str):
     """
     Helper function to update processing status:
