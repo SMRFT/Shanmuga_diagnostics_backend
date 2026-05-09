@@ -303,6 +303,7 @@ def get_hms_barcode_by_date(request):
                         "testname": t.get("test_name", "Unknown Test"),
                         "collection_container": t.get("collection_container", ""),
                         "shortcut": t.get("shortcut", ""),
+                        "suffix": t.get("suffix", ""),
                     })
 
             bill_no = rec["bill_no"]
