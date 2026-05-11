@@ -31,16 +31,18 @@ logger = logging.getLogger(__name__)
 # Returns a dict keyed by barcode → {test_id → {report, files, notes, has_report, has_file}}
 # ──────────────────────────────────────────────────────────────────────────────
 def _build_chc_status_from_investigation(investigation_records):
-    chc_status_by_barcode = {}
-
+    """
+    Returns: { barcode_str: { test_id_str: { has_report, has_file, report, notes, files, inv_status } } }
+    Now also carries the top-level investigation status per barcode.
+    """
+    result = {}
     for inv in investigation_records:
-        barcode = str(inv.get("barcode", ""))
-        if not barcode:
+        bc = str(inv.get("barcode", ""))
+        if not bc:
             continue
 
-        chc_status_by_barcode.setdefault(barcode, {})
+        inv_status = inv.get("status", "").strip().lower()  # ← capture status
 
-        # ── Normal CHC tests from test_results ─────────────────
         test_results = inv.get("test_results", [])
         if isinstance(test_results, str):
             try:
@@ -48,44 +50,28 @@ def _build_chc_status_from_investigation(investigation_records):
             except Exception:
                 test_results = []
 
-        for tr in test_results:
+        result.setdefault(bc, {})
+
+        for tr in (test_results or []):
             tid = str(tr.get("test_id", ""))
             if not tid:
                 continue
-
+            report = tr.get("report", "")
             files = tr.get("files", [])
-            report = tr.get("report", "") or ""
-            notes = tr.get("notes", "") or ""
+            notes = tr.get("notes", "")
+            has_report = bool(report and report.strip())
+            has_file = bool(files)
 
-            chc_status_by_barcode[barcode][tid] = {
-                "test_name": tr.get("test_name", ""),
+            result[bc][tid] = {
+                "has_report": has_report,
+                "has_file": has_file,
                 "report": report,
                 "notes": notes,
                 "files": files,
-                "has_report": bool(report.strip()),
-                "has_file": bool(files),
+                "inv_status": inv_status,  # ← store it per test entry
             }
 
-        # ── NEW: Ophthalmology (CHCT001) directly from investigation ─────
-        oph_data = inv.get("CHCT001")
-
-        if isinstance(oph_data, dict) and oph_data:
-            has_data = any(
-                v for v in oph_data.values()
-                if v and (not isinstance(v, dict) or any(v.values()))
-            )
-
-            if has_data:
-                chc_status_by_barcode[barcode]["CHCT001"] = {
-                    "test_name": "Ophthalmology",
-                    "report": "Available",
-                    "notes": oph_data.get("remarks", ""),
-                    "files": [],
-                    "has_report": True,
-                    "has_file": False,
-                }
-
-    return chc_status_by_barcode
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -924,6 +910,17 @@ def corporate_overall_report(request):
             for ct in chc_tests:
                 tid = str(ct.get("test_id", ""))
                 info = chc_status_map_for_barcode.get(tid, {})
+                
+                inv_status = info.get("inv_status", "")   # ← read investigation status
+                has_content = info.get("has_report") or info.get("has_file")
+
+                # If investigation is explicitly "pending", treat as Pending
+                # regardless of whether files/reports exist
+                if inv_status == "approved" and has_content:
+                    chc_status = "Approved"
+                else:
+                    chc_status = "Pending"
+
                 chc_tests_with_status.append({
                     "test_id": tid,
                     "testname": ct.get("testname", ""),
@@ -932,7 +929,7 @@ def corporate_overall_report(request):
                     "report": info.get("report", ""),
                     "notes": info.get("notes", ""),
                     "files": info.get("files", []),
-                    "status": "Approved" if (info.get("has_report") or info.get("has_file")) else "Pending",
+                    "status": chc_status,   # ← driven by inv_status first, then content
                 })
 
             chc_overall, chc_pending, chc_approved = _chc_approval_status(
@@ -1341,8 +1338,7 @@ def corporate_patient_test_details(request):
                         "test_id":              test_id,
                         "testname":             testname,
                         "department":           department,
-                        "NABL":                 NABL,
-                        "specimen_type":        specimen_type,
+                        "NABL":                 NABL,                       
                         "outsourced":           outsourced,
                         "comment":              comment,
                         "verified_by":          verified_by,
@@ -1417,6 +1413,7 @@ def corporate_patient_test_details(request):
                                 "unit":            core_test.get("unit", ""),
                                 "reference_range": ref_range,   # gender-resolved
                                 "sub_title":       test_detail.get("sub_title", ""),
+                                "specimen_type":        specimen_type,
                             })
                         else:
                             test_response.update({
@@ -1425,6 +1422,7 @@ def corporate_patient_test_details(request):
                                 "unit":            test_detail.get("unit", ""),
                                 "reference_range": test_detail.get("reference_range", ""),
                                 "sub_title":       test_detail.get("sub_title", ""),
+                                "specimen_type":        specimen_type,
                             })
 
                     patient_details["testdetails"].append(test_response)
@@ -1555,6 +1553,7 @@ def corporate_approval_report(request):
         franchise_patient_collection = db.core_employeeregistration
         overall_approval_collection = db.overallApproval
         investigation_collection = db.core_investigation
+        company_collection = db.core_company
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
@@ -1682,6 +1681,21 @@ def corporate_approval_report(request):
 
         print(f"Fetched {len(patient_details_map)} patient detail records")
 
+        # After building employee_ids (before step 4), collect all company_ids:
+        company_ids = list(set(
+            pd.get("company_id") for pd in franchise_patient_collection.find(
+                {"employee_id": {"$in": employee_ids}},
+                {"company_id": 1}
+            ) if pd.get("company_id")
+        ))
+
+        # Build company_id → company_name map
+        company_name_map = {}
+        for company in company_collection.find({"company_id": {"$in": company_ids}}):
+            cid = company.get("company_id")
+            if cid:
+                company_name_map[cid] = company.get("company_name", cid)
+
         # ── STEP 5: Overall approval map ──────────────────────────────────────
         approval_status_map = {}
         approval_records = overall_approval_collection.find({"barcode": {"$in": barcodes}})
@@ -1769,6 +1783,17 @@ def corporate_approval_report(request):
             for ct in chc_tests:
                 tid = str(ct.get("test_id", ""))
                 info = chc_status_map_for_barcode.get(tid, {})
+                
+                inv_status = info.get("inv_status", "")   # ← read investigation status
+                has_content = info.get("has_report") or info.get("has_file")
+
+                # If investigation is explicitly "pending", treat as Pending
+                # regardless of whether files/reports exist
+                if inv_status == "approved" and has_content:
+                    chc_status = "Approved"
+                else:
+                    chc_status = "Pending"
+
                 chc_tests_with_status.append({
                     "test_id": tid,
                     "testname": ct.get("testname", ""),
@@ -1777,7 +1802,7 @@ def corporate_approval_report(request):
                     "report": info.get("report", ""),
                     "notes": info.get("notes", ""),
                     "files": info.get("files", []),
-                    "status": "Approved" if (info.get("has_report") or info.get("has_file")) else "Pending",
+                    "status": chc_status,   # ← driven by inv_status first, then content
                 })
 
             chc_overall, chc_pending, chc_approved = _chc_approval_status(
@@ -1828,6 +1853,9 @@ def corporate_approval_report(request):
                         ).strftime("%Y-%m-%d")
                     except Exception:
                         formatted_date = str(created_date)
+                        
+            company_id = patient_detail.get("company_id", "N/A")
+            company_name = company_name_map.get(company_id, company_id)
 
             formatted_data.append({
                 "date": sample_date,
@@ -1837,6 +1865,7 @@ def corporate_approval_report(request):
                 "age": age,
                 "email": patient_detail.get("email", "N/A"),
                 "branch": patient_detail.get("company_id", "N/A"),
+                "branch_name": company_name,
                 "test_names": testnames,
                 "no_of_tests": no_of_tests,
                 "barcode": bc,
@@ -1855,6 +1884,7 @@ def corporate_approval_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)   
+
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
@@ -2198,9 +2228,11 @@ def corporate_health_report(request):
                             testname      = core_test.get("test_name", testname)
                             specimen_type = core_test.get("specimen_type", "N/A")
                             department    = core_test.get("department", test_detail.get("department", ""))
+                            NABL    = core_test.get("NABL", "")
                         else:
                             specimen_type = test_detail.get("specimen_type", "")
                             department    = test_detail.get("department", "")
+                            NABL    = test_detail.get("NABL", "")
 
                         if not testname:
                             continue
@@ -2218,6 +2250,8 @@ def corporate_health_report(request):
                         test_response = {"testname": testname}
                         if department:
                             test_response["department"] = department
+                        if NABL:
+                            test_response["NABL"] = NABL
                         if test_detail.get("verified_by"):
                             test_response["verified_by"] = test_detail.get("verified_by")
                         if test_detail.get("approve_by"):
@@ -2404,6 +2438,7 @@ def get_investigation_status(request):
         billing_collection = db.core_billing
 
         investigation = investigation_collection.find_one({"barcode": barcode}) or {}
+        inv_status = investigation.get("status", "").strip().lower()
 
         # -----------------------------
         # VITALS
@@ -2541,12 +2576,7 @@ def get_investigation_status(request):
         # -----------------------------
         # CHC OVERALL STATUS
         # -----------------------------
-        all_chc_approved = (
-            len(chc_tests_enriched) > 0 and
-            all(ct["status"] == "approved" for ct in chc_tests_enriched)
-        )
-
-        chc_overall_status = "approved" if all_chc_approved else "pending"
+        chc_overall_status = "approved" if inv_status == "approved" else "pending"
 
         client.close()
 
@@ -2621,6 +2651,8 @@ def get_batch_investigation_status(request):
             sample = sample_map.get(barcode)
             billing = billing_map.get(barcode)
 
+            inv_status = investigation.get("status", "").strip().lower() if investigation else ""
+
             # Lab approval
             total_sample_tests = 0
             if sample and sample.get('testdetails'):
@@ -2686,11 +2718,7 @@ def get_batch_investigation_status(request):
                     "files": info.get("files", []),
                 })
 
-            all_chc_approved = (
-                len(chc_tests_enriched) > 0
-                and all(ct["status"] == "approved" for ct in chc_tests_enriched)
-            )
-            chc_overall_status = "approved" if all_chc_approved else "pending"
+            chc_overall_status = "approved" if inv_status == "approved" else "pending"
 
             results[barcode] = {
                 # Legacy field — keep for backward-compat with existing frontend code
@@ -3114,9 +3142,11 @@ def get_batch_corporate_health_reports(request):
                                     testname      = core_test.get("test_name", testname)
                                     specimen_type = core_test.get("specimen_type", "N/A")
                                     department    = core_test.get("department", test_detail.get("department", ""))
+                                    NABL    = core_test.get("NABL", test_detail.get("NABL", ""))
                                 else:
                                     specimen_type = test_detail.get("specimen_type", "")
                                     department    = test_detail.get("department", "")
+                                    NABL    = test_detail.get("NABL", "")
 
                                 if not testname:
                                     continue
@@ -3134,6 +3164,8 @@ def get_batch_corporate_health_reports(request):
                                 test_response = {"testname": testname}
                                 if department:
                                     test_response["department"] = department
+                                if NABL:
+                                    test_response["NABL"] = NABL
                                 if test_detail.get("verified_by"):
                                     test_response["verified_by"] = test_detail.get("verified_by")
                                 if test_detail.get("approve_by"):
