@@ -3366,18 +3366,38 @@ def corporate_credit_billing(request):
             
             if invoiced_bill_ids:
                 from bson import ObjectId
-                # Convert string IDs to ObjectIds if they are stored as such in core_billing
                 oid_list = []
                 for bid in invoiced_bill_ids:
                     try:
                         oid_list.append(ObjectId(bid))
                     except:
                         pass
-                query["_id"] = {"$nin": oid_list}
+                # Exclude both ObjectIds and string IDs to be safe
+                query["_id"] = {"$nin": oid_list + invoiced_bill_ids}
+
+
 
             billing_records = list(billing_collection.find(query).sort("date", -1))
             
-            # 3. Format the response
+            # 3. Optimize: Fetch all unique employee IDs in one go (chunked to avoid BSON limits)
+            employee_ids = list(set(str(bill.get('employee_id', '')).strip() for bill in billing_records if bill.get('employee_id')))
+            employee_name_map = {}
+            if employee_ids:
+                # Chunk IDs to avoid BSON length/limit issues with very large $in lists
+                chunk_size = 500
+                for i in range(0, len(employee_ids), chunk_size):
+                    chunk = employee_ids[i:i + chunk_size]
+                    try:
+                        employees = list(db.core_employeeregistration.find({"employee_id": {"$in": chunk}}))
+                        for emp in employees:
+                            eid = str(emp.get('employee_id', '')).strip()
+                            if eid:
+                                employee_name_map[eid] = emp.get('employee_name')
+                    except Exception as e:
+                        logger.error(f"Error fetching employee chunk: {str(e)}")
+
+            # 4. Format the response
+
             processed_data = []
             for bill in billing_records:
                 bill['_id'] = str(bill['_id'])
@@ -3409,12 +3429,12 @@ def corporate_credit_billing(request):
                 if 'netAmount' in bill:
                     bill['netAmount'] = float(str(bill['netAmount'])) if bill['netAmount'] else 0.0
 
-                # ✅ NEW: Fetch employee name from core_employeeregistration
-                employee_id = bill.get('employee_id')
-                if employee_id:
-                    emp_doc = db.core_employeeregistration.find_one({"employee_id": employee_id})
-                    if emp_doc:
-                        bill['employee_name'] = emp_doc.get('employee_name')
+                # ✅ NEW: Fetch employee name from optimized map or fallback to patientname
+                employee_id = str(bill.get('employee_id', '')).strip()
+                emp_name = employee_name_map.get(employee_id)
+                
+                # Fallback sequence: Employee Registration Name -> Billing Patient Name -> "N/A"
+                bill['employee_name'] = emp_name or bill.get('patientname') or "N/A"
                 
                 # ✅ NEW: Extract package details from chctestdetails
                 chc_details = bill.get('chctestdetails', [])
@@ -3423,6 +3443,7 @@ def corporate_credit_billing(request):
                     bill['package_name'] = chc_details[0].get('test_name', 'N/A')
                     
                 processed_data.append(bill)
+
             
             return JsonResponse({
                 "status": "success",
@@ -3498,8 +3519,9 @@ def generate_corporate_invoice(request):
             bill_id = item.get("bill_id")
             if bill_id:
                 try:
-                    billing_collection.update_one(
-                        {"_id": ObjectId(str(bill_id))},
+                    # Update by both ObjectId and String ID to ensure match
+                    billing_collection.update_many(
+                        {"$or": [{"_id": ObjectId(str(bill_id))}, {"_id": str(bill_id)}]},
                         {"$set": {
                             "paymentMode": "Paid",
                             "invoice_number": invoice_number,
@@ -3671,16 +3693,41 @@ def delete_corporate_invoice(request):
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
         invoice_collection = db.core_corporate_invoices
+        billing_collection = db.core_billing
         
+        # 1. Find the invoice first to get associated bills
+        invoice = invoice_collection.find_one({"invoice_number": invoice_number})
+        if not invoice:
+            return JsonResponse({"status": "error", "message": "Invoice not found"}, status=404)
+            
+        # 2. Revert associated billing records
+        bill_items = invoice.get("bill_items", [])
+        from bson import ObjectId
+        for item in bill_items:
+            bill_id = item.get("bill_id")
+            if bill_id:
+                try:
+                    # Update by ObjectId and String ID to be safe
+                    filter_q = {"$or": [{"_id": ObjectId(str(bill_id))}, {"_id": str(bill_id)}]}
+                    billing_collection.update_many(
+                        filter_q,
+                        {"$set": {"paymentMode": "Credit"}, 
+                         "$unset": {"invoice_number": "", "invoiced_at": ""}}
+                    )
+                except:
+                    pass
+
+        # 3. Delete the invoice
         result = invoice_collection.delete_one({"invoice_number": invoice_number})
         
         if result.deleted_count == 0:
-            return JsonResponse({"status": "error", "message": "Invoice not found"}, status=404)
+            return JsonResponse({"status": "error", "message": "Failed to delete invoice document"}, status=500)
             
         return JsonResponse({
             "status": "success",
-            "message": "Invoice deleted successfully"
+            "message": "Invoice deleted and billing records reverted successfully"
         })
+
         
     except Exception as e:
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
