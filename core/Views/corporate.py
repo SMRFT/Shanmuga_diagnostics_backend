@@ -1,4 +1,5 @@
 from django.http import JsonResponse, HttpResponse
+from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 import json
 from pymongo import MongoClient
@@ -3407,6 +3408,19 @@ def corporate_credit_billing(request):
                 # Handle Decimal values (like netAmount)
                 if 'netAmount' in bill:
                     bill['netAmount'] = float(str(bill['netAmount'])) if bill['netAmount'] else 0.0
+
+                # ✅ NEW: Fetch employee name from core_employeeregistration
+                employee_id = bill.get('employee_id')
+                if employee_id:
+                    emp_doc = db.core_employeeregistration.find_one({"employee_id": employee_id})
+                    if emp_doc:
+                        bill['employee_name'] = emp_doc.get('employee_name')
+                
+                # ✅ NEW: Extract package details from chctestdetails
+                chc_details = bill.get('chctestdetails', [])
+                if isinstance(chc_details, list) and len(chc_details) > 0:
+                    bill['package_id'] = chc_details[0].get('test_id', 'N/A')
+                    bill['package_name'] = chc_details[0].get('test_name', 'N/A')
                     
                 processed_data.append(bill)
             
@@ -3703,10 +3717,10 @@ def export_corporate_invoice_pdf(request):
         from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
         from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
         
-        # Define paths to header/footer images from frontend assets
-        frontend_img_dir = "/Users/parthibanmurugan/Desktop/Live Projects/LIS/shanmuga_diagnostics_frontend/src/Components/Images"
-        header_path = os.path.join(frontend_img_dir, "Header.png")
-        footer_path = os.path.join(frontend_img_dir, "Footer.png")
+        # Define paths to header/footer images from backend static
+        backend_static_dir = os.path.join(settings.BASE_DIR, "core", "static", "images")
+        header_path = os.path.join(backend_static_dir, "Header.png")
+        footer_path = os.path.join(backend_static_dir, "Footer.png")
         
         response = HttpResponse(content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="Invoice_{invoice_number}.pdf"'
@@ -3735,35 +3749,46 @@ def export_corporate_invoice_pdf(request):
         title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], alignment=1, fontSize=16, spaceAfter=20)
         elements.append(Paragraph("CORPORATE HEALTH CHECKUP INVOICE", title_style))
         
+        # Extract common details
+        bill_items = invoice.get('bill_items', [])
+        patient_names = set(filter(None, [item.get('patient_name') for item in bill_items]))
+        package_names = set(filter(None, [item.get('package_name') for item in bill_items]))
+        
+        common_patient = list(patient_names)[0] if len(patient_names) == 1 else "Multiple"
+        common_package = list(package_names)[0] if len(package_names) == 1 else "Multiple"
+
         # Info Table
         info_data = [
             [f"Invoice No: {invoice_number}", f"Date: {invoice.get('created_at', '')[:10]}"],
             [f"Company: {invoice.get('company_name')}", f"Period: {invoice.get('from_date')} to {invoice.get('to_date')}"],
+            [f"Patient Name: {common_patient}", f"Package: {common_package}"],
             [f"Payment Method: {invoice.get('payment_method')}", f"Status: {invoice.get('status')}"]
         ]
         info_table = Table(info_data, colWidths=[250, 250])
         info_table.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
             ('FONTSIZE', (0,0), (-1,-1), 10),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 10),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
         ]))
         elements.append(info_table)
         elements.append(Spacer(1, 20))
         
         # Patient Details Table
-        p_header = ["S.No", "Date", "Employee ID", "Barcode", "Amount (₹)"]
+        p_header = ["S.No", "Date", "Patient Name", "Employee ID", "Package ID", "Barcode", "Amount (₹)"]
         p_data = [p_header]
         
-        for idx, item in enumerate(invoice.get('bill_items', []), 1):
+        for idx, item in enumerate(bill_items, 1):
             p_data.append([
                 str(idx),
                 item.get('date', '')[:10],
-                item.get('employee_id'),
-                item.get('barcode'),
+                item.get('patient_name', 'N/A'),
+                item.get('employee_id', 'N/A'),
+                item.get('package_id', 'N/A'),
+                item.get('barcode', 'N/A'),
                 f"{float(item.get('amount', 0)):.2f}"
             ])
             
-        p_table = Table(p_data, colWidths=[40, 100, 120, 120, 100])
+        p_table = Table(p_data, colWidths=[30, 65, 110, 80, 80, 80, 70])
         p_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.grey),
             ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
