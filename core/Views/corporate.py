@@ -3331,7 +3331,9 @@ def corporate_credit_billing(request):
             company_map = {str(comp.get("company_id", "")).strip(): comp.get("company_name", "") for comp in companies if comp.get("company_id")}
             
             # 2. Fetch billing records where paymentMode is Credit
-            query = {"paymentMode": "Credit"}
+            # 2. Fetch billing records that are not yet fully paid/invoiced
+            query = {"$or": [{"paymentMode": "Credit"}, {"paymentMode": {"$exists": False}}, {"paymentMode": None}]}
+
             
             req_company_id = request.GET.get('company_id')
             if req_company_id:
@@ -3372,8 +3374,11 @@ def corporate_credit_billing(request):
                         oid_list.append(ObjectId(bid))
                     except:
                         pass
-                # Exclude both ObjectIds and string IDs to be safe
-                query["_id"] = {"$nin": oid_list + invoiced_bill_ids}
+                # Exclude bills that are in any invoice (support ObjectId, string, and integer IDs)
+                query["_id"] = {
+                    "$nin": oid_list + invoiced_bill_ids + [int(bid) for bid in invoiced_bill_ids if str(bid).isdigit()]
+                }
+
 
 
 
@@ -3519,11 +3524,16 @@ def generate_corporate_invoice(request):
             bill_id = item.get("bill_id")
             if bill_id:
                 try:
-                    # Update by both ObjectId and String ID to ensure match
+                    # Update by ObjectId, String ID, and Integer ID to ensure match
+                    filter_q = {"$or": [
+                        {"_id": ObjectId(str(bill_id))}, 
+                        {"_id": str(bill_id)},
+                        {"_id": int(bill_id) if str(bill_id).isdigit() else None}
+                    ]}
                     billing_collection.update_many(
-                        {"$or": [{"_id": ObjectId(str(bill_id))}, {"_id": str(bill_id)}]},
+                        filter_q,
                         {"$set": {
-                            "paymentMode": "Paid",
+                            "paymentMode": "Invoiced",
                             "invoice_number": invoice_number,
                             "invoiced_at": datetime.now().isoformat()
                         }}
@@ -3707,8 +3717,12 @@ def delete_corporate_invoice(request):
             bill_id = item.get("bill_id")
             if bill_id:
                 try:
-                    # Update by ObjectId and String ID to be safe
-                    filter_q = {"$or": [{"_id": ObjectId(str(bill_id))}, {"_id": str(bill_id)}]}
+                    # Update by ObjectId, String ID, and Integer ID to ensure match
+                    filter_q = {"$or": [
+                        {"_id": ObjectId(str(bill_id))}, 
+                        {"_id": str(bill_id)},
+                        {"_id": int(bill_id) if str(bill_id).isdigit() else None}
+                    ]}
                     billing_collection.update_many(
                         filter_q,
                         {"$set": {"paymentMode": "Credit"}, 
