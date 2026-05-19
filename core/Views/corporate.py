@@ -3393,7 +3393,7 @@ def corporate_credit_billing(request):
                 for i in range(0, len(employee_ids), chunk_size):
                     chunk = employee_ids[i:i + chunk_size]
                     try:
-                        employees = list(db.core_employeeregistration.find({"employee_id": {"$in": chunk}}))
+                        employees = list(db.core_chcregistration.find({"employee_id": {"$in": chunk}}))
                         for emp in employees:
                             eid = str(emp.get('employee_id', '')).strip()
                             if eid:
