@@ -124,7 +124,7 @@ def get_corporate_sample(request, batch_number):
 
             # Collections
             samples_collection = db["core_sample"]
-            employee_collection = db["core_employeeregistration"]
+            employee_collection = db["core_chcregistration"]
             billing_collection = db["core_billing"]
 
             # Connect to Diagnostics database for test details
@@ -162,7 +162,7 @@ def get_corporate_sample(request, batch_number):
 
             logger.info(f"Sample billing lookup entries: {dict(list(billing_lookup.items())[:5])}")
 
-            # Step 2: employee_id -> employee_data from core_employeeregistration
+            # Step 2: employee_id -> employee_data from core_chcregistration
             employee_lookup = {}
             for emp in employees:
                 employee_id = emp.get('employee_id')
@@ -687,7 +687,7 @@ def corporate_overall_report(request):
         db = client.Corporatehealthcheckup
         patients_collection = db.core_billing
         sample_status_collection = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
+        franchise_patient_collection = db.core_chcregistration
         investigation_collection = db.core_investigation
 
         diagnostics_db = client.Diagnostics
@@ -1143,7 +1143,7 @@ def corporate_patient_test_details(request):
         db = client.Corporatehealthcheckup
         franchise_billing_collection = db.core_billing
         franchise_sample_collection  = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
+        franchise_patient_collection = db.core_chcregistration
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
@@ -1184,7 +1184,7 @@ def corporate_patient_test_details(request):
             barcodes = []
 
         # ── Resolve patient gender for reference range selection ──────────────
-        # core_employeeregistration has a 'gender' field
+        # core_chcregistration has a 'gender' field
         patient_gender = (franchise_patient.get('gender') or '').strip()
 
         # ── Gender-aware reference_range resolver ─────────────────────────────
@@ -1450,27 +1450,23 @@ def corporate_patient_test_details(request):
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
 
-NORMAL_NOTES_WHITELIST = {
-    "normal study.",
-    "no significant finding in the lungs or mediastinum.",
-    "no significant abnormality detected.",
-}
 
 
 # ── HELPER: Check if a notes string is a whitelisted normal statement ─────────
 NORMAL_NOTES_WHITELIST = {
-    "normal study.",
-    "no significant finding in the lungs or mediastinum.",
-    "no significant abnormality detected.",
+    "Normal Study.",
+    "No significant finding in the lungs or mediastinum.",
+    "No significant abnormality detected.",
+    "Normal Study within normal limits.",
 }
 
-NORMAL_VITAL_STATUSES = {"bp_status", "bmi_status", "spo2_status"}
+NORMAL_VITAL_STATUSES = {"BP_status", "bmi_status", "spo2_status"}
 
 
 def _is_normal_notes(notes: str) -> bool:
     if not notes or not notes.strip():
         return False
-    return notes.strip().lower() in NORMAL_NOTES_WHITELIST
+    return notes.strip() in NORMAL_NOTES_WHITELIST  # no .lower()
 
 
 def _is_vitals_normal(vitals: dict) -> bool:
@@ -1551,7 +1547,7 @@ def corporate_approval_report(request):
         db = client.Corporatehealthcheckup
         patients_collection = db.core_billing
         sample_status_collection = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
+        franchise_patient_collection = db.core_chcregistration
         overall_approval_collection = db.overallApproval
         investigation_collection = db.core_investigation
         company_collection = db.core_company
@@ -1900,7 +1896,7 @@ def corporate_health_report(request):
 
         franchise_billing_collection          = db.core_billing
         franchise_sample_collection           = db.core_sample
-        franchise_patient_collection          = db.core_employeeregistration
+        franchise_patient_collection          = db.core_chcregistration
         franchise_investigation_collection    = db.core_investigation
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection          = db.core_company
@@ -1913,7 +1909,7 @@ def corporate_health_report(request):
         fs                 = gridfs.GridFS(global_db)
 
         # ── Parameter helper ──────────────────────────────────────────────────
-        def get_parameter_from_core(core_test, device_id, test_code):
+        def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
             core_parameters = core_test.get("parameters", {})
             params_list = []
             if isinstance(core_parameters, dict):
@@ -1927,6 +1923,8 @@ def corporate_health_report(request):
                 params_list = core_parameters
             if not isinstance(params_list, list):
                 return None
+            if param_index is not None and 0 <= param_index < len(params_list):
+                return params_list[param_index]
             if test_code:
                 matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
                 if matching_params:
@@ -1972,7 +1970,7 @@ def corporate_health_report(request):
             return JsonResponse({'error': 'Patient not found'}, status=404)
 
         # ── Resolve patient gender for reference range selection ──────────────
-        # core_employeeregistration has a 'gender' field
+        # core_chcregistration has a 'gender' field
         patient_gender = (franchise_patient.get('gender') or '').strip()
 
         # ── Gender-aware reference_range resolver ─────────────────────────────
@@ -2276,13 +2274,16 @@ def corporate_health_report(request):
                         if test_detail.get("parameters"):
                             # ── Parameterised test ────────────────────────────
                             processed_parameters = []
-                            for param in test_detail.get("parameters", []):
+                            for param_index, param in enumerate(test_detail.get("parameters", [])):
                                 test_code     = param.get("test_code")
                                 value         = param.get("value", "")
                                 param_comment = param.get("comment", "")
 
-                                param_def = get_parameter_from_core(core_test, device_id, test_code) \
-                                    if core_test and test_code else None
+                                param_def = get_parameter_from_core(
+                                    core_test, device_id,
+                                    test_code=test_code,
+                                    param_index=param_index,
+                                ) if core_test else None
 
                                 processed_param = {}
                                 if param_def:
@@ -2824,7 +2825,7 @@ def get_batch_corporate_health_reports(request):
 
         franchise_billing_collection          = db.core_billing
         franchise_sample_collection           = db.core_sample
-        franchise_patient_collection          = db.core_employeeregistration
+        franchise_patient_collection          = db.core_chcregistration
         franchise_investigation_collection    = db.core_investigation
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection          = db.core_company
@@ -2837,7 +2838,7 @@ def get_batch_corporate_health_reports(request):
         fs                 = gridfs.GridFS(global_db)
 
         # ── Parameter helper ──────────────────────────────────────────────────
-        def get_parameter_from_core(core_test, device_id, test_code):
+        def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
             core_parameters = core_test.get("parameters", {})
             params_list = []
             if isinstance(core_parameters, dict):
@@ -2851,6 +2852,8 @@ def get_batch_corporate_health_reports(request):
                 params_list = core_parameters
             if not isinstance(params_list, list):
                 return None
+            if param_index is not None and 0 <= param_index < len(params_list):
+                return params_list[param_index]
             if test_code:
                 matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
                 if matching_params:
@@ -3190,13 +3193,16 @@ def get_batch_corporate_health_reports(request):
                                 if test_detail.get("parameters"):
                                     # ── Parameterised test ────────────────────
                                     processed_parameters = []
-                                    for param in test_detail.get("parameters", []):
+                                    for param_index, param in enumerate(test_detail.get("parameters", [])):
                                         test_code     = param.get("test_code")
                                         value         = param.get("value", "")
                                         param_comment = param.get("comment", "")
 
-                                        param_def = get_parameter_from_core(core_test, device_id, test_code) \
-                                            if core_test and test_code else None
+                                        param_def = get_parameter_from_core(
+                                            core_test, device_id,
+                                            test_code=test_code,
+                                            param_index=param_index,
+                                        ) if core_test else None
 
                                         processed_param = {}
                                         if param_def:

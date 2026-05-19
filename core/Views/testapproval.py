@@ -44,7 +44,7 @@ def get_test_values(request):
 
     corp = client.Corporatehealthcheckup
     billing_collection = corp.core_billing
-    patient_collection = corp.core_employeeregistration
+    patient_collection = corp.core_chcregistration
 
     # BarcodeTestDetails collection
     diagnostics = client.Diagnostics
@@ -162,8 +162,8 @@ def get_test_values(request):
         for doc in mongo_patient_docs
     }
 
-    # 4. Corporate core_employeeregistration - bulk fetch (fallback)
-    #    core_employeeregistration has: employee_id, employee_name, age, gender, mobile
+    # 4. Corporate core_chcregistration - bulk fetch (fallback)
+    #    core_chcregistration has: employee_id, employee_name, age, gender, mobile
     corp_billing_docs = list(billing_collection.find(
         {"barcode": {"$in": barcodes}},
         {"barcode": 1, "employee_id": 1, "_id": 0}
@@ -358,7 +358,7 @@ def get_test_values(request):
                 if not phone and patient_info.get('phone'):
                     phone = patient_info['phone']
 
-        # ── PRIORITY 4: core_employeeregistration (fallback — has gender, mobile) ──
+        # ── PRIORITY 4: core_chcregistration (fallback — has gender, mobile) ──
         if not current_patient_id and barcode_val in corp_billing_dict:
             current_patient_id = corp_billing_dict[barcode_val]
             if current_patient_id in corp_employee_dict:
@@ -659,7 +659,7 @@ def get_approved_values(request):
 
     corp = client.Corporatehealthcheckup
     billing_collection = corp.core_billing
-    patient_collection = corp.core_employeeregistration
+    patient_collection = corp.core_chcregistration
 
     # BarcodeTestDetails collection
     diagnostics = client.Diagnostics
@@ -777,8 +777,8 @@ def get_approved_values(request):
         for doc in mongo_patient_docs
     }
 
-    # 4. Corporate core_employeeregistration - bulk fetch (fallback)
-    #    core_employeeregistration has: employee_id, employee_name, age, gender, mobile
+    # 4. Corporate core_chcregistration - bulk fetch (fallback)
+    #    core_chcregistration has: employee_id, employee_name, age, gender, mobile
     corp_billing_docs = list(billing_collection.find(
         {"barcode": {"$in": barcodes}},
         {"barcode": 1, "employee_id": 1, "_id": 0}
@@ -970,7 +970,7 @@ def get_approved_values(request):
                 if not phone and patient_info.get('phone'):
                     phone = patient_info['phone']
 
-        # ── PRIORITY 4: core_employeeregistration (fallback — has gender, mobile) ──
+        # ── PRIORITY 4: core_chcregistration (fallback — has gender, mobile) ──
         if not current_patient_id and barcode_val in corp_billing_dict:
             current_patient_id = corp_billing_dict[barcode_val]
             if current_patient_id in corp_employee_dict:
