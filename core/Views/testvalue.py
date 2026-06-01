@@ -1093,6 +1093,10 @@ def process_test_data(
                     "received_date":     received_date,
                     "sub_title":         None,
                     "value_option":      test_detail.get("value_option", []),
+                    "specimen_options":  test_detail.get("specimen_options", []),
+                    "interpretation":    test_detail.get("interpretation", ""),
+                    "critical_range":    test_detail.get("critical_range", ""),
+                    "lod":               test_detail.get("lod", ""),
                 }
                 final_test_data.append(test_info)
                 continue
@@ -1241,6 +1245,10 @@ def process_test_data(
                         "received_date":     received_date,
                         "sub_title":         param.get("sub_title"),
                         "value_option":      param.get("value_option"),
+                        "specimen_options":  test_detail.get("specimen_options", []),
+                        "interpretation":    test_detail.get("interpretation", ""),
+                        "critical_range":    test_detail.get("critical_range", ""),
+                        "lod":               test_detail.get("lod", ""),
                     }
                     final_test_data.append(test_info)
 
