@@ -1493,49 +1493,32 @@ def _compute_corporate_approval_status(
     lab_test_values,
     no_of_tests,
     investigation_status,
-    vitals=None,           # ← new parameter
+    vitals=None,
 ):
-    """
-    Returns "Approved" when ALL of:
-      1. core_investigation.status == "approved", AND
-         All CHC test notes are exactly a whitelisted normal statement, AND
-      2. All ordered lab tests are approved AND all have status == "Normal", AND
-      3. All vital statuses (BP_status, bmi_status, spo2_status) == "Normal"
-    Falls back to existing overallApproval-based logic otherwise.
-    """
-    # ── 1. CHC notes check ───────────────────────────────────────────────────
     chc_all_normal = (
         investigation_status == "approved"
         and len(chc_tests_with_status) > 0
         and all(_is_normal_notes(ct.get("notes", "")) for ct in chc_tests_with_status)
     )
-
-    # ── 2. Lab test status check ─────────────────────────────────────────────
     valid_lab_tests = [
         t for t in lab_test_values
         if not t.get("rerun", False) and t.get("approve", False)
     ]
-
     lab_all_normal = (
         no_of_tests > 0
         and len(valid_lab_tests) >= no_of_tests
-        and all(
-            t.get("status", "").strip().lower() == "normal"
-            for t in valid_lab_tests
-        )
+        and all(t.get("status", "").strip().lower() == "normal" for t in valid_lab_tests)
     )
-
-    # ── 3. Vitals status check ────────────────────────────────────────────────
     vitals_all_normal = _is_vitals_normal(vitals)
 
     if chc_all_normal and lab_all_normal and vitals_all_normal:
-        return "Approved"
+        return "Approved", "auto", None   # ← no approver name for auto
 
-    # ── 4. Fallback: overallApproval collection ───────────────────────────────
     if bc and bc in approval_status_map:
-        return "Approved"
+        approver_name = approval_status_map[bc].get("approved_by_name", "Unknown")
+        return "Approved", "manual", approver_name
 
-    return "Pending"
+    return "Pending", "none", None
 
 
 @api_view(['GET', 'PATCH'])
@@ -1693,17 +1676,37 @@ def corporate_approval_report(request):
             if cid:
                 company_name_map[cid] = company.get("company_name", cid)
 
-        # ── STEP 5: Overall approval map ──────────────────────────────────────
+        # ── STEP 5: Overall approval map ──────────────────────────────────────────────
         approval_status_map = {}
-        approval_records = overall_approval_collection.find({"barcode": {"$in": barcodes}})
+        approval_records = list(overall_approval_collection.find({"barcode": {"$in": barcodes}}))
+
+        # Collect created_by employee IDs
+        approval_creator_ids = list(set(
+            r.get("created_by") for r in approval_records if r.get("created_by")
+        ))
+
+        # Bulk-fetch names from backend_diagnostics_profile (Global DB)
+        global_db = client.Global  # ← adjust if your DB name differs
+        diagnostics_profile_collection = global_db.backend_diagnostics_profile
+
+        creator_name_map = {}
+        for profile in diagnostics_profile_collection.find(
+            {"employeeId": {"$in": approval_creator_ids}},
+            {"employeeId": 1, "employeeName": 1}
+        ):
+            creator_name_map[profile.get("employeeId")] = profile.get("employeeName", "Unknown")
+
         for approval in approval_records:
             bc = approval.get("barcode")
             if bc:
+                creator_id = approval.get("created_by", "")
                 approval_status_map[bc] = {
                     "status": approval.get("status", "approved"),
                     "approved_date": approval.get("approved_date"),
                     "impression": approval.get("impression"),
                     "remarks": approval.get("remarks"),
+                    "created_by": creator_id,
+                    "approved_by_name": creator_name_map.get(creator_id, creator_id or "Unknown"),
                 }
 
         # ── STEP 6: Investigation records ─────────────────────────────────────
@@ -1827,7 +1830,7 @@ def corporate_approval_report(request):
             else:
                 combined_investigation_status = "All Approved"
 
-            status = _compute_corporate_approval_status(
+            status, approval_type, approved_by_name = _compute_corporate_approval_status(
                 bc=bc,
                 approval_status_map=approval_status_map,
                 chc_tests_with_status=chc_tests_with_status,
@@ -1872,6 +1875,8 @@ def corporate_approval_report(request):
                 "chc_investigation_status": combined_investigation_status,  # lab + CHC combined
                 "chc_pending_tests": chc_pending,
                 "chc_approved_tests": chc_approved,
+                "approval_type": approval_type,
+                "approved_by_name": approved_by_name,
             })
 
         client.close()
@@ -2604,40 +2609,34 @@ def get_batch_investigation_status(request):
     """
     Batch version of get_investigation_status.
     Accepts: {"barcodes": ["300010", "300011", ...]}
+    Now also returns vitals and patient_history per barcode.
     """
     barcodes = request.data.get('barcodes', [])
     if not barcodes or not isinstance(barcodes, list):
         return JsonResponse({'error': 'Barcodes array is required'}, status=400)
-
+ 
     barcodes = [str(bc) for bc in barcodes]
-    print(f"Processing {len(barcodes)} barcodes: {barcodes[:5]}...")
-
+ 
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
-
+ 
         investigation_collection = db.core_investigation
-        ophthalmology_collection = db.core_ophthalmology
-        sample_collection = db.core_sample
-        billing_collection = db.core_billing
-
-        # Fetch all records in bulk
+        sample_collection        = db.core_sample
+        billing_collection       = db.core_billing
+ 
+        # ── Bulk fetch everything in 3 queries total ──────────────────────────
         investigations = list(investigation_collection.find({"barcode": {"$in": barcodes}}))
-        ophthalmologies = list(ophthalmology_collection.find({"barcode": {"$in": barcodes}}))
-        samples = list(sample_collection.find({"barcode": {"$in": barcodes}}))
-        billings = list(billing_collection.find({"barcode": {"$in": barcodes}}))
+        samples        = list(sample_collection.find({"barcode": {"$in": barcodes}}))
+        billings       = list(billing_collection.find({"barcode": {"$in": barcodes}}))
         test_value_records = TestValue.objects.filter(barcode__in=barcodes)
-
-        print(f"Found {len(investigations)} investigations, {len(ophthalmologies)} ophthalmology, "
-              f"{len(samples)} samples, {len(billings)} billings, {len(test_value_records)} test values")
-
+ 
         # Build lookup maps
         investigation_map = {str(inv['barcode']): inv for inv in investigations}
-        ophthalmology_map = {str(oph['barcode']): oph for oph in ophthalmologies}
-        sample_map = {str(s['barcode']): s for s in samples}
-        billing_map = {str(b['barcode']): b for b in billings}
-
-        # Approved tests count per barcode
+        sample_map        = {str(s['barcode']): s   for s   in samples}
+        billing_map       = {str(b['barcode']): b   for b   in billings}
+ 
+        # Approved test count per barcode
         approved_tests_map = {}
         for record in test_value_records:
             bc = str(record.barcode)
@@ -2645,108 +2644,126 @@ def get_batch_investigation_status(request):
             tests_list = json.loads(td) if isinstance(td, str) else (td or [])
             count = sum(1 for t in tests_list if isinstance(t, dict) and t.get("approve"))
             approved_tests_map[bc] = approved_tests_map.get(bc, 0) + count
-
+ 
         results = {}
+ 
         for barcode in barcodes:
             investigation = investigation_map.get(barcode)
-            ophthalmology = ophthalmology_map.get(barcode)
-            sample = sample_map.get(barcode)
-            billing = billing_map.get(barcode)
-
+            sample        = sample_map.get(barcode)
+            billing       = billing_map.get(barcode)
+ 
             inv_status = investigation.get("status", "").strip().lower() if investigation else ""
-
-            # Lab approval
+ 
+            # ── Vitals ────────────────────────────────────────────────────────
+            vitals_data = {}
+            if investigation:
+                raw_vitals = investigation.get("vitals", {})
+                if isinstance(raw_vitals, str):
+                    try: raw_vitals = json.loads(raw_vitals)
+                    except Exception: raw_vitals = {}
+                for k, v in raw_vitals.items():
+                    if v and str(v).strip() not in ("", "0"):
+                        vitals_data[k] = v
+ 
+            # ── Patient history ────────────────────────────────────────────────
+            patient_history = ""
+            if investigation:
+                patient_history = investigation.get("patient_history", "") or ""
+ 
+            # ── Lab approval ──────────────────────────────────────────────────
             total_sample_tests = 0
             if sample and sample.get('testdetails'):
                 raw = sample.get('testdetails')
-                sample_tests = json.loads(raw) if isinstance(raw, str) else (raw or [])
-                total_sample_tests = len(sample_tests)
+                sample_tests_list = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                invalid = {"Rejected", "Outsource"}
+                total_sample_tests = sum(
+                    1 for t in sample_tests_list
+                    if t.get("samplestatus", "").strip() not in invalid
+                )
             approved_count = approved_tests_map.get(barcode, 0)
             lab_approval = "approved" if (total_sample_tests > 0 and approved_count >= total_sample_tests) else "pending"
-
-            # Ophthalmology
-            ophthalmology_status = ophthalmology.get("status", "pending") if ophthalmology else "pending"
-
-            # NEW: Per-CHC-test status from investigation.test_results
+ 
+            # ── Per-CHC-test status from investigation.test_results ───────────
             chc_test_status = {}
             if investigation:
                 test_results = investigation.get("test_results", [])
                 if isinstance(test_results, str):
-                    try:
-                        test_results = json.loads(test_results)
-                    except (json.JSONDecodeError, TypeError):
-                        test_results = []
-                for tr in test_results:
-                    tid = str(tr.get("test_id", ""))
-                    if not tid:
-                        continue
-                    files = tr.get("files", [])
-                    report = tr.get("report", "") or ""
-                    notes = tr.get("notes", "") or ""
+                    try: test_results = json.loads(test_results)
+                    except Exception: test_results = []
+                for tr in (test_results or []):
+                    tid    = str(tr.get("test_id", ""))
+                    if not tid: continue
+                    files  = tr.get("files", []) or []
+                    report = (tr.get("report") or "").strip()
+                    notes  = tr.get("notes") or ""
                     chc_test_status[tid] = {
-                        "test_name": tr.get("test_name", ""),
-                        "report": report,
-                        "notes": notes,
-                        "files": files,
-                        "has_report": bool(report.strip()),
-                        "has_file": bool(files),
-                        "status": "approved" if (bool(report.strip()) or bool(files)) else "pending",
+                        "test_name":  tr.get("test_name", ""),
+                        "report":     report,
+                        "notes":      notes,
+                        "files":      files,
+                        "has_report": bool(report),
+                        "has_file":   bool(files),
+                        "status":     "approved" if (bool(report) or bool(files)) else "pending",
                     }
-
-            # NEW: Get chctestdetails from billing
+ 
+            # CHCT001 from core_investigation directly
+            ophthal_data = investigation.get("CHCT001", {}) if investigation else {}
+            if ophthal_data:
+                chc_test_status["CHCT001"] = {
+                    "test_name":  "Ophthalmology",
+                    "report":     "",
+                    "notes":      ophthal_data.get("remarks", ""),
+                    "files":      [],
+                    "has_report": True,
+                    "has_file":   False,
+                    "status":     "approved",
+                }
+ 
+            # Enrich with billing chctestdetails
             chc_tests_list = []
             if billing:
                 chc_raw = billing.get("chctestdetails", "[]")
                 if isinstance(chc_raw, str):
-                    try:
-                        chc_tests_list = json.loads(chc_raw)
-                    except (json.JSONDecodeError, TypeError):
-                        chc_tests_list = []
+                    try: chc_tests_list = json.loads(chc_raw)
+                    except Exception: chc_tests_list = []
                 elif isinstance(chc_raw, list):
                     chc_tests_list = chc_raw
-
+ 
             chc_tests_enriched = []
             for ct in chc_tests_list:
-                tid = str(ct.get("test_id", ""))
+                tid  = str(ct.get("test_id", ""))
                 info = chc_test_status.get(tid, {})
                 chc_tests_enriched.append({
-                    "test_id": tid,
-                    "testname": ct.get("testname", ""),
-                    "status": info.get("status", "pending"),
+                    "test_id":    tid,
+                    "testname":   ct.get("testname", ""),
+                    "status":     info.get("status", "pending"),
                     "has_report": info.get("has_report", False),
-                    "has_file": info.get("has_file", False),
-                    "report": info.get("report", ""),
-                    "notes": info.get("notes", ""),
-                    "files": info.get("files", []),
+                    "has_file":   info.get("has_file",   False),
+                    "report":     info.get("report",     ""),
+                    "notes":      info.get("notes",      ""),
+                    "files":      info.get("files",      []),
                 })
-
-            chc_overall_status = "approved" if inv_status == "approved" else "pending"
-
+ 
             results[barcode] = {
-                # Legacy field — keep for backward-compat with existing frontend code
+                'lab_approval':             lab_approval,
+                'chc_tests':                chc_tests_enriched,
+                'chc_investigation_status': "approved" if inv_status == "approved" else "pending",
+                'vitals':                   vitals_data,       # ← NEW
+                'patient_history':          patient_history,   # ← NEW
+                # legacy field kept for backward compat
                 'investigation': {
-                    "xray_report": "pending",
-                    "xrayfilm_file": "pending",
-                    "ecg_file": "pending",
-                    "pft_file": "pending",
+                    "xray_report": "pending", "xrayfilm_file": "pending",
+                    "ecg_file": "pending", "pft_file": "pending",
                     "audiometric_file": "pending",
                 },
-                'ophthalmology': ophthalmology_status,
-                'lab_approval': lab_approval,
-                # NEW fields
-                'chc_tests': chc_tests_enriched,
-                'chc_investigation_status': chc_overall_status,
             }
-
+ 
         client.close()
-        print(f"Returning results for {len(results)} barcodes")
         return JsonResponse({'success': True, 'results': results})
-
+ 
     except Exception as e:
-        print(f"Error in batch status fetch: {e}")
         print(traceback.format_exc())
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
 
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
