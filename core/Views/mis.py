@@ -1132,6 +1132,8 @@ class HMSTestCountView(APIView):
         
         for record in qs:
             td = record.testdetails
+            gender = str(record.gender).lower() if hasattr(record, 'gender') and record.gender else 'unknown'
+            
             if isinstance(td, str):
                 try:
                     td = json.loads(td)
@@ -1153,9 +1155,15 @@ class HMSTestCountView(APIView):
                         test_counts[key] = {
                             "test_id": test_id,
                             "test_name": test_name,
-                            "count": 0
+                            "count": 0,
+                            "male_count": 0,
+                            "female_count": 0
                         }
                     test_counts[key]["count"] += 1
+                    if gender in ['male', 'm']:
+                        test_counts[key]["male_count"] += 1
+                    elif gender in ['female', 'f']:
+                        test_counts[key]["female_count"] += 1
 
         # Convert to list and sort by count descending
         report_data = list(test_counts.values())
