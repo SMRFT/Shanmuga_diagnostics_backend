@@ -55,11 +55,19 @@ def test_summary(request):
     if to_date:
         bills = bills.filter(bill_date__lte=to_date)
 
+    # Fetch patient gender mapping
+    patient_ids = [bill.patient_id for bill in bills if bill.patient_id]
+    from ..models import Patient
+    patients = Patient.objects.filter(patient_id__in=patient_ids).values('patient_id', 'gender')
+    patient_genders = {p['patient_id']: str(p['gender']).lower() for p in patients if p.get('gender')}
+
     # --- Process each bill ---
     for bill in bills:
         raw_data = bill.testdetails
         if not raw_data:
             continue
+
+        gender = patient_genders.get(bill.patient_id, 'unknown')
 
         # Handle string / list
         if isinstance(raw_data, list):
@@ -87,13 +95,23 @@ def test_summary(request):
                 continue
 
             if name not in summary:
-                summary[name] = {"count": 0, "total_amount": 0}
+                summary[name] = {"count": 0, "total_amount": 0, "male_count": 0, "female_count": 0}
             summary[name]["count"] += 1
             summary[name]["total_amount"] += amount
+            if gender in ['male', 'm']:
+                summary[name]["male_count"] += 1
+            elif gender in ['female', 'f']:
+                summary[name]["female_count"] += 1
 
     # Format response
     result = [
-        {"test_name": k, "count": v["count"], "total_amount": v["total_amount"]}
+        {
+            "test_name": k, 
+            "count": v["count"], 
+            "total_amount": v["total_amount"],
+            "male_count": v["male_count"],
+            "female_count": v["female_count"]
+        }
         for k, v in summary.items()
     ]
     return Response(result)
