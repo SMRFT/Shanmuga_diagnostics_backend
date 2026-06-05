@@ -1511,7 +1511,7 @@ def _compute_corporate_approval_status(
     vitals_all_normal = _is_vitals_normal(vitals)
 
     if chc_all_normal and lab_all_normal and vitals_all_normal:
-        return "Approved", "auto", None   # ← no approver name for auto
+        return "Approved", "auto", None
 
     if bc and bc in approval_status_map:
         approver_name = approval_status_map[bc].get("approved_by_name", "Unknown")
@@ -1522,7 +1522,6 @@ def _compute_corporate_approval_status(
 
 @api_view(['GET', 'PATCH'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
 def corporate_approval_report(request):
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -1571,7 +1570,7 @@ def corporate_approval_report(request):
         # Build sample date map, testdetails map, and valid test count map by barcode
         sample_date_by_barcode = {}
         sample_testdetails_by_barcode = {}
-        valid_test_count_by_barcode = {}  # for lab_approval computation
+        valid_test_count_by_barcode = {}
 
         for record in sample_records:
             bc = record.get("barcode")
@@ -1636,7 +1635,6 @@ def corporate_approval_report(request):
         if not billing_records:
             return JsonResponse([], safe=False)
 
-        # Build barcode → billing and barcode → employee_id maps
         barcode_to_billing = {}
         barcode_to_employee_id = {}
         employee_ids = []
@@ -1660,7 +1658,7 @@ def corporate_approval_report(request):
 
         print(f"Fetched {len(patient_details_map)} patient detail records")
 
-        # After building employee_ids (before step 4), collect all company_ids:
+        # Collect all company_ids
         company_ids = list(set(
             pd.get("company_id") for pd in franchise_patient_collection.find(
                 {"employee_id": {"$in": employee_ids}},
@@ -1675,17 +1673,15 @@ def corporate_approval_report(request):
             if cid:
                 company_name_map[cid] = company.get("company_name", cid)
 
-        # ── STEP 5: Overall approval map ──────────────────────────────────────────────
+        # ── STEP 5: Overall approval map ──────────────────────────────────────
         approval_status_map = {}
         approval_records = list(overall_approval_collection.find({"barcode": {"$in": barcodes}}))
 
-        # Collect created_by employee IDs
         approval_creator_ids = list(set(
             r.get("created_by") for r in approval_records if r.get("created_by")
         ))
 
-        # Bulk-fetch names from backend_diagnostics_profile (Global DB)
-        global_db = client.Global  # ← adjust if your DB name differs
+        global_db = client.Global
         diagnostics_profile_collection = global_db.backend_diagnostics_profile
 
         creator_name_map = {}
@@ -1728,7 +1724,7 @@ def corporate_approval_report(request):
 
         # ── STEP 7: Bulk-fetch TestValue records ──────────────────────────────
         lab_tests_by_barcode = {}
-        approved_count_by_barcode = {}  # approved test count per barcode
+        approved_count_by_barcode = {}
 
         for record in TestValue.objects.filter(barcode__in=barcodes):
             bc = str(record.barcode)
@@ -1736,17 +1732,16 @@ def corporate_approval_report(request):
             parsed = json.loads(td) if isinstance(td, str) else (td or [])
             if isinstance(parsed, list):
                 lab_tests_by_barcode.setdefault(bc, []).extend(parsed)
-                # Count tests where approve=True
                 approved = sum(1 for t in parsed if isinstance(t, dict) and t.get("approve"))
                 approved_count_by_barcode[bc] = approved_count_by_barcode.get(bc, 0) + approved
 
-        # ── STEP 8: Build response — iterate over barcodes from core_sample ───
+        # ── STEP 8: Build response ─────────────────────────────────────────────
         formatted_data = []
 
         for bc in barcodes:
             billing = barcode_to_billing.get(bc)
             if not billing:
-                continue  # no billing record for this barcode, skip
+                continue
 
             eid = barcode_to_employee_id.get(bc, "N/A")
             patient_detail = patient_details_map.get(eid, {})
@@ -1778,17 +1773,24 @@ def corporate_approval_report(request):
                 chc_tests = chc_raw
 
             chc_status_map_for_barcode = chc_status_by_barcode.get(str(bc), {})
+
+            # ── Get investigation_status early so per-test logic can use it ──
+            investigation_status = investigation_status_by_barcode.get(str(bc), "")
+            vitals = vitals_by_barcode.get(str(bc), {})
+
             chc_tests_with_status = []
             for ct in chc_tests:
                 tid = str(ct.get("test_id", ""))
                 info = chc_status_map_for_barcode.get(tid, {})
-                
-                inv_status = info.get("inv_status", "")   # ← read investigation status
+
+                inv_status = info.get("inv_status", "")
                 has_content = info.get("has_report") or info.get("has_file")
 
-                # If investigation is explicitly "pending", treat as Pending
-                # regardless of whether files/reports exist
-                if inv_status == "approved" and has_content:
+                # ── FIX 1: If overall investigation is approved, all tests
+                #           are approved regardless of file/report presence ──
+                if investigation_status == "approved":
+                    chc_status = "Approved"
+                elif inv_status == "approved" and has_content:
                     chc_status = "Approved"
                 else:
                     chc_status = "Pending"
@@ -1801,7 +1803,7 @@ def corporate_approval_report(request):
                     "report": info.get("report", ""),
                     "notes": info.get("notes", ""),
                     "files": info.get("files", []),
-                    "status": chc_status,   # ← driven by inv_status first, then content
+                    "status": chc_status,
                 })
 
             chc_overall, chc_pending, chc_approved = _chc_approval_status(
@@ -1809,8 +1811,6 @@ def corporate_approval_report(request):
             )
 
             raw_lab_tests = lab_tests_by_barcode.get(str(bc), [])
-            investigation_status = investigation_status_by_barcode.get(str(bc), "")
-            vitals = vitals_by_barcode.get(str(bc), {})
 
             # Compute lab_approval per barcode
             total_sample = valid_test_count_by_barcode.get(str(bc), 0)
@@ -1820,11 +1820,12 @@ def corporate_approval_report(request):
                 else "Pending"
             )
 
-            # ── KEY FIX: Combined investigation status = lab + CHC both must be approved ──
-            # If lab is Pending → overall is Pending regardless of CHC status
-            # If lab is Approved but CHC has pending tests → Pending
-            # Only "All Approved" when BOTH lab and all CHC tests are approved
-            if lab_approval == "Pending" or chc_overall != "All Approved":
+            # ── FIX 2: If core_investigation.status == "approved" AND lab is
+            #           approved → treat as All Approved without checking
+            #           per-test file/report presence ──
+            if investigation_status == "approved" and lab_approval == "Approved":
+                combined_investigation_status = "All Approved"
+            elif lab_approval == "Pending" or chc_overall != "All Approved":
                 combined_investigation_status = "Pending"
             else:
                 combined_investigation_status = "All Approved"
@@ -1852,7 +1853,7 @@ def corporate_approval_report(request):
                         ).strftime("%Y-%m-%d")
                     except Exception:
                         formatted_date = str(created_date)
-                        
+
             company_id = patient_detail.get("company_id", "N/A")
             company_name = company_name_map.get(company_id, company_id)
 
@@ -1871,7 +1872,7 @@ def corporate_approval_report(request):
                 "status": status,
                 "lab_approval": lab_approval,
                 "chc_tests": chc_tests_with_status,
-                "chc_investigation_status": combined_investigation_status,  # lab + CHC combined
+                "chc_investigation_status": combined_investigation_status,
                 "chc_pending_tests": chc_pending,
                 "chc_approved_tests": chc_approved,
                 "approval_type": approval_type,
@@ -1884,9 +1885,8 @@ def corporate_approval_report(request):
     except Exception as e:
         print("Critical Error:", str(e))
         print(traceback.format_exc())
-        return JsonResponse({"error": str(e)}, status=500)   
-
-
+        return JsonResponse({"error": str(e)}, status=500)
+    
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
 def corporate_health_report(request):
