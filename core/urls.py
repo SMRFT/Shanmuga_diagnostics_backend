@@ -1,7 +1,7 @@
 #urls.py
 from django.urls import path
 from core import views
-from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
+from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,shhmsbarcode
 from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
@@ -36,7 +36,7 @@ urlpatterns = [
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
     path('save-barcodes/', barcode.save_barcodes, name='save_barcodes'),
-    path('get-existing-barcode/',barcode.get_existing_barcode, name='get_latest_bill_no'),
+    path('get-existing-barcode/', barcode.get_existing_barcode, name='get_latest_bill_no'),
 
     #sampleStatus:
     path('sample_patient/', sample.get_samplepatients_by_date, name='get_samplepatients_by_date'),       
@@ -84,7 +84,7 @@ urlpatterns = [
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
     path('save-barcodes/', barcode.save_barcodes, name='save_barcodes'),
-    path('get-existing-barcode/',barcode.get_existing_barcode, name='get_latest_bill_no'),
+    path('get-existing-barcode/', barcode.get_existing_barcode, name='get_latest_bill_no'),
     path("get_outsourced_samples/", sample.get_outsourced_samples, name="get_outsourced_samples"),
     #Test Values:
     path('samplestatus-testvalue/', testvalue.get_samplestatus_testvalue, name='sample-status-list'), 
@@ -181,8 +181,13 @@ urlpatterns = [
     path("hms_patient_billing/", hmsbilling.hms_patient_billing, name="hms_patient_billing"),
 
     #HMS Barcode:
-    path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
-    path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
+    path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_hms_barcode_by_date'),    
+    path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_hms_barcodes'),
+
+    #SH HMS Barcode:
+    path('sh_hms_patients_get_barcode/', shhmsbarcode.get_sh_hms_barcode_by_date, name='get_sh_hms_barcode_by_date'),
+    path('save-sh-hms-barcodes/', shhmsbarcode.save_sh_hms_barcodes, name='save_sh_hms_barcodes'),
+    path('get-sh-hms-existing-barcode/', shhmsbarcode.get_sh_hms_existing_barcode, name='get_sh_hms_existing_barcode'),
 
 
     #Corporate Batch and Sample Status Update:
