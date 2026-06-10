@@ -1133,6 +1133,7 @@ class HMSTestCountView(APIView):
         for record in qs:
             td = record.testdetails
             gender = str(record.gender).lower() if hasattr(record, 'gender') and record.gender else 'unknown'
+            ipop_type = str(record.IPOPType).upper() if hasattr(record, 'IPOPType') and record.IPOPType else 'UNKNOWN'
             
             if isinstance(td, str):
                 try:
@@ -1150,11 +1151,12 @@ class HMSTestCountView(APIView):
                 
                 if test_id:
                     # Use a unique key for grouping
-                    key = (test_id, test_name)
+                    key = (test_id, test_name, ipop_type)
                     if key not in test_counts:
                         test_counts[key] = {
                             "test_id": test_id,
                             "test_name": test_name,
+                            "ipop_type": ipop_type,
                             "count": 0,
                             "male_count": 0,
                             "female_count": 0
