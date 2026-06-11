@@ -210,7 +210,7 @@ def hms_overall_report(request):
         barcode_records = list(Hmsbarcode.objects.filter(**barcode_query).values(
             'billnumber', 'barcode', 'date', 'testdetails',
             'patient_id', 'patientname', 'age', 'age_type', 'gender', 
-            'IPOPType', 'ref_doctor', 'ipnumber', 'location_id'
+            'IPOPType', 'ref_doctor', 'ipnumber', 'location_id', 'phone', 'created_date'
         ))
         print(f"Found {len(barcode_records)} HMS barcode records")
         if barcode_records:
@@ -684,6 +684,14 @@ def hms_overall_report(request):
                 else:
                     test_created_date_formatted = str(test_created_date)
 
+            barcode_created_date = record.get("created_date")
+            barcode_created_date_formatted = None
+            if barcode_created_date:
+                if isinstance(barcode_created_date, datetime):
+                    barcode_created_date_formatted = barcode_created_date.isoformat()
+                else:
+                    barcode_created_date_formatted = str(barcode_created_date)
+
             formatted_data.append({
                 "date": formatted_date,
                 "registration_date": registration_date,
@@ -695,6 +703,8 @@ def hms_overall_report(request):
                 "opiptype": opiptype,
                 "refby": refby,
                 "branch": branch,
+                "phone": record.get("phone", "N/A"),
+                "barcode_generated_time": barcode_created_date_formatted,
                 "test_names": testnames,
                 "department": department,
                 "department_statuses": department_statuses,

@@ -51,7 +51,7 @@ def upload_pdf_to_gridfs(request):
         file_id = fs.put(file, filename=safe_name)
 
         # 5. Generate access URL
-        file_url = f"https://shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}"
+        file_url = f"https://test.shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}"
 
         return JsonResponse({"file_id": str(file_id), "file_url": file_url})
 
@@ -107,15 +107,13 @@ def send_whatsapp(request):
         # API likely expects simple CSV.
         template_params = ",".join([str(p) for p in template_params_list])
 
+        template_name = request.data.get("template_name", "diagnostics_report_main")
+
         params = {
             "apikey": "ccbb8c923474d5b9d605b391f545a5688fbd54e0cad69d17",
             "contact": phone,
-            "template": "diagnostics_report_main",
+            "template": template_name,
             "params": template_params,
-            # These seem not required by the new API according to the fetch example, 
-            # but usually for file sending one might need more. 
-            # However, the user example is `sendtemplatemessage`, which sends text. 
-            # The template has a link in it {{4}}.
         }
 
         # print("Sending params:", params)
