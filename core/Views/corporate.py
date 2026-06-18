@@ -1106,6 +1106,7 @@ def corporate_overall_report(request):
                 "age": age,
                 "age_type": age_type,
                 "email": patient_detail.get("email", "N/A"),
+                "mobile": patient_detail.get("mobile", "N/A"),
                 "branch": patient_detail.get("company_id", "N/A"),
                 "test_names": testnames,
                 "department": department,

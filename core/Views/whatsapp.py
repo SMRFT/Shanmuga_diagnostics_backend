@@ -51,7 +51,7 @@ def upload_pdf_to_gridfs(request):
         file_id = fs.put(file, filename=safe_name)
 
         # 5. Generate access URL
-        file_url = f"https://test.shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}"
+        file_url = f"https://shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}"
 
         return JsonResponse({"file_id": str(file_id), "file_url": file_url})
 
@@ -157,6 +157,7 @@ def send_whatsapp(request):
             details=details
         )
         return Response({"success": False, "error": str(e)}, status=500)
+
 
 
 @csrf_exempt
