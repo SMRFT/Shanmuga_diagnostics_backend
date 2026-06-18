@@ -159,6 +159,7 @@ def send_whatsapp(request):
         return Response({"success": False, "error": str(e)}, status=500)
 
 
+
 @csrf_exempt
 def send_email(request):
     recipient_list = request.POST.getlist('recipients') or ['shanmugainnovations@gmail.com']
