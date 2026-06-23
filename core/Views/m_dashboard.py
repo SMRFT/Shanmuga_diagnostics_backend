@@ -102,6 +102,9 @@ def m_dashboard_stats(request):
             "tests": {
                 "total": 0
             },
+            "patients": {
+                "total_registered": 0
+            },
             "financials": {
                 "gross": {
                     "b2b": 0,
@@ -113,6 +116,10 @@ def m_dashboard_stats(request):
                 "net_amount": 0
             }
         }
+
+        # --- 0. Total Registered Patients ---
+        from ..models import Patient
+        stats["patients"]["total_registered"] = Patient.objects.filter(created_date__gte=start_date, created_date__lt=end_date).count()
 
         # --- 1. Core Billing (Django) ---
         core_query = Billing.objects.filter(date__gte=start_date, date__lt=end_date)
