@@ -1619,7 +1619,7 @@ def corporate_approval_report(request):
                     sample_testdetails_by_barcode[bc] = enriched
 
             # Count valid (non-Rejected, non-Outsource) tests per barcode
-            invalid_status = {"Rejected", "Outsource"}
+            invalid_status = {"Rejected", "Outsource", "Pending"}
             valid_tests = [
                 t for t in (raw_tests or [])
                 if isinstance(t, dict) and t.get("samplestatus", "").strip() not in invalid_status
@@ -1888,7 +1888,9 @@ def corporate_approval_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
-    
+
+
+
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
 def corporate_health_report(request):
@@ -2475,7 +2477,7 @@ def get_investigation_status(request):
 
                 sample_tests = parse_json(franchise_sample.get("testdetails"), [])
 
-                invalid_status = {"Rejected", "Outsource"}
+                invalid_status = {"Rejected", "Outsource", "Pending"}
 
                 valid_tests = [
                     t for t in sample_tests
@@ -2676,7 +2678,7 @@ def get_batch_investigation_status(request):
             if sample and sample.get('testdetails'):
                 raw = sample.get('testdetails')
                 sample_tests_list = json.loads(raw) if isinstance(raw, str) else (raw or [])
-                invalid = {"Rejected", "Outsource"}
+                invalid = {"Rejected", "Outsource", "Pending"}
                 total_sample_tests = sum(
                     1 for t in sample_tests_list
                     if t.get("samplestatus", "").strip() not in invalid
