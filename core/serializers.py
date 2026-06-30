@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from bson import ObjectId
-
 class ObjectIdField(serializers.Field):
     def to_representation(self, value):
         return str(value)
@@ -128,3 +127,32 @@ class LogisticsSerializer(serializers.ModelSerializer):
         model = Logistics
         fields = "__all__"
 
+
+from .models import RouteSetup, RouteAnalysis
+
+class RouteSetupSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(read_only=True)
+    clinical_name_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RouteSetup
+        fields = "__all__"
+
+    def get_clinical_name_display(self, obj):
+        from .Views.logistic import get_clinical_name_map  # or move helper to a shared module
+        codes = obj.clinical_name or []
+        name_map = get_clinical_name_map(codes)
+        return [{"referrerCode": c, "clinicalname": name_map.get(c)} for c in codes]
+
+
+class RouteAnalysisSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    route_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RouteAnalysis
+        fields = "__all__"
+
+    def get_route_name(self, obj):
+        route = RouteSetup.objects.filter(id=obj.route_id).first()
+        return route.route_name if route else None

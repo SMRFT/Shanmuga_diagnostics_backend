@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.db.models import Q, Count, Case, When, IntegerField
 from pymongo import MongoClient
 from datetime import datetime
+from django.core.files.storage import default_storage
 
 from collections import defaultdict
 
@@ -609,3 +610,266 @@ def logistics_tat_report(request):
             {'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+import json
+from bson import ObjectId
+from gridfs import GridFS
+from pymongo import MongoClient
+from django.http import HttpResponse
+from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import status
+from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+from rest_framework.response import Response
+
+from ..models import RouteSetup, RouteAnalysis
+from ..serializers import RouteSetupSerializer, RouteAnalysisSerializer
+
+
+def _as_list(value):
+    """Defensive parse in case any legacy rows have JSON stored as a string."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return value or []
+
+
+def _gridfs():
+    client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+    db = client["HMS"]
+    return client, GridFS(db)
+
+
+def get_clinical_name_map(referrer_codes):
+    client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+    db = client["HMS"]
+    collection = db["clinicalname"]
+    docs = collection.find(
+        {"referrerCode": {"$in": referrer_codes}},
+        {"_id": 0, "referrerCode": 1, "clinicalname": 1},
+    )
+    result = {doc["referrerCode"]: doc["clinicalname"] for doc in docs}
+    client.close()
+    return result
+
+
+# ---------- Route Setup ----------
+
+@api_view(['GET', 'POST'])
+@permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
+def routesetup(request):
+    try:
+        if request.method == 'POST':
+            data = request.data.copy()
+            employee_id = request.data.get("auth-user-id")
+            data["created_by"] = employee_id
+            data["created_date"] = timezone.now()
+
+            # clinical_name must be a real list, not a JSON string
+            if isinstance(data.get("clinical_name"), str):
+                data["clinical_name"] = _as_list(data["clinical_name"])
+
+            serializer = RouteSetupSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(
+                    {"message": "Route created successfully", "data": serializer.data},
+                    status=status.HTTP_201_CREATED
+                )
+            return Response(
+                {"error": "Validation failed", "details": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        routes = RouteSetup.objects.all().order_by('-created_date')
+        serializer = RouteSetupSerializer(routes, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# ---------- Start / End / Get Route Analysis ----------
+
+@api_view(['POST'])
+@permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
+def start_route_analysis(request):
+    try:
+        route_id = request.data.get("route_id")
+        employee_id = request.data.get("auth-user-id")
+
+        try:
+            route = RouteSetup.objects.get(id=route_id)
+        except RouteSetup.DoesNotExist:
+            return Response({"error": "Route not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        existing = RouteAnalysis.objects.filter(route_id=route.id, status="in_progress").first()
+        if existing:
+            serializer = RouteAnalysisSerializer(existing)
+            return Response(
+                {"message": "Route is already in progress", "data": serializer.data},
+                status=status.HTTP_200_OK
+            )
+
+        referrer_codes = _as_list(route.clinical_name)
+        name_map = get_clinical_name_map(referrer_codes)
+
+        visits = [
+            {
+                "referrerCode": code,
+                "clinicalname": name_map.get(code),
+                "visited": False,
+                "image": None,
+                "uploaded_at": None,
+                "latitude": None,
+                "longitude": None,
+            }
+            for code in referrer_codes
+        ]
+
+        analysis = RouteAnalysis.objects.create(
+            route_id=route.id,
+            logistics_mapping=route.logistics_mapping,
+            start_time=timezone.now(),
+            status="in_progress",
+            visits=visits,
+            created_by=employee_id,
+            created_date=timezone.now(),
+        )
+
+        serializer = RouteAnalysisSerializer(analysis)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['POST'])
+@permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
+def end_route_analysis(request):
+    try:
+        analysis_id = request.data.get("analysis_id")
+        try:
+            analysis = RouteAnalysis.objects.get(id=analysis_id)
+        except RouteAnalysis.DoesNotExist:
+            return Response({"error": "Route analysis not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        analysis.end_time = timezone.now()
+        analysis.status = "completed"
+        analysis.save(update_fields=["end_time", "status"])
+
+        serializer = RouteAnalysisSerializer(analysis)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
+def get_route_analysis(request, analysis_id):
+    try:
+        analysis = RouteAnalysis.objects.get(id=analysis_id)
+        serializer = RouteAnalysisSerializer(analysis)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except RouteAnalysis.DoesNotExist:
+        return Response({"error": "Route analysis not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+@csrf_exempt
+def get_active_route_analysis(request, route_id):
+    """Lets the frontend check on load whether a route already has an
+    in-progress run, so the Start button can be replaced by End/visit UI."""
+    analysis = RouteAnalysis.objects.filter(route_id=route_id, status="in_progress").first()
+    if not analysis:
+        return Response({"data": None}, status=status.HTTP_200_OK)
+    serializer = RouteAnalysisSerializer(analysis)
+    return Response({"data": serializer.data}, status=status.HTTP_200_OK)
+
+
+# ---------- Mark Visit (PATCH, multipart file upload via GridFS) ----------
+
+@api_view(['PATCH'])
+@permission_classes([HasRoleAndDataPermission])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+@csrf_exempt
+def mark_visit(request):
+    try:
+        analysis_id = request.data.get("analysis_id")
+        referrer_code = request.data.get("referrerCode")
+
+        if not analysis_id or not referrer_code:
+            return Response({"error": "analysis_id and referrerCode are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            analysis = RouteAnalysis.objects.get(id=analysis_id)
+        except RouteAnalysis.DoesNotExist:
+            return Response({"error": "Route analysis not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        image_file_id = None
+        uploaded_file = request.FILES.get("image")
+        if uploaded_file:
+            client, fs = _gridfs()
+            try:
+                file_id = fs.put(
+                    uploaded_file.read(),
+                    filename=uploaded_file.name,
+                    content_type=uploaded_file.content_type,
+                )
+                image_file_id = str(file_id)
+            except Exception as upload_err:
+                return Response({"error": f"Image upload failed: {upload_err}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            finally:
+                client.close()
+
+        latitude = request.data.get("latitude") or None
+        longitude = request.data.get("longitude") or None
+        uploaded_at = timezone.now().isoformat()
+
+        visits = _as_list(analysis.visits)
+        found = False
+        for visit in visits:
+            if visit.get("referrerCode") == referrer_code:
+                visit["visited"] = True
+                if image_file_id:
+                    visit["image"] = image_file_id
+                visit["uploaded_at"] = uploaded_at
+                visit["latitude"] = latitude
+                visit["longitude"] = longitude
+                found = True
+                break
+
+        if not found:
+            return Response({"error": "referrerCode not found on this route"}, status=status.HTTP_400_BAD_REQUEST)
+
+        analysis.visits = visits
+        analysis.save(update_fields=["visits"])
+
+        serializer = RouteAnalysisSerializer(analysis)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+def get_route_image(request, file_id):
+    client, fs = _gridfs()
+    try:
+        grid_out = fs.get(ObjectId(file_id))
+        return HttpResponse(grid_out.read(), content_type=grid_out.content_type or "application/octet-stream")
+    except Exception as e:
+        return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
+    finally:
+        client.close()

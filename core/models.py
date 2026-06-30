@@ -318,4 +318,46 @@ class MBTestValue(AuditModel):
         super().save(*args, **kwargs)
 
 
+from bson import ObjectId
+from django.db import models
 
+class RouteSetup(AuditModel):
+    id = models.IntegerField(primary_key=True)
+    route_name = models.CharField(max_length=255)
+    logistics_mapping = models.CharField(max_length=255)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    processing_lab = models.CharField(max_length=255, default="Shanmuga Mother Lab")
+    clinical_name = models.JSONField(default=list)  # must be a real Mongo array
+
+    def save(self, *args, **kwargs):
+        if self.id is None:
+            last = RouteSetup.objects.order_by('-id').first()
+            self.id = (last.id + 1) if last else 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.route_name
+
+
+class RouteAnalysis(AuditModel):
+    STATUS_CHOICES = (
+        ("in_progress", "In Progress"),
+        ("completed", "Completed"),
+    )
+
+    id = models.CharField(max_length=50, primary_key=True)  # ObjectId string, matches _id
+    route_id = models.IntegerField()  # plain FK value, not a Django ForeignKey
+    logistics_mapping = models.CharField(max_length=255)
+    start_time = models.DateTimeField(null=True, blank=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="in_progress")
+    visits = models.JSONField(default=list)
+
+    def save(self, *args, **kwargs):
+        if not self.id:
+            self.id = str(ObjectId())
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Route {self.route_id} - {self.start_time}"
