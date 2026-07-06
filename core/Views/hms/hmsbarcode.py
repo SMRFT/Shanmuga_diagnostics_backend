@@ -91,14 +91,6 @@ from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 
 
-from rest_framework.decorators import api_view, permission_classes
-from django.http import JsonResponse
-from datetime import datetime, time
-from pymongo import MongoClient
-import pytz
-import json
-import os
-
 @api_view(["GET"])
 @permission_classes([HasRoleAndDataPermission])
 def get_hms_barcode_by_date(request):
@@ -107,6 +99,9 @@ def get_hms_barcode_by_date(request):
     to_date = request.GET.get("to_date")
     single_date = request.GET.get("date")
 
+    # --------------------------------------------
+    # SINGLE DATE SUPPORT
+    # --------------------------------------------
     if single_date and not (from_date and to_date):
         from_date = single_date
         to_date = single_date
@@ -118,13 +113,17 @@ def get_hms_barcode_by_date(request):
         )
 
     try:
-        # ------------------------------------------------
+
+        # --------------------------------------------
         # IST → UTC CONVERSION
-        # ------------------------------------------------
+        # --------------------------------------------
         ist = pytz.timezone("Asia/Kolkata")
         utc = pytz.UTC
 
-        start_ist = ist.localize(datetime.strptime(from_date, "%Y-%m-%d"))
+        start_ist = ist.localize(
+            datetime.strptime(from_date, "%Y-%m-%d")
+        )
+
         end_ist = ist.localize(
             datetime.combine(
                 datetime.strptime(to_date, "%Y-%m-%d"),
@@ -135,35 +134,52 @@ def get_hms_barcode_by_date(request):
         start_utc = start_ist.astimezone(utc)
         end_utc = end_ist.astimezone(utc)
 
-        # ------------------------------------------------
+        # --------------------------------------------
         # MongoDB Connection
-        # ------------------------------------------------
+        # --------------------------------------------
         client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+
         db = client.Diagnostics
 
         billing_collection = db.core_hmspatientbilling
         machine_collection = db.machine_hmsmi
         test_collection = db.core_testdetails
 
-        # ------------------------------------------------
+        # --------------------------------------------
         # DATE FILTERS
-        # ------------------------------------------------
+        # --------------------------------------------
         billing_filter = {
-            "date": {"$gte": start_utc, "$lte": end_utc}
+            "date": {
+                "$gte": start_utc,
+                "$lte": end_utc
+            }
         }
 
         machine_filter = {
-            "BillDate": {"$gte": start_utc, "$lte": end_utc}
+            "BillDate": {
+                "$gte": start_utc,
+                "$lte": end_utc
+            }
         }
 
+        # --------------------------------------------
+        # STORAGE
+        # --------------------------------------------
         bill_map = {}
+
         billing_test_ids = set()
         machine_test_codes = set()
 
-        # ------------------------------------------------
-        # STEP 1: BILLING DATA
-        # ------------------------------------------------
+        # --------------------------------------------
+        # TRACK DISTINCT MACHINE TESTCODES
+        # --------------------------------------------
+        machine_test_tracker = {}
+
+        # --------------------------------------------
+        # STEP 1 : BILLING DATA
+        # --------------------------------------------
         for rec in billing_collection.find(billing_filter):
+
             bill_no = rec.get("billnumber")
             bill_type = rec.get("BillType")
 
@@ -173,10 +189,16 @@ def get_hms_barcode_by_date(request):
             bill_key = f"{bill_no}__{bill_type}"
 
             tests = rec.get("testdetails", [])
+
             if isinstance(tests, str):
                 tests = json.loads(tests)
 
-            test_ids = [t.get("test_id") for t in tests if t.get("test_id")]
+            test_ids = [
+                t.get("test_id")
+                for t in tests
+                if t.get("test_id")
+            ]
+
             if not test_ids:
                 continue
 
@@ -199,25 +221,50 @@ def get_hms_barcode_by_date(request):
 
             bill_map[bill_key]["test_ids"].extend(test_ids)
 
-        # ------------------------------------------------
-        # STEP 2: MACHINE DATA (FIXED: BILLNO + BILLTYPE)
-        # ------------------------------------------------
+        # --------------------------------------------
+        # STEP 2 : MACHINE DATA
+        # --------------------------------------------
         for rec in machine_collection.find(machine_filter):
+
             bill_no = rec.get("BillNumber")
             bill_type = rec.get("BillType")
+            bill_date = rec.get("BillDate")
+
             test_code = rec.get("TestCode")
+            test_count = rec.get("Testcount")
 
             if not bill_no or not bill_type or not test_code:
                 continue
 
             bill_key = f"{bill_no}__{bill_type}"
 
+            # --------------------------------------------
+            # TRACK DISTINCT TESTCODES
+            # --------------------------------------------
+            machine_test_tracker.setdefault(bill_key, {
+                "testcodes": set(),
+                "expected_count": int(test_count or 0)
+            })
+
+            machine_test_tracker[bill_key]["testcodes"].add(test_code)
+
             machine_test_codes.add(test_code)
 
+            # --------------------------------------------
+            # EXISTING BILL
+            # --------------------------------------------
             if bill_key in bill_map:
-                bill_map[bill_key].setdefault("test_codes", []).append(test_code)
+
+                bill_map[bill_key].setdefault(
+                    "test_codes",
+                    []
+                ).append(test_code)
+
                 continue
 
+            # --------------------------------------------
+            # NEW MACHINE ENTRY
+            # --------------------------------------------
             bill_map[bill_key] = {
                 "source": "machine_hmsmi",
                 "patient_id": rec.get("IPOPNumber", ""),
@@ -227,68 +274,133 @@ def get_hms_barcode_by_date(request):
                 "IPOPType": rec.get("IPOPType", ""),
                 "BillType": bill_type,
                 "phone": rec.get("mobilenumber", ""),
-                "date": rec.get("BillDate"),
+                "date": bill_date,
                 "ref_doctor": rec.get("RefDoctor", ""),
                 "bill_no": bill_no,
                 "test_codes": [test_code]
             }
 
-        # ------------------------------------------------
-        # STEP 3: TEST MASTER LOOKUP
-        # ------------------------------------------------
+        # --------------------------------------------
+        # STEP 3 :
+        # VALIDATE TESTCOUNT COMPLETION
+        # --------------------------------------------
+        completed_bill_keys = set()
+
+        for bill_key, tracker in machine_test_tracker.items():
+
+            actual_count = len(tracker["testcodes"])
+
+            expected_count = tracker["expected_count"]
+
+            # --------------------------------------------
+            # LOAD ONLY WHEN EXPECTED COUNT REACHED
+            # --------------------------------------------
+            if actual_count >= expected_count:
+                completed_bill_keys.add(bill_key)
+
+        # --------------------------------------------
+        # STEP 4 : TEST MASTER LOOKUP
+        # --------------------------------------------
         test_lookup_by_id = {}
         test_lookup_by_code = {}
 
         for t in test_collection.find({
             "$or": [
-                {"test_id": {"$in": list(billing_test_ids)}},
-                {"hms_testcode": {"$in": list(machine_test_codes)}}
+                {
+                    "test_id": {
+                        "$in": list(billing_test_ids)
+                    }
+                },
+                {
+                    "hms_testcode": {
+                        "$in": list(machine_test_codes)
+                    }
+                }
             ]
         }):
+
             if t.get("test_id"):
                 test_lookup_by_id[t["test_id"]] = t
+
             if t.get("hms_testcode"):
                 test_lookup_by_code[t["hms_testcode"]] = t
 
-        # ------------------------------------------------
-        # STEP 4: CHECK EXISTING BARCODES (STATUS)
-        # ------------------------------------------------
+        # --------------------------------------------
+        # STEP 5 : EXISTING BARCODE STATUS
+        # --------------------------------------------
         from core.models import Hmsbarcode
-        
-        # Get all billnumbers that already have barcodes generated
-        existing_billnumbers = set(Hmsbarcode.objects.filter(
-            date__range=[from_date, to_date]
-        ).values_list('billnumber', flat=True))
 
-        # ------------------------------------------------
-        # STEP 5: RESPONSE (DEDUPLICATION SAFE)
-        # ------------------------------------------------
+        existing_billnumbers = set(
+            Hmsbarcode.objects.filter(
+                date__range=[from_date, to_date]
+            ).values_list("billnumber", flat=True)
+        )
+
+        # --------------------------------------------
+        # STEP 6 : FINAL RESPONSE
+        # --------------------------------------------
         patient_data = []
 
         for rec in bill_map.values():
+
+            bill_key = f'{rec["bill_no"]}__{rec["BillType"]}'
+
+            # --------------------------------------------
+            # MACHINE SOURCE VALIDATION
+            # ONLY LOAD WHEN TESTCOUNT MATCHED
+            # --------------------------------------------
+            if rec["source"] == "machine_hmsmi":
+
+                if bill_key not in completed_bill_keys:
+                    continue
+
             testdetails = []
+
             seen_tests = set()
 
+            # --------------------------------------------
             # BILLING SOURCE
+            # --------------------------------------------
             if rec["source"] == "core_hmspatientbilling":
+
                 for tid in rec.get("test_ids", []):
+
                     if tid in seen_tests:
                         continue
 
                     seen_tests.add(tid)
+
                     t = test_lookup_by_id.get(tid, {})
 
                     testdetails.append({
                         "test_id": tid,
-                        "testname": t.get("test_name", "Unknown Test"),
-                        "collection_container": t.get("collection_container", ""),
-                        "shortcut": t.get("shortcut", ""),
+                        "testname": t.get(
+                            "test_name",
+                            "Unknown Test"
+                        ),
+                        "collection_container": t.get(
+                            "collection_container",
+                            ""
+                        ),
+                        "shortcut": t.get(
+                            "shortcut",
+                            ""
+                        ),
+                        "suffix": t.get(
+                            "suffix",
+                            ""
+                        ),
                     })
 
+            # --------------------------------------------
             # MACHINE SOURCE
+            # --------------------------------------------
             else:
+
                 for code in rec.get("test_codes", []):
+
                     t = test_lookup_by_code.get(code, {})
+
                     test_key = t.get("test_id") or code
 
                     if test_key in seen_tests:
@@ -299,13 +411,31 @@ def get_hms_barcode_by_date(request):
                     testdetails.append({
                         "test_id": t.get("test_id"),
                         "hms_testcode": code,
-                        "testname": t.get("test_name", "Unknown Test"),
-                        "collection_container": t.get("collection_container", ""),
-                        "shortcut": t.get("shortcut", ""),
+                        "testname": t.get(
+                            "test_name",
+                            "Unknown Test"
+                        ),
+                        "collection_container": t.get(
+                            "collection_container",
+                            ""
+                        ),
+                        "shortcut": t.get(
+                            "shortcut",
+                            ""
+                        ),
+                        "suffix": t.get(
+                            "suffix",
+                            ""
+                        ),
                     })
 
             bill_no = rec["bill_no"]
-            status = "Generated" if bill_no in existing_billnumbers else "Pending"
+
+            status = (
+                "Generated"
+                if bill_no in existing_billnumbers
+                else "Pending"
+            )
 
             patient_data.append({
                 "patient_id": rec["patient_id"],
@@ -324,15 +454,22 @@ def get_hms_barcode_by_date(request):
                 "barcode_status": status
             })
 
+        # --------------------------------------------
+        # FINAL RESPONSE
+        # --------------------------------------------
         return JsonResponse({
             "data": patient_data,
             "summary": {
                 "total_patients": len(patient_data),
-                "date_range": {"from": from_date, "to": to_date}
+                "date_range": {
+                    "from": from_date,
+                    "to": to_date
+                }
             }
         }, safe=False)
 
-
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)  
 
+        return JsonResponse({
+            "error": str(e)
+        }, status=500)

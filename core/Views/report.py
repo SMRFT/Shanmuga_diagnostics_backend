@@ -53,7 +53,7 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
     
     # Determine status for each department
     for dept, tests in tests_by_dept.items():
-        dept_test_ids = {t.get('test_id') for t in tests if t.get('test_id')}
+        dept_test_ids = {int(t.get('test_id')) for t in tests if t.get('test_id')}
         
         # Get test values for this barcode
         all_test_values = []
@@ -63,8 +63,11 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
             all_test_values.extend(mb_test_value_map[barcode].get('testdetails', []))
         
         # Filter test values for this department - match by test_id
-        dept_test_values = [tv for tv in all_test_values 
-                           if tv.get('test_id') in dept_test_ids and not tv.get('rerun', False)]
+        dept_test_values = [
+    tv for tv in all_test_values 
+    if tv.get('test_id') and int(tv.get('test_id')) in dept_test_ids 
+    and not tv.get('rerun', False)
+]
         
         # Check sample collection status
         sample_tests = sample_status_map.get(barcode, [])
@@ -89,33 +92,46 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
                 # Check if tests have values
                 def has_test_values(test):
                     parameters = test.get("parameters", [])
-                    if not parameters:
-                        return bool(test.get("value"))
-                    return any(
-                        param.get("value") is not None and str(param.get("value")).strip() != ""
-                        for param in parameters
-                    )
+
+                    if parameters:
+                        return any(
+                            param.get("value") is not None and str(param.get("value")).strip() != ""
+                            for param in parameters
+                        )
+
+                    # Biochemistry
+                    if test.get("value") is not None and str(test.get("value")).strip() != "":
+                        return True
+
+                    # ✅ Microbiology FIX
+                    if test.get("remarks") or test.get("parameter_type"):
+                        return True
+
+                    return False
                 
-                all_tested = all(has_test_values(tv) for tv in dept_test_values)
-                
-                # Check approval status
-                approved_test_ids = {tv.get('test_id') for tv in dept_test_values if tv.get('approve', False)}
-                all_approved = dept_test_ids.issubset(approved_test_ids) and len(approved_test_ids) > 0
-                
-                # Check dispatch status
-                approved_dept_tests = [tv for tv in dept_test_values if tv.get('approve', False)]
-                all_dispatched = all(tv.get('dispatch', False) for tv in approved_dept_tests) if approved_dept_tests else False
-                
-                if all_dispatched and all_approved:
+                any_tested = any(has_test_values(tv) for tv in dept_test_values)
+                # Collect statuses from all test values
+                any_dispatched = any(tv.get('dispatch', False) for tv in dept_test_values)
+                any_approved = any(tv.get('approve', False) for tv in dept_test_values)
+                any_tested = any(has_test_values(tv) for tv in dept_test_values)
+
+                if any_dispatched:
                     department_status[dept] = 'Dispatched'
-                elif all_approved:
+
+                elif any_approved:
                     department_status[dept] = 'Approved'
-                elif all_tested:
+
+                elif any_tested:
                     department_status[dept] = 'Tested'
+
                 elif all_received:
                     department_status[dept] = 'Received'
+
+                elif all_collected:
+                    department_status[dept] = 'Collected'
+
                 else:
-                    department_status[dept] = 'In Progress'
+                    department_status[dept] = 'Pending'
     
     return department_status
 
@@ -685,26 +701,40 @@ def overall_report(request):
                             if sample_info.get('samplestatus') == 'Outsource':
                                 test_status = "Outsourced"
                         
+                        parameters = []
+                        has_values = False
+                        
                         if test_value_info:
-                            # Check if test has values
-                            has_values = False
+                        # Check if test has values
                             parameters = test_value_info.get("parameters", [])
-                            if not parameters:
-                                has_values = bool(test_value_info.get("value"))
-                            else:
-                                has_values = any(
-                                    param.get("value") is not None and str(param.get("value")).strip() != ""
-                                    for param in parameters
-                                )
-                            
-                            if has_values:
-                                test_status = "Tested"
-                            
-                            if test_value_info.get('approve'):
-                                test_status = "Approved"
-                            
-                            if test_value_info.get('dispatch'):
-                                test_status = "Dispatched"
+
+                        # Biochemistry (parameters)
+                        print("parameters", parameters)
+                        if parameters:
+                            has_values = any(
+                                param.get("value") is not None and str(param.get("value")).strip() != ""
+                                for param in parameters
+                            )
+
+                        # Biochemistry (single value)
+                        elif test_value_info.get("value") is not None and str(test_value_info.get("value")).strip() != "":
+                            has_values = True
+
+                        # ✅ Microbiology FIX
+                        elif test_value_info.get("remarks") or test_value_info.get("parameter_type"):
+                            has_values = True
+
+                        else:
+                            has_values = False
+                        
+                        if has_values:
+                            test_status = "Tested"
+                        
+                        if test_value_info.get('approve'):
+                            test_status = "Approved"
+                        
+                        if test_value_info.get('dispatch'):
+                            test_status = "Dispatched"
                         
                         individual_test_statuses.append({
                             'test_id': test_id,
@@ -923,7 +953,7 @@ def patient_test_sorting(request):
                         
                         core_test = core_testdetails_collection.find_one(
                             query,
-                            {"test_code": 1, "test_name": 1,"NABL": 1, "_id": 0}
+                            {"test_code": 1, "test_name": 1,"NABL": 1, "department": 1, "_id": 0}
                         )
                         
                         if core_test:
@@ -931,26 +961,30 @@ def patient_test_sorting(request):
                             test_item['test_code'] = core_test.get('test_code', 'N/A')
                             test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
                             test_item['NABL'] = core_test.get('NABL', 'N/A')
+                            test_item['department'] = core_test.get('department', 'N/A')
                         else:
                             # If no match found, try with just test_id
                             core_test = core_testdetails_collection.find_one(
                                 {"test_id": test_id},
-                                {"test_code": 1, "test_name": 1, "NABL": 1, "_id": 0}
+                                {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "_id": 0}
                             )
                             
                             if core_test:
                                 test_item['test_code'] = core_test.get('test_code', 'N/A')
                                 test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
                                 test_item['NABL'] = core_test.get('NABL', 'N/A')
+                                test_item['department'] = core_test.get('department', 'N/A')
                             else:
                                 test_item['test_code'] = test_item.get('test_code', 'N/A')
                                 test_item['test_name'] = test_item.get('test_name', 'N/A')
                                 test_item['NABL'] = test_item.get('NABL', 'N/A')
+                                test_item['department'] = test_item.get('department', 'N/A')
                     else:
                         test_item['test_code'] = test_item.get('test_code', 'N/A')
                         test_item['test_name'] = test_item.get('test_name', 'N/A')
                         test_item['NABL'] = test_item.get('NABL', 'N/A')
-                    
+                        test_item['department'] = test_item.get('department', 'N/A')
+
                     # Add created_date to each test item
                     test_item['created_date'] = test_created_date.isoformat() if test_created_date else None
                     
@@ -1129,13 +1163,17 @@ def get_patient_test_details(request):
                 if not core_test:
                     testname     = test.get("testname")
                     department   = test.get("department", "N/A")
-                    NABL         = test.get("NABL", "N/A")
-                    specimen_type = test.get("specimen_type", "N/A")
+                    NABL         = test.get("NABL", "N/A")                   
+                    specimen_type = test.get("specimen_type") or core_test.get("specimen_type", "N/A")
                 else:
                     testname      = core_test.get("test_name")
                     department    = core_test.get("department", "N/A")
                     NABL          = core_test.get("NABL", False)
-                    specimen_type = core_test.get("specimen_type", "N/A")
+                    critical_range = core_test.get("critical_range", "")
+                    interpretation = core_test.get("interpretation", "")
+                    labels         = core_test.get("labels", "")
+                    lod         = core_test.get("lod", "")
+                    specimen_type = test.get("specimen_type") or core_test.get("specimen_type", "N/A")
 
                 outsourced  = test.get("outsourced", False)
                 comment     = test.get("comment", "")
@@ -1167,6 +1205,10 @@ def get_patient_test_details(request):
                     "test_id":             test_id,
                     "department":          department,
                     "NABL":                NABL,
+                    "critical_range":      critical_range,
+                    "interpretation":      interpretation,
+                    "labels":              labels,
+                    "lod":                 lod,
                     "outsourced":          outsourced,
                     "comment":             comment,
                     "testname":            testname,
@@ -1297,6 +1339,7 @@ def get_patient_test_details(request):
         import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)  
+
 
 @csrf_exempt
 def send_email(request):

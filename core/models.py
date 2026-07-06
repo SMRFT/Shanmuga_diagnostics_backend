@@ -24,6 +24,15 @@ class Appointment(AuditModel):
     gender = models.CharField(max_length=10, choices=GENDER_CHOICES)
     age = models.PositiveIntegerField()
     mobile_number = models.CharField(max_length=10)
+    sample_collector = models.CharField(max_length=100, blank=True, null=True)
+    status = models.CharField(max_length=20, default="Active")
+    appointment_id = models.IntegerField(primary_key=True)
+
+    def save(self, *args, **kwargs):
+        if self.appointment_id is None:
+            last = Appointment.objects.order_by('-appointment_id').first()
+            self.appointment_id = (last.appointment_id + 1) if last and last.appointment_id else 1
+        super(Appointment, self).save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.patient_name} - {self.appointment_date}"    
@@ -102,10 +111,16 @@ class ClinicalName(AuditModel):
     final_approved = models.BooleanField(default=False)
     first_approved_timestamp = models.DateTimeField(null=True, blank=True)
     final_approved_timestamp = models.DateTimeField(null=True, blank=True)
+    # Reject fields
+    rejected_id = models.CharField(max_length=50, blank=True, null=True)
+    rejected_date = models.DateTimeField(null=True, blank=True)
+    rejected_reason = models.TextField(blank=True, null=True)
+
     APPROVAL_STAGES = (
         ('PENDING_APPROVAL', 'Pending Approval'),
         ('PENDING_FINAL', 'Pending Final Approval'),
         ('APPROVED', 'Fully Approved'),
+        ('REJECTED', 'Rejected'),
     )
     status = models.CharField(
         max_length=50,
@@ -310,6 +325,7 @@ class MBTestValue(AuditModel):
     date = models.DateField()
     barcode= models.CharField(max_length=50)
     locationId= models.CharField(max_length=50)
+    is_preliminary= models.BooleanField(default=False)
     testdetails = models.JSONField()  # Store all test details in JSON format   
     def save(self, *args, **kwargs):
         if not self._id:
@@ -317,4 +333,71 @@ class MBTestValue(AuditModel):
         super().save(*args, **kwargs)
 
 
+from bson import ObjectId
+from django.db import models
 
+class RouteSetup(AuditModel):
+    id = models.IntegerField(primary_key=True)
+    route_name = models.CharField(max_length=255)
+    logistics_mapping = models.CharField(max_length=255)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    processing_lab = models.CharField(max_length=255, default="Shanmuga Mother Lab")
+    clinical_name = models.JSONField(default=list)  # must be a real Mongo array
+
+    def save(self, *args, **kwargs):
+        if self.id is None:
+            last = RouteSetup.objects.order_by('-id').first()
+            self.id = (last.id + 1) if last else 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.route_name
+
+
+class RouteAnalysis(AuditModel):
+    STATUS_CHOICES = (
+        ("in_progress", "In Progress"),
+        ("completed", "Completed"),
+    )
+
+    id = models.CharField(max_length=50, primary_key=True)  # ObjectId string, matches _id
+    route_id = models.IntegerField()  # plain FK value, not a Django ForeignKey
+    logistics_mapping = models.CharField(max_length=255)
+    start_time = models.DateTimeField(null=True, blank=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="in_progress")
+    visits = models.JSONField(default=list)
+
+    def save(self, *args, **kwargs):
+        if not self.id:
+            self.id = str(ObjectId())
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Route {self.route_id} - {self.start_time}"
+
+
+class B2BPackage(AuditModel):
+    package_id = models.IntegerField(primary_key=True)
+    packageName = models.CharField(max_length=255)
+    referrerCode = models.CharField(max_length=255)
+    mrptotal = models.CharField(max_length=50)
+    l2ltotal = models.CharField(max_length=50)
+    rate = models.CharField(max_length=50)
+    testNames = models.JSONField(default=list)
+    status = models.CharField(max_length=50, default="pending")
+    approved_by = models.CharField(max_length=255, null=True, blank=True)
+    approved_date = models.DateTimeField(null=True, blank=True)
+    rejected_by = models.CharField(max_length=255, null=True, blank=True)
+    rejected_date = models.DateTimeField(null=True, blank=True)
+    rejected_Reason = models.TextField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if self.package_id is None:
+            last = B2BPackage.objects.order_by('-package_id').first()
+            self.package_id = (last.package_id + 1) if last else 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.packageName

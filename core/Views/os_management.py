@@ -400,7 +400,7 @@ def get_os_samplestatus_testvalue(request):
                 corp = client.Corporatehealthcheckup
                 sample_collection = corp.core_sample
                 billing_collection = corp.core_billing
-                patient_collection = corp.core_employeeregistration
+                patient_collection = corp.core_chcregistration
 
                 chc_query = {
                     "created_date": {"$gte": start_of_range, "$lt": end_of_range}

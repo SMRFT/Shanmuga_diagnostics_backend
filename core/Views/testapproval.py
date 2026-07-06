@@ -44,7 +44,7 @@ def get_test_values(request):
 
     corp = client.Corporatehealthcheckup
     billing_collection = corp.core_billing
-    patient_collection = corp.core_employeeregistration
+    patient_collection = corp.core_chcregistration
 
     # BarcodeTestDetails collection
     diagnostics = client.Diagnostics
@@ -162,8 +162,8 @@ def get_test_values(request):
         for doc in mongo_patient_docs
     }
 
-    # 4. Corporate core_employeeregistration - bulk fetch (fallback)
-    #    core_employeeregistration has: employee_id, employee_name, age, gender, mobile
+    # 4. Corporate core_chcregistration - bulk fetch (fallback)
+    #    core_chcregistration has: employee_id, employee_name, age, gender, mobile
     corp_billing_docs = list(billing_collection.find(
         {"barcode": {"$in": barcodes}},
         {"barcode": 1, "employee_id": 1, "_id": 0}
@@ -205,6 +205,9 @@ def get_test_values(request):
             "specimen_type": 1,
             "collection_container": 1,
             "department": 1,
+            "critical_range": 1,
+            "interpretation": 1,
+            "lod": 1,
             "device_id": 1,
             "parameters": 1,
             "unit": 1,
@@ -355,7 +358,7 @@ def get_test_values(request):
                 if not phone and patient_info.get('phone'):
                     phone = patient_info['phone']
 
-        # ── PRIORITY 4: core_employeeregistration (fallback — has gender, mobile) ──
+        # ── PRIORITY 4: core_chcregistration (fallback — has gender, mobile) ──
         if not current_patient_id and barcode_val in corp_billing_dict:
             current_patient_id = corp_billing_dict[barcode_val]
             if current_patient_id in corp_employee_dict:
@@ -437,9 +440,12 @@ def get_test_values(request):
                 enriched_test = {
                     **test,
                     'test_name':            test_meta.get('test_name', test.get('test_name', 'N/A')),
-                    'specimen_type':        test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
+                    'specimen_type':        test.get('specimen_type') or test_meta.get('specimen_type', 'N/A'),
                     'collection_container': test_meta.get('collection_container', test.get('collection_container', 'N/A')),
                     'department':           test_meta.get('department', test.get('department', 'N/A')),
+                    'interpretation':       test_meta.get('interpretation', test.get('interpretation', '')),
+                    'critical_range':       test_meta.get('critical_range', test.get('critical_range', '')),
+                    'lod':                  test_meta.get('lod', test.get('lod', '')),
                     'parameters':           enriched_parameters,
                 }
 
@@ -447,12 +453,15 @@ def get_test_values(request):
                 enriched_test = {
                     **test,
                     'test_name':            test_meta.get('test_name', test.get('test_name', 'N/A')),
-                    'specimen_type':        test_meta.get('specimen_type', test.get('specimen_type', 'N/A')),
+                    'specimen_type':        test.get('specimen_type') or test_meta.get('specimen_type', 'N/A'),
                     'collection_container': test_meta.get('collection_container', test.get('collection_container', 'N/A')),
                     'department':           test_meta.get('department', test.get('department', 'N/A')),
                     'unit':                 test_meta.get('unit', test.get('unit', 'N/A')),
                     'method':               test_meta.get('method', test.get('method', 'N/A')),
                     'reference_range':      test_meta.get('reference_range', test.get('reference_range', 'N/A')),
+                    'interpretation':       test_meta.get('interpretation', test.get('interpretation', '')),
+                    'critical_range':       test_meta.get('critical_range', test.get('critical_range', '')),
+                    'lod':                  test_meta.get('lod', test.get('lod', '')),
                 }
 
                 if test_code and test_code != 'N/A' and test_meta.get('parameters'):
@@ -650,7 +659,7 @@ def get_approved_values(request):
 
     corp = client.Corporatehealthcheckup
     billing_collection = corp.core_billing
-    patient_collection = corp.core_employeeregistration
+    patient_collection = corp.core_chcregistration
 
     # BarcodeTestDetails collection
     diagnostics = client.Diagnostics
@@ -768,8 +777,8 @@ def get_approved_values(request):
         for doc in mongo_patient_docs
     }
 
-    # 4. Corporate core_employeeregistration - bulk fetch (fallback)
-    #    core_employeeregistration has: employee_id, employee_name, age, gender, mobile
+    # 4. Corporate core_chcregistration - bulk fetch (fallback)
+    #    core_chcregistration has: employee_id, employee_name, age, gender, mobile
     corp_billing_docs = list(billing_collection.find(
         {"barcode": {"$in": barcodes}},
         {"barcode": 1, "employee_id": 1, "_id": 0}
@@ -961,7 +970,7 @@ def get_approved_values(request):
                 if not phone and patient_info.get('phone'):
                     phone = patient_info['phone']
 
-        # ── PRIORITY 4: core_employeeregistration (fallback — has gender, mobile) ──
+        # ── PRIORITY 4: core_chcregistration (fallback — has gender, mobile) ──
         if not current_patient_id and barcode_val in corp_billing_dict:
             current_patient_id = corp_billing_dict[barcode_val]
             if current_patient_id in corp_employee_dict:
@@ -1135,11 +1144,13 @@ def edit_test_value(request, barcode):
         created_date_str = data.get("created_date")
         test_id = data.get("test_id")
         new_value = data.get("new_value")
+        new_status  = data.get("new_status")
+        new_comment = data.get("new_comment")
         history_entry = data.get("history_entry")  # {old_value, edited_by, reason, edited_at}
         param_index = data.get("param_index")       # None for test-level, int for parameter
 
-        if not (barcode and created_date_str and test_id and new_value and history_entry):
-            return JsonResponse({"error": "barcode, created_date, test_id, new_value, history_entry required"}, status=400)
+        if not (barcode and created_date_str and test_id and (new_value or new_status or new_comment) and history_entry):
+            return JsonResponse({"error": "barcode, created_date, test_id, and at least one of new_value, new_status, or new_comment are required"}, status=400)
 
         created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
@@ -1159,21 +1170,29 @@ def edit_test_value(request, barcode):
     for detail in test_details:
         if detail.get("test_id") == test_id:
             if param_index is not None:
-                # Edit a specific parameter value
                 params = detail.get("parameters", [])
                 if not (0 <= param_index < len(params)):
                     return JsonResponse({"error": "Invalid param_index."}, status=400)
                 if "history" not in params[param_index]:
                     params[param_index]["history"] = []
                 params[param_index]["history"].insert(0, history_entry)
-                params[param_index]["value"] = new_value
+                if new_value is not None:
+                    params[param_index]["value"] = new_value
+                if new_status is not None:
+                    params[param_index]["status"] = new_status
+                if new_comment is not None:              # ← add this
+                    params[param_index]["comment"] = new_comment
                 detail["parameters"] = params
             else:
-                # Edit the test-level value
                 if "history" not in detail:
                     detail["history"] = []
                 detail["history"].insert(0, history_entry)
-                detail["value"] = new_value
+                if new_value is not None:
+                    detail["value"] = new_value
+                if new_status is not None:
+                    detail["status"] = new_status
+                if new_comment is not None:              # ← add this
+                    detail["comment"] = new_comment
             test_found = True
             break
 

@@ -1,4 +1,5 @@
 from django.http import JsonResponse, HttpResponse
+from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 import json
 from pymongo import MongoClient
@@ -15,6 +16,7 @@ import gridfs
 import base64
 from bson.objectid import ObjectId
 import re
+from datetime import timezone, timedelta
 
 
 load_dotenv()
@@ -30,16 +32,18 @@ logger = logging.getLogger(__name__)
 # Returns a dict keyed by barcode → {test_id → {report, files, notes, has_report, has_file}}
 # ──────────────────────────────────────────────────────────────────────────────
 def _build_chc_status_from_investigation(investigation_records):
-    chc_status_by_barcode = {}
-
+    """
+    Returns: { barcode_str: { test_id_str: { has_report, has_file, report, notes, files, inv_status } } }
+    Now also carries the top-level investigation status per barcode.
+    """
+    result = {}
     for inv in investigation_records:
-        barcode = str(inv.get("barcode", ""))
-        if not barcode:
+        bc = str(inv.get("barcode", ""))
+        if not bc:
             continue
 
-        chc_status_by_barcode.setdefault(barcode, {})
+        inv_status = inv.get("status", "").strip().lower()  # ← capture status
 
-        # ── Normal CHC tests from test_results ─────────────────
         test_results = inv.get("test_results", [])
         if isinstance(test_results, str):
             try:
@@ -47,44 +51,28 @@ def _build_chc_status_from_investigation(investigation_records):
             except Exception:
                 test_results = []
 
-        for tr in test_results:
+        result.setdefault(bc, {})
+
+        for tr in (test_results or []):
             tid = str(tr.get("test_id", ""))
             if not tid:
                 continue
-
+            report = tr.get("report", "")
             files = tr.get("files", [])
-            report = tr.get("report", "") or ""
-            notes = tr.get("notes", "") or ""
+            notes = tr.get("notes", "")
+            has_report = bool(report and report.strip())
+            has_file = bool(files)
 
-            chc_status_by_barcode[barcode][tid] = {
-                "test_name": tr.get("test_name", ""),
+            result[bc][tid] = {
+                "has_report": has_report,
+                "has_file": has_file,
                 "report": report,
                 "notes": notes,
                 "files": files,
-                "has_report": bool(report.strip()),
-                "has_file": bool(files),
+                "inv_status": inv_status,  # ← store it per test entry
             }
 
-        # ── NEW: Ophthalmology (CHCT001) directly from investigation ─────
-        oph_data = inv.get("CHCT001")
-
-        if isinstance(oph_data, dict) and oph_data:
-            has_data = any(
-                v for v in oph_data.values()
-                if v and (not isinstance(v, dict) or any(v.values()))
-            )
-
-            if has_data:
-                chc_status_by_barcode[barcode]["CHCT001"] = {
-                    "test_name": "Ophthalmology",
-                    "report": "Available",
-                    "notes": oph_data.get("remarks", ""),
-                    "files": [],
-                    "has_report": True,
-                    "has_file": False,
-                }
-
-    return chc_status_by_barcode
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -136,7 +124,7 @@ def get_corporate_sample(request, batch_number):
 
             # Collections
             samples_collection = db["core_sample"]
-            employee_collection = db["core_employeeregistration"]
+            employee_collection = db["core_chcregistration"]
             billing_collection = db["core_billing"]
 
             # Connect to Diagnostics database for test details
@@ -174,7 +162,7 @@ def get_corporate_sample(request, batch_number):
 
             logger.info(f"Sample billing lookup entries: {dict(list(billing_lookup.items())[:5])}")
 
-            # Step 2: employee_id -> employee_data from core_employeeregistration
+            # Step 2: employee_id -> employee_data from core_chcregistration
             employee_lookup = {}
             for emp in employees:
                 employee_id = emp.get('employee_id')
@@ -492,9 +480,11 @@ def get_corporate_batch_generation_data(request):
                         logger.warning(f"Failed to parse specimen_count for batch {batch['_id']}")
                         batch['specimen_count'] = []
                 if 'created_date' in batch and batch['created_date']:
-                    batch['created_date'] = batch['created_date'].isoformat() if hasattr(batch['created_date'], 'isoformat') else str(batch['created_date'])
+                    cd = batch['created_date']
+                    batch['created_date'] = cd.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat() if hasattr(cd, 'isoformat') else str(cd)
                 if 'lastmodified_date' in batch and batch['lastmodified_date']:
-                    batch['lastmodified_date'] = batch['lastmodified_date'].isoformat() if hasattr(batch['lastmodified_date'], 'isoformat') else str(batch['lastmodified_date'])
+                    lmd = batch['lastmodified_date']
+                    batch['lastmodified_date'] = lmd.replace(tzinfo=timezone.utc).astimezone(timezone(timedelta(hours=5, minutes=30))).isoformat() if hasattr(lmd, 'isoformat') else str(lmd)
                 processed_data.append(batch)
 
             return JsonResponse({
@@ -697,7 +687,7 @@ def corporate_overall_report(request):
         db = client.Corporatehealthcheckup
         patients_collection = db.core_billing
         sample_status_collection = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
+        franchise_patient_collection = db.core_chcregistration
         investigation_collection = db.core_investigation
 
         diagnostics_db = client.Diagnostics
@@ -921,6 +911,17 @@ def corporate_overall_report(request):
             for ct in chc_tests:
                 tid = str(ct.get("test_id", ""))
                 info = chc_status_map_for_barcode.get(tid, {})
+                
+                inv_status = info.get("inv_status", "")   # ← read investigation status
+                has_content = info.get("has_report") or info.get("has_file")
+
+                # If investigation is explicitly "pending", treat as Pending
+                # regardless of whether files/reports exist
+                if inv_status == "approved" and has_content:
+                    chc_status = "Approved"
+                else:
+                    chc_status = "Pending"
+
                 chc_tests_with_status.append({
                     "test_id": tid,
                     "testname": ct.get("testname", ""),
@@ -929,7 +930,7 @@ def corporate_overall_report(request):
                     "report": info.get("report", ""),
                     "notes": info.get("notes", ""),
                     "files": info.get("files", []),
-                    "status": "Approved" if (info.get("has_report") or info.get("has_file")) else "Pending",
+                    "status": chc_status,   # ← driven by inv_status first, then content
                 })
 
             chc_overall, chc_pending, chc_approved = _chc_approval_status(
@@ -1105,6 +1106,7 @@ def corporate_overall_report(request):
                 "age": age,
                 "age_type": age_type,
                 "email": patient_detail.get("email", "N/A"),
+                "mobile": patient_detail.get("mobile", "N/A"),
                 "branch": patient_detail.get("company_id", "N/A"),
                 "test_names": testnames,
                 "department": department,
@@ -1142,7 +1144,7 @@ def corporate_patient_test_details(request):
         db = client.Corporatehealthcheckup
         franchise_billing_collection = db.core_billing
         franchise_sample_collection  = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
+        franchise_patient_collection = db.core_chcregistration
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
@@ -1183,7 +1185,7 @@ def corporate_patient_test_details(request):
             barcodes = []
 
         # ── Resolve patient gender for reference range selection ──────────────
-        # core_employeeregistration has a 'gender' field
+        # core_chcregistration has a 'gender' field
         patient_gender = (franchise_patient.get('gender') or '').strip()
 
         # ── Gender-aware reference_range resolver ─────────────────────────────
@@ -1274,7 +1276,7 @@ def corporate_patient_test_details(request):
             "date":        franchise_billing.get("created_date"),
             "barcode":     franchise_billing.get("barcode", ""),
             "barcodes":    barcodes,
-            "branch":      franchise_billing.get("franchise_id", ""),
+            "branch":      franchise_billing.get("company_id", ""),
             "refby":       "SELF",
             "testdetails": [],
         }
@@ -1338,8 +1340,7 @@ def corporate_patient_test_details(request):
                         "test_id":              test_id,
                         "testname":             testname,
                         "department":           department,
-                        "NABL":                 NABL,
-                        "specimen_type":        specimen_type,
+                        "NABL":                 NABL,                       
                         "outsourced":           outsourced,
                         "comment":              comment,
                         "verified_by":          verified_by,
@@ -1414,6 +1415,7 @@ def corporate_patient_test_details(request):
                                 "unit":            core_test.get("unit", ""),
                                 "reference_range": ref_range,   # gender-resolved
                                 "sub_title":       test_detail.get("sub_title", ""),
+                                "specimen_type":        specimen_type,
                             })
                         else:
                             test_response.update({
@@ -1422,6 +1424,7 @@ def corporate_patient_test_details(request):
                                 "unit":            test_detail.get("unit", ""),
                                 "reference_range": test_detail.get("reference_range", ""),
                                 "sub_title":       test_detail.get("sub_title", ""),
+                                "specimen_type":        specimen_type,
                             })
 
                     patient_details["testdetails"].append(test_response)
@@ -1448,27 +1451,23 @@ def corporate_patient_test_details(request):
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
 
-NORMAL_NOTES_WHITELIST = {
-    "normal study.",
-    "no significant finding in the lungs or mediastinum.",
-    "no significant abnormality detected.",
-}
 
 
 # ── HELPER: Check if a notes string is a whitelisted normal statement ─────────
 NORMAL_NOTES_WHITELIST = {
-    "normal study.",
-    "no significant finding in the lungs or mediastinum.",
-    "no significant abnormality detected.",
+    "Normal Study.",
+    "No significant finding in the lungs or mediastinum.",
+    "No significant abnormality detected.",
+    "Normal Study within normal limits.",
 }
 
-NORMAL_VITAL_STATUSES = {"bp_status", "bmi_status", "spo2_status"}
+NORMAL_VITAL_STATUSES = {"BP_status", "bmi_status", "spo2_status"}
 
 
 def _is_normal_notes(notes: str) -> bool:
     if not notes or not notes.strip():
         return False
-    return notes.strip().lower() in NORMAL_NOTES_WHITELIST
+    return notes.strip() in NORMAL_NOTES_WHITELIST  # no .lower()
 
 
 def _is_vitals_normal(vitals: dict) -> bool:
@@ -1495,63 +1494,46 @@ def _compute_corporate_approval_status(
     lab_test_values,
     no_of_tests,
     investigation_status,
-    vitals=None,           # ← new parameter
+    vitals=None,
 ):
-    """
-    Returns "Approved" when ALL of:
-      1. core_investigation.status == "approved", AND
-         All CHC test notes are exactly a whitelisted normal statement, AND
-      2. All ordered lab tests are approved AND all have status == "Normal", AND
-      3. All vital statuses (BP_status, bmi_status, spo2_status) == "Normal"
-    Falls back to existing overallApproval-based logic otherwise.
-    """
-    # ── 1. CHC notes check ───────────────────────────────────────────────────
     chc_all_normal = (
         investigation_status == "approved"
         and len(chc_tests_with_status) > 0
         and all(_is_normal_notes(ct.get("notes", "")) for ct in chc_tests_with_status)
     )
-
-    # ── 2. Lab test status check ─────────────────────────────────────────────
     valid_lab_tests = [
         t for t in lab_test_values
         if not t.get("rerun", False) and t.get("approve", False)
     ]
-
     lab_all_normal = (
         no_of_tests > 0
         and len(valid_lab_tests) >= no_of_tests
-        and all(
-            t.get("status", "").strip().lower() == "normal"
-            for t in valid_lab_tests
-        )
+        and all(t.get("status", "").strip().lower() == "normal" for t in valid_lab_tests)
     )
-
-    # ── 3. Vitals status check ────────────────────────────────────────────────
     vitals_all_normal = _is_vitals_normal(vitals)
 
     if chc_all_normal and lab_all_normal and vitals_all_normal:
-        return "Approved"
+        return "Approved", "auto", None
 
-    # ── 4. Fallback: overallApproval collection ───────────────────────────────
     if bc and bc in approval_status_map:
-        return "Approved"
+        approver_name = approval_status_map[bc].get("approved_by_name", "Unknown")
+        return "Approved", "manual", approver_name
 
-    return "Pending"
+    return "Pending", "none", None
 
 
 @api_view(['GET', 'PATCH'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
 def corporate_approval_report(request):
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
         patients_collection = db.core_billing
         sample_status_collection = db.core_sample
-        franchise_patient_collection = db.core_employeeregistration
+        franchise_patient_collection = db.core_chcregistration
         overall_approval_collection = db.overallApproval
         investigation_collection = db.core_investigation
+        company_collection = db.core_company
 
         mongo_db = client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
@@ -1587,9 +1569,10 @@ def corporate_approval_report(request):
         barcodes = list(set(r.get("barcode") for r in sample_records if r.get("barcode")))
         print(f"Barcodes from core_sample: {barcodes}")
 
-        # Build sample date map and testdetails map by barcode
+        # Build sample date map, testdetails map, and valid test count map by barcode
         sample_date_by_barcode = {}
         sample_testdetails_by_barcode = {}
+        valid_test_count_by_barcode = {}
 
         for record in sample_records:
             bc = record.get("barcode")
@@ -1611,19 +1594,19 @@ def corporate_approval_report(request):
 
             # testdetails
             testdetails = record.get("testdetails")
+            raw_tests = []
             if testdetails:
-                parsed = []
                 if isinstance(testdetails, str):
                     try:
-                        parsed = json.loads(testdetails)
+                        raw_tests = json.loads(testdetails)
                     except json.JSONDecodeError:
-                        parsed = []
+                        raw_tests = []
                 elif isinstance(testdetails, list):
-                    parsed = testdetails
+                    raw_tests = testdetails
 
                 # Enrich with test names from core_testdetails
                 enriched = []
-                for test in parsed:
+                for test in raw_tests:
                     if isinstance(test, dict):
                         test_id = test.get("test_id")
                         if test_id:
@@ -1634,6 +1617,14 @@ def corporate_approval_report(request):
 
                 if enriched:
                     sample_testdetails_by_barcode[bc] = enriched
+
+            # Count valid (non-Rejected, non-Outsource) tests per barcode
+            invalid_status = {"Rejected", "Outsource", "Pending"}
+            valid_tests = [
+                t for t in (raw_tests or [])
+                if isinstance(t, dict) and t.get("samplestatus", "").strip() not in invalid_status
+            ]
+            valid_test_count_by_barcode[bc] = len(valid_tests)
 
         # ── STEP 3: Get billing records using barcodes ────────────────────────
         billing_query = {"barcode": {"$in": barcodes}}
@@ -1646,7 +1637,6 @@ def corporate_approval_report(request):
         if not billing_records:
             return JsonResponse([], safe=False)
 
-        # Build barcode → billing and barcode → employee_id maps
         barcode_to_billing = {}
         barcode_to_employee_id = {}
         employee_ids = []
@@ -1670,17 +1660,50 @@ def corporate_approval_report(request):
 
         print(f"Fetched {len(patient_details_map)} patient detail records")
 
+        # Collect all company_ids
+        company_ids = list(set(
+            pd.get("company_id") for pd in franchise_patient_collection.find(
+                {"employee_id": {"$in": employee_ids}},
+                {"company_id": 1}
+            ) if pd.get("company_id")
+        ))
+
+        # Build company_id → company_name map
+        company_name_map = {}
+        for company in company_collection.find({"company_id": {"$in": company_ids}}):
+            cid = company.get("company_id")
+            if cid:
+                company_name_map[cid] = company.get("company_name", cid)
+
         # ── STEP 5: Overall approval map ──────────────────────────────────────
         approval_status_map = {}
-        approval_records = overall_approval_collection.find({"barcode": {"$in": barcodes}})
+        approval_records = list(overall_approval_collection.find({"barcode": {"$in": barcodes}}))
+
+        approval_creator_ids = list(set(
+            r.get("created_by") for r in approval_records if r.get("created_by")
+        ))
+
+        global_db = client.Global
+        diagnostics_profile_collection = global_db.backend_diagnostics_profile
+
+        creator_name_map = {}
+        for profile in diagnostics_profile_collection.find(
+            {"employeeId": {"$in": approval_creator_ids}},
+            {"employeeId": 1, "employeeName": 1}
+        ):
+            creator_name_map[profile.get("employeeId")] = profile.get("employeeName", "Unknown")
+
         for approval in approval_records:
             bc = approval.get("barcode")
             if bc:
+                creator_id = approval.get("created_by", "")
                 approval_status_map[bc] = {
                     "status": approval.get("status", "approved"),
                     "approved_date": approval.get("approved_date"),
                     "impression": approval.get("impression"),
                     "remarks": approval.get("remarks"),
+                    "created_by": creator_id,
+                    "approved_by_name": creator_name_map.get(creator_id, creator_id or "Unknown"),
                 }
 
         # ── STEP 6: Investigation records ─────────────────────────────────────
@@ -1703,20 +1726,24 @@ def corporate_approval_report(request):
 
         # ── STEP 7: Bulk-fetch TestValue records ──────────────────────────────
         lab_tests_by_barcode = {}
+        approved_count_by_barcode = {}
+
         for record in TestValue.objects.filter(barcode__in=barcodes):
             bc = str(record.barcode)
             td = record.testdetails
             parsed = json.loads(td) if isinstance(td, str) else (td or [])
             if isinstance(parsed, list):
                 lab_tests_by_barcode.setdefault(bc, []).extend(parsed)
+                approved = sum(1 for t in parsed if isinstance(t, dict) and t.get("approve"))
+                approved_count_by_barcode[bc] = approved_count_by_barcode.get(bc, 0) + approved
 
-        # ── STEP 8: Build response — iterate over barcodes from core_sample ───
+        # ── STEP 8: Build response ─────────────────────────────────────────────
         formatted_data = []
 
         for bc in barcodes:
             billing = barcode_to_billing.get(bc)
             if not billing:
-                continue  # no billing record for this barcode, skip
+                continue
 
             eid = barcode_to_employee_id.get(bc, "N/A")
             patient_detail = patient_details_map.get(eid, {})
@@ -1748,10 +1775,28 @@ def corporate_approval_report(request):
                 chc_tests = chc_raw
 
             chc_status_map_for_barcode = chc_status_by_barcode.get(str(bc), {})
+
+            # ── Get investigation_status early so per-test logic can use it ──
+            investigation_status = investigation_status_by_barcode.get(str(bc), "")
+            vitals = vitals_by_barcode.get(str(bc), {})
+
             chc_tests_with_status = []
             for ct in chc_tests:
                 tid = str(ct.get("test_id", ""))
                 info = chc_status_map_for_barcode.get(tid, {})
+
+                inv_status = info.get("inv_status", "")
+                has_content = info.get("has_report") or info.get("has_file")
+
+                # ── FIX 1: If overall investigation is approved, all tests
+                #           are approved regardless of file/report presence ──
+                if investigation_status == "approved":
+                    chc_status = "Approved"
+                elif inv_status == "approved" and has_content:
+                    chc_status = "Approved"
+                else:
+                    chc_status = "Pending"
+
                 chc_tests_with_status.append({
                     "test_id": tid,
                     "testname": ct.get("testname", ""),
@@ -1760,7 +1805,7 @@ def corporate_approval_report(request):
                     "report": info.get("report", ""),
                     "notes": info.get("notes", ""),
                     "files": info.get("files", []),
-                    "status": "Approved" if (info.get("has_report") or info.get("has_file")) else "Pending",
+                    "status": chc_status,
                 })
 
             chc_overall, chc_pending, chc_approved = _chc_approval_status(
@@ -1768,10 +1813,26 @@ def corporate_approval_report(request):
             )
 
             raw_lab_tests = lab_tests_by_barcode.get(str(bc), [])
-            investigation_status = investigation_status_by_barcode.get(str(bc), "")
-            vitals = vitals_by_barcode.get(str(bc), {})
 
-            status = _compute_corporate_approval_status(
+            # Compute lab_approval per barcode
+            total_sample = valid_test_count_by_barcode.get(str(bc), 0)
+            approved_count = approved_count_by_barcode.get(str(bc), 0)
+            lab_approval = (
+                "Approved" if total_sample > 0 and approved_count >= total_sample
+                else "Pending"
+            )
+
+            # ── FIX 2: If core_investigation.status == "approved" AND lab is
+            #           approved → treat as All Approved without checking
+            #           per-test file/report presence ──
+            if investigation_status == "approved" and lab_approval == "Approved":
+                combined_investigation_status = "All Approved"
+            elif lab_approval == "Pending" or chc_overall != "All Approved":
+                combined_investigation_status = "Pending"
+            else:
+                combined_investigation_status = "All Approved"
+
+            status, approval_type, approved_by_name = _compute_corporate_approval_status(
                 bc=bc,
                 approval_status_map=approval_status_map,
                 chc_tests_with_status=chc_tests_with_status,
@@ -1795,22 +1856,29 @@ def corporate_approval_report(request):
                     except Exception:
                         formatted_date = str(created_date)
 
-            formatted_data.append({        # ← from core_sample.date
-                "date": sample_date,               # ← from billing.created_date
+            company_id = patient_detail.get("company_id", "N/A")
+            company_name = company_name_map.get(company_id, company_id)
+
+            formatted_data.append({
+                "date": sample_date,
                 "patient_id": eid,
                 "patient_name": patient_detail.get("employee_name", "N/A"),
                 "gender": patient_detail.get("gender", "N/A"),
                 "age": age,
                 "email": patient_detail.get("email", "N/A"),
                 "branch": patient_detail.get("company_id", "N/A"),
+                "branch_name": company_name,
                 "test_names": testnames,
                 "no_of_tests": no_of_tests,
                 "barcode": bc,
                 "status": status,
+                "lab_approval": lab_approval,
                 "chc_tests": chc_tests_with_status,
-                "chc_investigation_status": chc_overall,
+                "chc_investigation_status": combined_investigation_status,
                 "chc_pending_tests": chc_pending,
                 "chc_approved_tests": chc_approved,
+                "approval_type": approval_type,
+                "approved_by_name": approved_by_name,
             })
 
         client.close()
@@ -1820,6 +1888,8 @@ def corporate_approval_report(request):
         print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
+
+
 
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
@@ -1834,7 +1904,7 @@ def corporate_health_report(request):
 
         franchise_billing_collection          = db.core_billing
         franchise_sample_collection           = db.core_sample
-        franchise_patient_collection          = db.core_employeeregistration
+        franchise_patient_collection          = db.core_chcregistration
         franchise_investigation_collection    = db.core_investigation
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection          = db.core_company
@@ -1847,7 +1917,7 @@ def corporate_health_report(request):
         fs                 = gridfs.GridFS(global_db)
 
         # ── Parameter helper ──────────────────────────────────────────────────
-        def get_parameter_from_core(core_test, device_id, test_code):
+        def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
             core_parameters = core_test.get("parameters", {})
             params_list = []
             if isinstance(core_parameters, dict):
@@ -1861,6 +1931,8 @@ def corporate_health_report(request):
                 params_list = core_parameters
             if not isinstance(params_list, list):
                 return None
+            if param_index is not None and 0 <= param_index < len(params_list):
+                return params_list[param_index]
             if test_code:
                 matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
                 if matching_params:
@@ -1906,7 +1978,7 @@ def corporate_health_report(request):
             return JsonResponse({'error': 'Patient not found'}, status=404)
 
         # ── Resolve patient gender for reference range selection ──────────────
-        # core_employeeregistration has a 'gender' field
+        # core_chcregistration has a 'gender' field
         patient_gender = (franchise_patient.get('gender') or '').strip()
 
         # ── Gender-aware reference_range resolver ─────────────────────────────
@@ -1951,6 +2023,27 @@ def corporate_health_report(request):
                         vitals_data[key] = value
             except (json.JSONDecodeError, AttributeError):
                 vitals_data = {}
+
+        # ── Dynamic fields from investigation ────────────────────────────────────
+        dynamic_fields_data = []
+        if franchise_investigation:
+            raw_dynamic = franchise_investigation.get("dynamic_fields", [])
+            if isinstance(raw_dynamic, list):
+                for field in raw_dynamic:
+                    field_name = field.get("field_name", "")
+                    field_values = field.get("field_values", [])
+                    if field_name and isinstance(field_values, list) and field_values:
+                        # Only include entries with non-empty values
+                        valid_pairs = [
+                            {"key": fv.get("key", ""), "value": fv.get("value", "")}
+                            for fv in field_values
+                            if isinstance(fv, dict) and (fv.get("key") or fv.get("value"))
+                        ]
+                        if valid_pairs:
+                            dynamic_fields_data.append({
+                                "field_name": field_name,
+                                "field_values": valid_pairs,
+                            })
 
         investigation_file_ids = {}
         investigation_notes    = {}
@@ -2073,6 +2166,8 @@ def corporate_health_report(request):
             "testdetails": [],
         }
 
+        if company_data and company_data.get("company_id"):
+            patient_details["company_id"] = company_data.get("company_id")
         if company_data and company_data.get("company_name"):
             patient_details["company_name"] = company_data.get("company_name")
         if franchise_patient.get("department"):
@@ -2085,6 +2180,8 @@ def corporate_health_report(request):
                 if vitals_data.get(key):
                     display_key = key.replace("_cm", "").replace("_kg", "")
                     patient_details["vitals"][display_key] = vitals_data.get(key)
+        if dynamic_fields_data:
+            patient_details["dynamic_fields"] = dynamic_fields_data
         if medical_history_data:
             patient_details["medical_history"] = medical_history_data
         if clinical_examination_data:
@@ -2138,9 +2235,11 @@ def corporate_health_report(request):
                             testname      = core_test.get("test_name", testname)
                             specimen_type = core_test.get("specimen_type", "N/A")
                             department    = core_test.get("department", test_detail.get("department", ""))
+                            NABL    = core_test.get("NABL", "")
                         else:
                             specimen_type = test_detail.get("specimen_type", "")
                             department    = test_detail.get("department", "")
+                            NABL    = test_detail.get("NABL", "")
 
                         if not testname:
                             continue
@@ -2158,12 +2257,16 @@ def corporate_health_report(request):
                         test_response = {"testname": testname}
                         if department:
                             test_response["department"] = department
+                        if NABL:
+                            test_response["NABL"] = NABL
                         if test_detail.get("verified_by"):
                             test_response["verified_by"] = test_detail.get("verified_by")
                         if test_detail.get("approve_by"):
                             test_response["approve_by"] = test_detail.get("approve_by")
                         if test_detail.get("approve_time"):
                             test_response["approve_time"] = test_detail.get("approve_time")
+                        if test_detail.get("status"):
+                            test_response["status"] = test_detail.get("status")
                         outsourced = test_detail.get("outsourced", False)
                         if outsourced:
                             test_response["outsourced"] = outsourced
@@ -2179,13 +2282,16 @@ def corporate_health_report(request):
                         if test_detail.get("parameters"):
                             # ── Parameterised test ────────────────────────────
                             processed_parameters = []
-                            for param in test_detail.get("parameters", []):
+                            for param_index, param in enumerate(test_detail.get("parameters", [])):
                                 test_code     = param.get("test_code")
                                 value         = param.get("value", "")
                                 param_comment = param.get("comment", "")
 
-                                param_def = get_parameter_from_core(core_test, device_id, test_code) \
-                                    if core_test and test_code else None
+                                param_def = get_parameter_from_core(
+                                    core_test, device_id,
+                                    test_code=test_code,
+                                    param_index=param_index,
+                                ) if core_test else None
 
                                 processed_param = {}
                                 if param_def:
@@ -2342,6 +2448,7 @@ def get_investigation_status(request):
         billing_collection = db.core_billing
 
         investigation = investigation_collection.find_one({"barcode": barcode}) or {}
+        inv_status = investigation.get("status", "").strip().lower()
 
         # -----------------------------
         # VITALS
@@ -2370,7 +2477,7 @@ def get_investigation_status(request):
 
                 sample_tests = parse_json(franchise_sample.get("testdetails"), [])
 
-                invalid_status = {"Rejected", "Outsource"}
+                invalid_status = {"Rejected", "Outsource", "Pending"}
 
                 valid_tests = [
                     t for t in sample_tests
@@ -2479,12 +2586,7 @@ def get_investigation_status(request):
         # -----------------------------
         # CHC OVERALL STATUS
         # -----------------------------
-        all_chc_approved = (
-            len(chc_tests_enriched) > 0 and
-            all(ct["status"] == "approved" for ct in chc_tests_enriched)
-        )
-
-        chc_overall_status = "approved" if all_chc_approved else "pending"
+        chc_overall_status = "approved" if inv_status == "approved" else "pending"
 
         client.close()
 
@@ -2510,40 +2612,34 @@ def get_batch_investigation_status(request):
     """
     Batch version of get_investigation_status.
     Accepts: {"barcodes": ["300010", "300011", ...]}
+    Now also returns vitals and patient_history per barcode.
     """
     barcodes = request.data.get('barcodes', [])
     if not barcodes or not isinstance(barcodes, list):
         return JsonResponse({'error': 'Barcodes array is required'}, status=400)
-
+ 
     barcodes = [str(bc) for bc in barcodes]
-    print(f"Processing {len(barcodes)} barcodes: {barcodes[:5]}...")
-
+ 
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Corporatehealthcheckup
-
+ 
         investigation_collection = db.core_investigation
-        ophthalmology_collection = db.core_ophthalmology
-        sample_collection = db.core_sample
-        billing_collection = db.core_billing
-
-        # Fetch all records in bulk
+        sample_collection        = db.core_sample
+        billing_collection       = db.core_billing
+ 
+        # ── Bulk fetch everything in 3 queries total ──────────────────────────
         investigations = list(investigation_collection.find({"barcode": {"$in": barcodes}}))
-        ophthalmologies = list(ophthalmology_collection.find({"barcode": {"$in": barcodes}}))
-        samples = list(sample_collection.find({"barcode": {"$in": barcodes}}))
-        billings = list(billing_collection.find({"barcode": {"$in": barcodes}}))
+        samples        = list(sample_collection.find({"barcode": {"$in": barcodes}}))
+        billings       = list(billing_collection.find({"barcode": {"$in": barcodes}}))
         test_value_records = TestValue.objects.filter(barcode__in=barcodes)
-
-        print(f"Found {len(investigations)} investigations, {len(ophthalmologies)} ophthalmology, "
-              f"{len(samples)} samples, {len(billings)} billings, {len(test_value_records)} test values")
-
+ 
         # Build lookup maps
         investigation_map = {str(inv['barcode']): inv for inv in investigations}
-        ophthalmology_map = {str(oph['barcode']): oph for oph in ophthalmologies}
-        sample_map = {str(s['barcode']): s for s in samples}
-        billing_map = {str(b['barcode']): b for b in billings}
-
-        # Approved tests count per barcode
+        sample_map        = {str(s['barcode']): s   for s   in samples}
+        billing_map       = {str(b['barcode']): b   for b   in billings}
+ 
+        # Approved test count per barcode
         approved_tests_map = {}
         for record in test_value_records:
             bc = str(record.barcode)
@@ -2551,110 +2647,126 @@ def get_batch_investigation_status(request):
             tests_list = json.loads(td) if isinstance(td, str) else (td or [])
             count = sum(1 for t in tests_list if isinstance(t, dict) and t.get("approve"))
             approved_tests_map[bc] = approved_tests_map.get(bc, 0) + count
-
+ 
         results = {}
+ 
         for barcode in barcodes:
             investigation = investigation_map.get(barcode)
-            ophthalmology = ophthalmology_map.get(barcode)
-            sample = sample_map.get(barcode)
-            billing = billing_map.get(barcode)
-
-            # Lab approval
+            sample        = sample_map.get(barcode)
+            billing       = billing_map.get(barcode)
+ 
+            inv_status = investigation.get("status", "").strip().lower() if investigation else ""
+ 
+            # ── Vitals ────────────────────────────────────────────────────────
+            vitals_data = {}
+            if investigation:
+                raw_vitals = investigation.get("vitals", {})
+                if isinstance(raw_vitals, str):
+                    try: raw_vitals = json.loads(raw_vitals)
+                    except Exception: raw_vitals = {}
+                for k, v in raw_vitals.items():
+                    if v and str(v).strip() not in ("", "0"):
+                        vitals_data[k] = v
+ 
+            # ── Patient history ────────────────────────────────────────────────
+            patient_history = ""
+            if investigation:
+                patient_history = investigation.get("patient_history", "") or ""
+ 
+            # ── Lab approval ──────────────────────────────────────────────────
             total_sample_tests = 0
             if sample and sample.get('testdetails'):
                 raw = sample.get('testdetails')
-                sample_tests = json.loads(raw) if isinstance(raw, str) else (raw or [])
-                total_sample_tests = len(sample_tests)
+                sample_tests_list = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                invalid = {"Rejected", "Outsource", "Pending"}
+                total_sample_tests = sum(
+                    1 for t in sample_tests_list
+                    if t.get("samplestatus", "").strip() not in invalid
+                )
             approved_count = approved_tests_map.get(barcode, 0)
             lab_approval = "approved" if (total_sample_tests > 0 and approved_count >= total_sample_tests) else "pending"
-
-            # Ophthalmology
-            ophthalmology_status = ophthalmology.get("status", "pending") if ophthalmology else "pending"
-
-            # NEW: Per-CHC-test status from investigation.test_results
+ 
+            # ── Per-CHC-test status from investigation.test_results ───────────
             chc_test_status = {}
             if investigation:
                 test_results = investigation.get("test_results", [])
                 if isinstance(test_results, str):
-                    try:
-                        test_results = json.loads(test_results)
-                    except (json.JSONDecodeError, TypeError):
-                        test_results = []
-                for tr in test_results:
-                    tid = str(tr.get("test_id", ""))
-                    if not tid:
-                        continue
-                    files = tr.get("files", [])
-                    report = tr.get("report", "") or ""
-                    notes = tr.get("notes", "") or ""
+                    try: test_results = json.loads(test_results)
+                    except Exception: test_results = []
+                for tr in (test_results or []):
+                    tid    = str(tr.get("test_id", ""))
+                    if not tid: continue
+                    files  = tr.get("files", []) or []
+                    report = (tr.get("report") or "").strip()
+                    notes  = tr.get("notes") or ""
                     chc_test_status[tid] = {
-                        "test_name": tr.get("test_name", ""),
-                        "report": report,
-                        "notes": notes,
-                        "files": files,
-                        "has_report": bool(report.strip()),
-                        "has_file": bool(files),
-                        "status": "approved" if (bool(report.strip()) or bool(files)) else "pending",
+                        "test_name":  tr.get("test_name", ""),
+                        "report":     report,
+                        "notes":      notes,
+                        "files":      files,
+                        "has_report": bool(report),
+                        "has_file":   bool(files),
+                        "status":     "approved" if (bool(report) or bool(files)) else "pending",
                     }
-
-            # NEW: Get chctestdetails from billing
+ 
+            # CHCT001 from core_investigation directly
+            ophthal_data = investigation.get("CHCT001", {}) if investigation else {}
+            if ophthal_data:
+                chc_test_status["CHCT001"] = {
+                    "test_name":  "Ophthalmology",
+                    "report":     "",
+                    "notes":      ophthal_data.get("remarks", ""),
+                    "files":      [],
+                    "has_report": True,
+                    "has_file":   False,
+                    "status":     "approved",
+                }
+ 
+            # Enrich with billing chctestdetails
             chc_tests_list = []
             if billing:
                 chc_raw = billing.get("chctestdetails", "[]")
                 if isinstance(chc_raw, str):
-                    try:
-                        chc_tests_list = json.loads(chc_raw)
-                    except (json.JSONDecodeError, TypeError):
-                        chc_tests_list = []
+                    try: chc_tests_list = json.loads(chc_raw)
+                    except Exception: chc_tests_list = []
                 elif isinstance(chc_raw, list):
                     chc_tests_list = chc_raw
-
+ 
             chc_tests_enriched = []
             for ct in chc_tests_list:
-                tid = str(ct.get("test_id", ""))
+                tid  = str(ct.get("test_id", ""))
                 info = chc_test_status.get(tid, {})
                 chc_tests_enriched.append({
-                    "test_id": tid,
-                    "testname": ct.get("testname", ""),
-                    "status": info.get("status", "pending"),
+                    "test_id":    tid,
+                    "testname":   ct.get("testname", ""),
+                    "status":     info.get("status", "pending"),
                     "has_report": info.get("has_report", False),
-                    "has_file": info.get("has_file", False),
-                    "report": info.get("report", ""),
-                    "notes": info.get("notes", ""),
-                    "files": info.get("files", []),
+                    "has_file":   info.get("has_file",   False),
+                    "report":     info.get("report",     ""),
+                    "notes":      info.get("notes",      ""),
+                    "files":      info.get("files",      []),
                 })
-
-            all_chc_approved = (
-                len(chc_tests_enriched) > 0
-                and all(ct["status"] == "approved" for ct in chc_tests_enriched)
-            )
-            chc_overall_status = "approved" if all_chc_approved else "pending"
-
+ 
             results[barcode] = {
-                # Legacy field — keep for backward-compat with existing frontend code
+                'lab_approval':             lab_approval,
+                'chc_tests':                chc_tests_enriched,
+                'chc_investigation_status': "approved" if inv_status == "approved" else "pending",
+                'vitals':                   vitals_data,       # ← NEW
+                'patient_history':          patient_history,   # ← NEW
+                # legacy field kept for backward compat
                 'investigation': {
-                    "xray_report": "pending",
-                    "xrayfilm_file": "pending",
-                    "ecg_file": "pending",
-                    "pft_file": "pending",
+                    "xray_report": "pending", "xrayfilm_file": "pending",
+                    "ecg_file": "pending", "pft_file": "pending",
                     "audiometric_file": "pending",
                 },
-                'ophthalmology': ophthalmology_status,
-                'lab_approval': lab_approval,
-                # NEW fields
-                'chc_tests': chc_tests_enriched,
-                'chc_investigation_status': chc_overall_status,
             }
-
+ 
         client.close()
-        print(f"Returning results for {len(results)} barcodes")
         return JsonResponse({'success': True, 'results': results})
-
+ 
     except Exception as e:
-        print(f"Error in batch status fetch: {e}")
         print(traceback.format_exc())
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
-
 
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
@@ -2733,7 +2845,7 @@ def get_batch_corporate_health_reports(request):
 
         franchise_billing_collection          = db.core_billing
         franchise_sample_collection           = db.core_sample
-        franchise_patient_collection          = db.core_employeeregistration
+        franchise_patient_collection          = db.core_chcregistration
         franchise_investigation_collection    = db.core_investigation
         franchise_overall_approval_collection = db.overallApproval
         franchise_company_collection          = db.core_company
@@ -2746,7 +2858,7 @@ def get_batch_corporate_health_reports(request):
         fs                 = gridfs.GridFS(global_db)
 
         # ── Parameter helper ──────────────────────────────────────────────────
-        def get_parameter_from_core(core_test, device_id, test_code):
+        def get_parameter_from_core(core_test, device_id, test_code=None, param_index=None):
             core_parameters = core_test.get("parameters", {})
             params_list = []
             if isinstance(core_parameters, dict):
@@ -2760,6 +2872,8 @@ def get_batch_corporate_health_reports(request):
                 params_list = core_parameters
             if not isinstance(params_list, list):
                 return None
+            if param_index is not None and 0 <= param_index < len(params_list):
+                return params_list[param_index]
             if test_code:
                 matching_params = [p for p in params_list if isinstance(p, dict) and p.get("test_code") == test_code]
                 if matching_params:
@@ -2880,6 +2994,26 @@ def get_batch_corporate_health_reports(request):
                         if patient_history.lower() not in ["nil", "nil significant", "no previous history", "none"]:
                             medical_history_data["patient_history"] = patient_history
 
+                # ── NEW: dynamic fields ──────────────────────────────────────────
+                dynamic_fields_data = []
+                if franchise_investigation:
+                    raw_dynamic = franchise_investigation.get("dynamic_fields", [])
+                    if isinstance(raw_dynamic, list):
+                        for field in raw_dynamic:
+                            field_name = field.get("field_name", "")
+                            field_values = field.get("field_values", [])
+                            if field_name and isinstance(field_values, list) and field_values:
+                                valid_pairs = [
+                                    {"key": fv.get("key", ""), "value": fv.get("value", "")}
+                                    for fv in field_values
+                                    if isinstance(fv, dict) and (fv.get("key") or fv.get("value"))
+                                ]
+                                if valid_pairs:
+                                    dynamic_fields_data.append({
+                                        "field_name": field_name,
+                                        "field_values": valid_pairs,
+                                    })
+
                 # Clinical examination
                 clinical_examination_data = {}
                 if franchise_investigation:
@@ -2965,6 +3099,8 @@ def get_batch_corporate_health_reports(request):
                     "testdetails": [],
                 }
 
+                if company_data and company_data.get("company_id"):
+                    patient_details["company_id"] = company_data.get("company_id")
                 if company_data and company_data.get("company_name"):
                     patient_details["company_name"] = company_data.get("company_name")
                 if franchise_patient.get("department"):
@@ -2979,6 +3115,8 @@ def get_batch_corporate_health_reports(request):
                             patient_details["vitals"][display_key] = vitals_data.get(key)
                 if medical_history_data:
                     patient_details["medical_history"] = medical_history_data
+                if dynamic_fields_data:
+                    patient_details["dynamic_fields"] = dynamic_fields_data
                 if clinical_examination_data:
                     patient_details["clinical_examination"] = clinical_examination_data
                 if ophthalmology_data:
@@ -3028,9 +3166,11 @@ def get_batch_corporate_health_reports(request):
                                     testname      = core_test.get("test_name", testname)
                                     specimen_type = core_test.get("specimen_type", "N/A")
                                     department    = core_test.get("department", test_detail.get("department", ""))
+                                    NABL    = core_test.get("NABL", test_detail.get("NABL", ""))
                                 else:
                                     specimen_type = test_detail.get("specimen_type", "")
                                     department    = test_detail.get("department", "")
+                                    NABL    = test_detail.get("NABL", "")
 
                                 if not testname:
                                     continue
@@ -3048,12 +3188,16 @@ def get_batch_corporate_health_reports(request):
                                 test_response = {"testname": testname}
                                 if department:
                                     test_response["department"] = department
+                                if NABL:
+                                    test_response["NABL"] = NABL
                                 if test_detail.get("verified_by"):
                                     test_response["verified_by"] = test_detail.get("verified_by")
                                 if test_detail.get("approve_by"):
                                     test_response["approve_by"] = test_detail.get("approve_by")
                                 if test_detail.get("approve_time"):
                                     test_response["approve_time"] = test_detail.get("approve_time")
+                                if test_detail.get("status"):
+                                    test_response["status"] = test_detail.get("status")
                                 outsourced = test_detail.get("outsourced", False)
                                 if outsourced:
                                     test_response["outsourced"] = outsourced
@@ -3069,13 +3213,16 @@ def get_batch_corporate_health_reports(request):
                                 if test_detail.get("parameters"):
                                     # ── Parameterised test ────────────────────
                                     processed_parameters = []
-                                    for param in test_detail.get("parameters", []):
+                                    for param_index, param in enumerate(test_detail.get("parameters", [])):
                                         test_code     = param.get("test_code")
                                         value         = param.get("value", "")
                                         param_comment = param.get("comment", "")
 
-                                        param_def = get_parameter_from_core(core_test, device_id, test_code) \
-                                            if core_test and test_code else None
+                                        param_def = get_parameter_from_core(
+                                            core_test, device_id,
+                                            test_code=test_code,
+                                            param_index=param_index,
+                                        ) if core_test else None
 
                                         processed_param = {}
                                         if param_def:
@@ -3187,3 +3334,583 @@ def get_batch_corporate_health_reports(request):
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
     
     
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def corporate_credit_billing(request):
+    """
+    Get all corporate billing records where paymentMode is 'Credit'
+    and map the company_id to company_name from core_company.
+    """
+    if request.method == "GET":
+        client = None
+        try:
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            db = client.Corporatehealthcheckup
+            
+            billing_collection = db.core_billing
+            company_collection = db.core_company
+            
+            # 1. Fetch all companies and create a map of company_id -> company_name
+            companies = list(company_collection.find({}, {"_id": 0, "company_id": 1, "company_name": 1}))
+            company_map = {str(comp.get("company_id", "")).strip(): comp.get("company_name", "") for comp in companies if comp.get("company_id")}
+            
+            # 2. Fetch billing records where paymentMode is Credit
+            # 2. Fetch billing records that are not yet fully paid/invoiced
+            query = {"$or": [{"paymentMode": "Credit"}, {"paymentMode": {"$exists": False}}, {"paymentMode": None}]}
+
+            
+            req_company_id = request.GET.get('company_id')
+            if req_company_id:
+                query['company_id'] = req_company_id
+                
+            from_date = request.GET.get('from_date')
+            to_date = request.GET.get('to_date')
+            
+            if from_date or to_date:
+                date_query = {}
+                if from_date:
+                    from_datetime = datetime.strptime(from_date, '%Y-%m-%d')
+                    from_datetime = from_datetime.replace(hour=0, minute=0, second=0, microsecond=0)
+                    date_query['$gte'] = from_datetime
+                if to_date:
+                    to_datetime = datetime.strptime(to_date, '%Y-%m-%d')
+                    to_datetime = to_datetime.replace(hour=23, minute=59, second=59, microsecond=999999)
+                    date_query['$lte'] = to_datetime
+                
+                if date_query:
+                    query['date'] = date_query
+            
+            # Fetch all invoiced bill IDs to exclude them
+            invoice_collection = db.core_corporate_invoices
+            invoiced_bill_ids = []
+            all_invoices = list(invoice_collection.find({}, {"bill_items.bill_id": 1}))
+            for inv in all_invoices:
+                if "bill_items" in inv:
+                    for item in inv["bill_items"]:
+                        if "bill_id" in item:
+                            invoiced_bill_ids.append(item["bill_id"])
+            
+            if invoiced_bill_ids:
+                from bson import ObjectId
+                oid_list = []
+                for bid in invoiced_bill_ids:
+                    try:
+                        oid_list.append(ObjectId(bid))
+                    except:
+                        pass
+                # Exclude bills that are in any invoice (support ObjectId, string, and integer IDs)
+                query["_id"] = {
+                    "$nin": oid_list + invoiced_bill_ids + [int(bid) for bid in invoiced_bill_ids if str(bid).isdigit()]
+                }
+
+
+
+
+            billing_records = list(billing_collection.find(query).sort("date", -1))
+            
+            # 3. Optimize: Fetch all unique employee IDs in one go (chunked to avoid BSON limits)
+            employee_ids = list(set(str(bill.get('employee_id', '')).strip() for bill in billing_records if bill.get('employee_id')))
+            employee_name_map = {}
+            if employee_ids:
+                # Chunk IDs to avoid BSON length/limit issues with very large $in lists
+                chunk_size = 500
+                for i in range(0, len(employee_ids), chunk_size):
+                    chunk = employee_ids[i:i + chunk_size]
+                    try:
+                        employees = list(db.core_chcregistration.find({"employee_id": {"$in": chunk}}))
+                        for emp in employees:
+                            eid = str(emp.get('employee_id', '')).strip()
+                            if eid:
+                                employee_name_map[eid] = emp.get('employee_name')
+                    except Exception as e:
+                        logger.error(f"Error fetching employee chunk: {str(e)}")
+
+            # 4. Format the response
+
+            processed_data = []
+            for bill in billing_records:
+                bill['_id'] = str(bill['_id'])
+                
+                # Get the company name from the map
+                company_id = str(bill.get('company_id', '')).strip()
+                bill['company_name'] = company_map.get(company_id, "Unknown Company")
+                
+                # Format dates
+                if 'created_date' in bill and bill['created_date']:
+                    bill['created_date'] = bill['created_date'].isoformat() if hasattr(bill['created_date'], 'isoformat') else str(bill['created_date'])
+                if 'date' in bill and bill['date']:
+                    bill['date'] = bill['date'].isoformat() if hasattr(bill['date'], 'isoformat') else str(bill['date'])
+                
+                # Handle test details JSON strings
+                if 'testdetails' in bill and isinstance(bill['testdetails'], str):
+                    try:
+                        bill['testdetails'] = json.loads(bill['testdetails'])
+                    except json.JSONDecodeError:
+                        bill['testdetails'] = []
+                        
+                if 'chctestdetails' in bill and isinstance(bill['chctestdetails'], str):
+                    try:
+                        bill['chctestdetails'] = json.loads(bill['chctestdetails'])
+                    except json.JSONDecodeError:
+                        bill['chctestdetails'] = []
+                
+                # Handle Decimal values (like netAmount)
+                if 'netAmount' in bill:
+                    bill['netAmount'] = float(str(bill['netAmount'])) if bill['netAmount'] else 0.0
+
+                # ✅ NEW: Fetch employee name from optimized map or fallback to patientname
+                employee_id = str(bill.get('employee_id', '')).strip()
+                emp_name = employee_name_map.get(employee_id)
+                
+                # Fallback sequence: Employee Registration Name -> Billing Patient Name -> "N/A"
+                bill['employee_name'] = emp_name or bill.get('patientname') or "N/A"
+                
+                # ✅ NEW: Extract package details from chctestdetails
+                chc_details = bill.get('chctestdetails', [])
+                if isinstance(chc_details, list) and len(chc_details) > 0:
+                    bill['package_id'] = chc_details[0].get('test_id', 'N/A')
+                    bill['package_name'] = chc_details[0].get('test_name', 'N/A')
+                    
+                processed_data.append(bill)
+
+            
+            return JsonResponse({
+                "status": "success",
+                "data": processed_data,
+                "companies": companies,
+                "count": len(processed_data)
+            }, safe=False)
+            
+        except Exception as e:
+            logger.error(f"Error fetching corporate credit billing: {str(e)}")
+            return JsonResponse({
+                "status": "error",
+                "message": f"Database error: {str(e)}"
+            }, status=500)
+            
+        finally:
+            if client:
+                client.close()
+
+
+
+@api_view(['POST'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def generate_corporate_invoice(request):
+    """
+    Generate and save a corporate invoice.
+    """
+    client = None
+    try:
+        data = request.data
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        invoice_collection = db.core_corporate_invoices
+        
+        # Generate invoice number
+        today = datetime.now().strftime("%Y%m%d")
+        last_invoice = invoice_collection.find_one(sort=[("invoice_number", -1)])
+        
+        sequence = 1
+        if last_invoice and last_invoice.get("invoice_number", "").startswith(f"CINV{today}"):
+            try:
+                sequence = int(last_invoice["invoice_number"][-3:]) + 1
+            except:
+                sequence = 1
+        
+        invoice_number = f"CINV{today}{sequence:03d}"
+        
+        total_amount = float(data.get("total_amount", 0))
+        invoice_data = {
+            "invoice_number": invoice_number,
+            "company_id": data.get("company_id"),
+            "company_name": data.get("company_name"),
+            "from_date": data.get("from_date"),
+            "to_date": data.get("to_date"),
+            "total_amount": total_amount,
+            "paid_amount": 0.0,
+            "remaining_amount": total_amount,
+            "bill_items": data.get("bill_items"),
+            "payment_method": data.get("payment_method"),
+            "payment_history": [],
+            "status": "Generated",
+            "created_at": datetime.now().isoformat(),
+            "created_by": data.get("auth-user-id") or "system"
+        }
+        
+        result = invoice_collection.insert_one(invoice_data)
+
+        # Update original billing records to 'Paid' so they don't appear in the pending list
+        billing_collection = db.core_billing
+        from bson import ObjectId
+        for item in invoice_data["bill_items"]:
+            bill_id = item.get("bill_id")
+            if bill_id:
+                try:
+                    # Update by ObjectId, String ID, and Integer ID to ensure match
+                    filter_q = {"$or": [
+                        {"_id": ObjectId(str(bill_id))}, 
+                        {"_id": str(bill_id)},
+                        {"_id": int(bill_id) if str(bill_id).isdigit() else None}
+                    ]}
+                    billing_collection.update_many(
+                        filter_q,
+                        {"$set": {
+                            "paymentMode": "Invoiced",
+                            "invoice_number": invoice_number,
+                            "invoiced_at": datetime.now().isoformat()
+                        }}
+                    )
+                except:
+                    pass
+
+        return JsonResponse({
+            "status": "success",
+            "message": "Invoice generated successfully",
+            "invoice_number": invoice_number,
+            "id": str(result.inserted_id)
+        })
+        
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+    finally:
+        if client:
+            client.close()
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def get_corporate_invoices(request):
+    """
+    Fetch all generated corporate invoices.
+    """
+    client = None
+    try:
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        invoice_collection = db.core_corporate_invoices
+        
+        query = {}
+        company_id = request.GET.get('company_id')
+        if company_id:
+            query['company_id'] = company_id
+            
+        invoices = list(invoice_collection.find(query, {"_id": 0}).sort("created_at", -1))
+        
+        return JsonResponse({
+            "status": "success",
+            "data": invoices
+        })
+        
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+    finally:
+        if client:
+            client.close()
+
+@api_view(['POST', 'PUT'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def update_corporate_invoice(request):
+    """
+    Update an existing corporate invoice.
+    """
+    client = None
+    try:
+        data = request.data
+        invoice_number = data.get("invoice_number")
+        if not invoice_number:
+            return JsonResponse({"status": "error", "message": "Invoice number is required"}, status=400)
+            
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        invoice_collection = db.core_corporate_invoices
+        
+        existing_invoice = invoice_collection.find_one({"invoice_number": invoice_number})
+        if not existing_invoice:
+            return JsonResponse({"status": "error", "message": "Invoice not found"}, status=404)
+            
+        total_amount = float(data.get("total_amount", existing_invoice.get("total_amount", 0)))
+        new_payment = float(data.get("new_payment", 0))
+        
+        current_paid = float(existing_invoice.get("paid_amount", 0))
+        updated_paid = current_paid + new_payment
+        remaining_amount = total_amount - updated_paid
+        
+        payment_history = existing_invoice.get("payment_history", [])
+        if new_payment > 0:
+            payment_history.append({
+                "amount": new_payment,
+                "date": data.get("payment_date", datetime.now().isoformat()),
+                "method": data.get("payment_method", existing_invoice.get("payment_method")),
+                "note": data.get("note", ""),
+                "received_by": data.get("auth-user-id") or "system"
+            })
+            
+        update_data = {
+            "total_amount": total_amount,
+            "paid_amount": updated_paid,
+            "remaining_amount": remaining_amount,
+            "payment_method": data.get("payment_method", existing_invoice.get("payment_method")),
+            "payment_history": payment_history,
+            "status": "Paid" if remaining_amount <= 0 else "Partially Paid",
+            "last_modified_at": datetime.now().isoformat(),
+            "last_modified_by": data.get("auth-user-id") or "system"
+        }
+        
+        # Optional fields
+        if "bill_items" in data:
+            update_data["bill_items"] = data.get("bill_items")
+            
+        result = invoice_collection.update_one(
+            {"invoice_number": invoice_number},
+            {"$set": update_data}
+        )
+        
+        if result.matched_count == 0:
+            return JsonResponse({"status": "error", "message": "Invoice not found"}, status=404)
+
+        # If fully paid, update original billing records to reflect settlement
+        if remaining_amount <= 0.01:
+            billing_collection = db.core_billing
+            bill_items = existing_invoice.get("bill_items", [])
+            from bson import ObjectId
+            for item in bill_items:
+                bill_id = item.get("bill_id")
+                if bill_id:
+                    try:
+                        billing_collection.update_one(
+                            {"_id": ObjectId(str(bill_id))},
+                            {"$set": {
+                                "paymentMode": "Paid",
+                                "settled_via_invoice": invoice_number,
+                                "settled_at": datetime.now().isoformat()
+                            }}
+                        )
+                        billing_collection.update_one(
+                            {"_id": str(bill_id)},
+                            {"$set": {
+                                "paymentMode": "Paid",
+                                "settled_via_invoice": invoice_number,
+                                "settled_at": datetime.now().isoformat()
+                            }}
+                        )
+                    except:
+                        pass
+            
+        return JsonResponse({
+            "status": "success",
+            "message": "Invoice updated successfully"
+        })
+        
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+    finally:
+        if client:
+            client.close()
+
+@api_view(['POST', 'DELETE'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def delete_corporate_invoice(request):
+    """
+    Delete a corporate invoice.
+    """
+    client = None
+    try:
+        data = request.data
+        invoice_number = data.get("invoice_number")
+        if not invoice_number:
+            return JsonResponse({"status": "error", "message": "Invoice number is required"}, status=400)
+            
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        invoice_collection = db.core_corporate_invoices
+        billing_collection = db.core_billing
+        
+        # 1. Find the invoice first to get associated bills
+        invoice = invoice_collection.find_one({"invoice_number": invoice_number})
+        if not invoice:
+            return JsonResponse({"status": "error", "message": "Invoice not found"}, status=404)
+            
+        # 2. Revert associated billing records
+        bill_items = invoice.get("bill_items", [])
+        from bson import ObjectId
+        for item in bill_items:
+            bill_id = item.get("bill_id")
+            if bill_id:
+                try:
+                    # Update by ObjectId, String ID, and Integer ID to ensure match
+                    filter_q = {"$or": [
+                        {"_id": ObjectId(str(bill_id))}, 
+                        {"_id": str(bill_id)},
+                        {"_id": int(bill_id) if str(bill_id).isdigit() else None}
+                    ]}
+                    billing_collection.update_many(
+                        filter_q,
+                        {"$set": {"paymentMode": "Credit"}, 
+                         "$unset": {"invoice_number": "", "invoiced_at": ""}}
+                    )
+                except:
+                    pass
+
+        # 3. Delete the invoice
+        result = invoice_collection.delete_one({"invoice_number": invoice_number})
+        
+        if result.deleted_count == 0:
+            return JsonResponse({"status": "error", "message": "Failed to delete invoice document"}, status=500)
+            
+        return JsonResponse({
+            "status": "success",
+            "message": "Invoice deleted and billing records reverted successfully"
+        })
+
+        
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+    finally:
+        if client:
+            client.close()
+
+@api_view(['GET'])
+def export_corporate_invoice_pdf(request):
+    """
+    Generate a PDF for a corporate invoice.
+    """
+    client = None
+    try:
+        invoice_number = request.GET.get('invoice_number')
+        if not invoice_number:
+            return JsonResponse({"status": "error", "message": "Invoice number is required"}, status=400)
+            
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Corporatehealthcheckup
+        invoice = db.core_corporate_invoices.find_one({"invoice_number": invoice_number})
+        
+        if not invoice:
+            return JsonResponse({"status": "error", "message": "Invoice not found"}, status=404)
+            
+        # For a professional PDF, we'd typically use reportlab or a template.
+        # For now, let's provide a structured JSON or HTML that can be printed,
+        # OR implement a basic PDF if the user has the libraries.
+        # Let's assume we want a real PDF. I'll use reportlab if available.
+        
+        from django.http import HttpResponse
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        
+        # Define paths to header/footer images from backend static
+        backend_static_dir = os.path.join(settings.BASE_DIR, "core", "static", "images")
+        header_path = os.path.join(backend_static_dir, "Header.png")
+        footer_path = os.path.join(backend_static_dir, "Footer.png")
+        
+        response = HttpResponse(content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="Invoice_{invoice_number}.pdf"'
+        
+        # Use a custom PageTemplate or draw on Canvas to handle header/footer on every page
+        def add_header_footer(canvas, doc):
+            canvas.saveState()
+            # Draw Header
+            if os.path.exists(header_path):
+                canvas.drawImage(header_path, 0, A4[1]-100, width=A4[0], height=100, preserveAspectRatio=True, mask='auto')
+            
+            # Draw Footer
+            if os.path.exists(footer_path):
+                canvas.drawImage(footer_path, 0, 0, width=A4[0], height=60, preserveAspectRatio=True, mask='auto')
+            
+            # Page Number
+            canvas.setFont('Helvetica', 8)
+            canvas.drawRightString(A4[0]-40, 20, f"Page {doc.page}")
+            canvas.restoreState()
+
+        doc = SimpleDocTemplate(response, pagesize=A4, topMargin=110, bottomMargin=70)
+        styles = getSampleStyleSheet()
+        elements = []
+        
+        # Header / Title
+        title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], alignment=1, fontSize=16, spaceAfter=20)
+        elements.append(Paragraph("CORPORATE HEALTH CHECKUP INVOICE", title_style))
+        
+        # Extract common details
+        bill_items = invoice.get('bill_items', [])
+        patient_names = set(filter(None, [item.get('patient_name') for item in bill_items]))
+        package_names = set(filter(None, [item.get('package_name') for item in bill_items]))
+        
+        common_patient = list(patient_names)[0] if len(patient_names) == 1 else "Multiple"
+        common_package = list(package_names)[0] if len(package_names) == 1 else "Multiple"
+
+        # Info Table
+        info_data = [
+            [f"Invoice No: {invoice_number}", f"Date: {invoice.get('created_at', '')[:10]}"],
+            [f"Company: {invoice.get('company_name')}", f"Period: {invoice.get('from_date')} to {invoice.get('to_date')}"],
+            [f"Patient Name: {common_patient}", f"Package: {common_package}"],
+            [f"Payment Method: {invoice.get('payment_method')}", f"Status: {invoice.get('status')}"]
+        ]
+        info_table = Table(info_data, colWidths=[250, 250])
+        info_table.setStyle(TableStyle([
+            ('FONTNAME', (0,0), (-1,-1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,-1), 10),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 8),
+        ]))
+        elements.append(info_table)
+        elements.append(Spacer(1, 20))
+        
+        # Patient Details Table
+        p_header = ["S.No", "Date", "Patient Name", "Employee ID", "Package ID", "Barcode", "Amount (₹)"]
+        p_data = [p_header]
+        
+        for idx, item in enumerate(bill_items, 1):
+            p_data.append([
+                str(idx),
+                item.get('date', '')[:10],
+                item.get('patient_name', 'N/A'),
+                item.get('employee_id', 'N/A'),
+                item.get('package_id', 'N/A'),
+                item.get('barcode', 'N/A'),
+                f"{float(item.get('amount', 0)):.2f}"
+            ])
+            
+        p_table = Table(p_data, colWidths=[30, 65, 110, 80, 80, 80, 70])
+        p_table.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.grey),
+            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0,0), (-1,0), 10),
+            ('BOTTOMPADDING', (0,0), (-1,0), 12),
+            ('BACKGROUND', (0,1), (-1,-1), colors.beige),
+            ('GRID', (0,0), (-1,-1), 1, colors.black),
+            ('ALIGN', (-1,0), (-1,-1), 'RIGHT'),
+        ]))
+        elements.append(p_table)
+        elements.append(Spacer(1, 20))
+        
+        # Summary
+        summary_data = [
+            ["", "Total Amount:", f"INR {float(invoice.get('total_amount', 0)):.2f}"],
+            ["", "Paid Amount:", f"INR {float(invoice.get('paid_amount', 0)):.2f}"],
+            ["", "Remaining Pending:", f"INR {float(invoice.get('remaining_amount', 0)):.2f}"]
+        ]
+        summary_table = Table(summary_data, colWidths=[280, 100, 100])
+        summary_table.setStyle(TableStyle([
+            ('FONTNAME', (1,0), (-1,-1), 'Helvetica-Bold'),
+            ('ALIGN', (1,0), (-1,-1), 'RIGHT'),
+            ('FONTSIZE', (1,0), (-1,-1), 10),
+            ('TEXTCOLOR', (1,2), (-1,2), colors.red if float(invoice.get('remaining_amount', 0)) > 0 else colors.green),
+        ]))
+        elements.append(summary_table)
+        
+        # Build document with header/footer
+        doc.build(elements, onFirstPage=add_header_footer, onLaterPages=add_header_footer)
+        return response
+        
+    except Exception as e:
+        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+    finally:
+        if client:
+            client.close()

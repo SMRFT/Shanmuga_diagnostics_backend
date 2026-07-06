@@ -195,55 +195,58 @@ def micro_biology_testvalue(request):
             return test
         
         def match_test_values(test, barcode, test_values_by_barcode):
-                """Optimized test value matching with pre-fetched data using test_id"""
-                test_id = test.get('test_id')
-                
-                # Initialize default values
-                test.update({
-                    'rerun': False,
-                    'approve': False,
-                    'test_value_exists': False,
-                    'approve_time': None,
-                    'rerun_time': None,
-                    'approve_by': None,
-                    'value': None,
-                    'remarks': None,
-                    'comment': None,
-                    'verified_by': None
-                })
-                
-                # If no test_id, cannot match
-                if not test_id:
-                    return test
-                
-                # Use cached test values for this barcode
-                test_values = test_values_by_barcode.get(barcode, [])
-                
-                for tv in test_values:
-                    tv_details = parse_testdetails(tv.testdetails)
-                    
-                    for tv_test in tv_details:
-                        tv_test_id = tv_test.get('test_id')
-                        
-                        # Match based on test_id
-                        if tv_test_id == test_id:
-                            test.update({
-                                'test_value_exists': True,
-                                'approve': bool(tv_test.get('approve', False)),
-                                'rerun': bool(tv_test.get('rerun', False)),
-                                'approve_time': tv_test.get('approve_time'),
-                                'rerun_time': tv_test.get('rerun_time'),
-                                'approve_by': tv_test.get('approve_by'),
-                                'value': tv_test.get('value'),
-                                'remarks': tv_test.get('remarks'),
-                                'comment': tv_test.get('comment'),
-                                'verified_by': tv_test.get('verified_by')
-                            })
-                            return test
-                
+            """Optimized test value matching with pre-fetched data using test_id"""
+            test_id = test.get('test_id')
+            
+            # Initialize default values
+            test.update({
+                'rerun': False,
+                'approve': False,
+                'test_value_exists': False,
+                'approve_time': None,
+                'rerun_time': None,
+                'approve_by': None,
+                'value': None,
+                'remarks': None,
+                'comment': None,
+                'verified_by': None,
+                'is_preliminary': False   # ✅ ADDED DEFAULT
+            })
+            
+            # If no test_id, cannot match
+            if not test_id:
                 return test
+            
+            # Use cached test values for this barcode
+            test_values = test_values_by_barcode.get(barcode, [])
+            
+            for tv in test_values:
+                tv_details = parse_testdetails(tv.testdetails)
+                
+                for tv_test in tv_details:
+                    tv_test_id = tv_test.get('test_id')
+                    
+                    # Match based on test_id
+                    if tv_test_id == test_id:
+                        test.update({
+                            'test_value_exists': True,
+                            'approve': bool(tv_test.get('approve', False)),
+                            'rerun': bool(tv_test.get('rerun', False)),
+                            'approve_time': tv_test.get('approve_time'),
+                            'rerun_time': tv_test.get('rerun_time'),
+                            'approve_by': tv_test.get('approve_by'),
+                            'value': tv_test.get('value'),
+                            'remarks': tv_test.get('remarks'),
+                            'comment': tv_test.get('comment'),
+                            'verified_by': tv_test.get('verified_by'),
+
+                            # ✅ MAIN CHANGE
+                            'is_preliminary': tv.is_preliminary
+                        })
+                        return test
+
+            return test
         combined_results = []
-        
         # Process HMS samples
         if source in ['hms', 'all']:
             for barcode, data in sample_data_by_barcode.items():
@@ -386,7 +389,7 @@ def micro_biology_testvalue(request):
                 corp = client.Corporatehealthcheckup
                 sample_collection = corp.core_sample
                 billing_collection = corp.core_billing
-                patient_collection = corp.core_employeeregistration
+                patient_collection = corp.core_chcregistration
 
                 chc_query = {
                     "created_date": {"$gte": start_of_range, "$lt": end_of_range}
@@ -449,6 +452,7 @@ def micro_biology_testvalue(request):
                         'lastmodified_date': safe_datetime_to_string(record.get('lastmodified_date')),
                         'barcode': barcode,
                         'location_id': record.get('company_id', ''),
+                        'is_preliminary': record.get('is_preliminary', False),
                         'patient_id': employee_id or 'Unknown ID',
                         'patientname': patient.get("employee_name", "Unknown Patient"),
                         'date': safe_datetime_to_string(record.get('date')),
@@ -540,6 +544,7 @@ def micro_biology_testvalue(request):
                         'dateOfBirth': patient.get('dateOfBirth', ''),
                         'barcode': barcode,
                         'location_id': record.get('franchise_id', ''),
+                        'is_preliminary': record.get('is_preliminary', False),
                         'date': safe_datetime_to_string(record.get('created_date')),
                         'testdetails': updated_tests,
                         'data_source': 'mongodb'
@@ -562,6 +567,7 @@ def micro_biology_testvalue(request):
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def mb_compare_test_details(request):
@@ -633,7 +639,7 @@ def mb_compare_test_details(request):
         test_id = test_detail.get("test_id")
         
         # NEW: Handle "Normal" parameter type - return minimal data
-        if parameter_type == "Normal":
+        if parameter_type in ['Normal', 'Preliminary']:
             test_code = test_detail.get("test_code", f"{(test_name or '').replace(' ', '').upper()}01")
             final_test_data.append({
                 "barcode": barcode,
@@ -747,12 +753,16 @@ def mb_save_test_value(request):
             test_id = test.get('test_id')
             if not test_id:
                 return Response({"error": "Missing test_id in test details"}, status=status.HTTP_400_BAD_REQUEST)
+            
+        
+        is_preliminary = request.data.get('is_preliminary', False)
         
         test_value_record = MBTestValue.objects.create(
             created_by=employee_id,
             date=payload.get('date'),
             barcode=barcode,
             locationId=locationId,
+            is_preliminary=is_preliminary,
             testdetails=test_details_json,
         )
         
@@ -787,7 +797,7 @@ def mb_get_test_values(request):
 
     corp = client.Corporatehealthcheckup
     billing_collection = corp.core_billing
-    patient_collection = corp.core_employeeregistration
+    patient_collection = corp.core_chcregistration
     
     # BarcodeTestDetails collection
     diagnostics = client.Diagnostics
@@ -1336,11 +1346,13 @@ def mb_patient_test_sorting(request):
         core_testdetails_collection = db["core_testdetails"]
         
         # Filter test values by barcode
-        tests = MBTestValue.objects.filter(barcode=barcode, date=formatted_date).values("testdetails", "created_date")
+        tests = MBTestValue.objects.filter(barcode=barcode, date=formatted_date).values("pk","testdetails", "created_date", "is_preliminary")
         test_list = []
         
         for test in tests:
             test_created_date = test.get("created_date")
+            is_preliminary = test.get("is_preliminary", False)
+            record_id = test.get("pk")
             testdetails_data = test["testdetails"]
             if isinstance(testdetails_data, str):
                 try:
@@ -1372,6 +1384,8 @@ def mb_patient_test_sorting(request):
                         test_item['test_name'] = 'N/A'
 
                     # Add created_date to each test item
+                    test_item['is_preliminary'] = is_preliminary
+                    test_item['record_id'] = record_id
                     test_item['created_date'] = test_created_date.isoformat() if test_created_date else None                    
                     test_list.append(test_item)
         
@@ -1395,6 +1409,7 @@ def mb_patient_test_sorting(request):
 @permission_classes([HasRoleAndDataPermission])
 def mb_get_patient_test_details(request):
     barcode = request.GET.get('barcode')
+    record_ids_param = request.GET.get('record_ids', '')
     # Check if barcode is provided
     if not barcode:
         return JsonResponse({'error': 'Barcode is required'}, status=400)
@@ -1406,7 +1421,11 @@ def mb_get_patient_test_details(request):
         patient_id = barcode_details.patient_id
         bill_no = barcode_details.bill_no
         # Get TestValue records using patient_id and barcode
-        test_values = MBTestValue.objects.filter(barcode=barcode)
+        if record_ids_param:
+            record_ids = [rid.strip() for rid in record_ids_param.split(',') if rid.strip()]
+            test_values = MBTestValue.objects.filter(barcode=barcode, _id__in=record_ids)
+        else:
+            test_values = MBTestValue.objects.filter(barcode=barcode)
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
         # Get patient details from Patient model using patient_id
@@ -1572,6 +1591,7 @@ def mb_get_patient_test_details(request):
                     colony_count = test.get("colony_count", "")
                     verified_by = test.get("verified_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
+                    dispatch_time = test.get("dispatch_time", "N/A")
                     
                     # Get sample status information
                     status = None
@@ -1598,7 +1618,9 @@ def mb_get_patient_test_details(request):
                     # Build simplified test_detail with only required fields
                     test_detail = {
                         "test_id": test_id,
-                        "parameter_type": parameter_type,
+                        "parameter_type": parameter_type,                        
+                        "record_id": str(test_value_record._id),              # ← ADD
+                        "is_preliminary": test.get("is_preliminary", False),  # ← ADD
                         "testname": testname,
                         "department": department,
                         "specimen_type": specimen_type,
@@ -1608,6 +1630,7 @@ def mb_get_patient_test_details(request):
                         "verified_by": verified_by,
                         "approve_by": approve_by,  # Include approve_by in response
                         "approve_time": approve_time,
+                        "dispatch_time": dispatch_time,
                         "samplecollected_time": samplecollected_time,
                         "received_time": received_time
                     }
@@ -1717,12 +1740,18 @@ def mb_get_patient_test_details(request):
 @permission_classes([HasRoleAndDataPermission])
 def hms_mb_get_patient_test_details(request):
     barcode = request.GET.get('barcode')
+    record_ids_param = request.GET.get('record_ids', '')
     # Check if barcode is provided
     if not barcode:
         return JsonResponse({'error': 'Barcode is required'}, status=400)
     try:
         # Get TestValue records using barcode
-        test_values = MBTestValue.objects.filter(barcode=barcode)
+        # Filter by specific record_ids if provided, else get all
+        if record_ids_param:
+            record_ids = [rid.strip() for rid in record_ids_param.split(',') if rid.strip()]
+            test_values = MBTestValue.objects.filter(barcode=barcode, _id__in=record_ids)
+        else:
+            test_values = MBTestValue.objects.filter(barcode=barcode)
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
         
@@ -1897,6 +1926,7 @@ def hms_mb_get_patient_test_details(request):
                     colony_count = test.get("colony_count", "")
                     verified_by = test.get("verified_by", "N/A")
                     approve_time = test.get("approve_time", "N/A")
+                    dispatch_time = test.get("dispatch_time", "N/A")
                     
                     # CHANGED: Get sample status information from Hmssamplestatus
                     status = None
@@ -1924,6 +1954,8 @@ def hms_mb_get_patient_test_details(request):
                     # Build simplified test_detail with only required fields
                     test_detail = {
                         "test_id": test_id,
+                        "record_id": str(test_value_record._id),              # ← ADD
+                        "is_preliminary": test.get("is_preliminary", False),  # ← ADD
                         "parameter_type": parameter_type,
                         "testname": testname,
                         "department": department,
@@ -1934,6 +1966,7 @@ def hms_mb_get_patient_test_details(request):
                         "verified_by": verified_by,
                         "approve_by": approve_by,  # Include approve_by in response
                         "approve_time": approve_time,
+                        "dispatch_time": dispatch_time,
                         "samplecollected_time": samplecollected_time,
                         "received_time": received_time
                     }
@@ -2007,6 +2040,7 @@ def hms_mb_get_patient_test_details(request):
                     "age": barcode_details.age,
                     "age_type": barcode_details.age_type if hasattr(barcode_details, 'age_type') else "Years",
                     "gender": barcode_details.gender,
+                    "phone": barcode_details.phone,
                     "date": test_value_record.date,
                     "barcode": test_value_record.barcode,
                     "bill_no": barcode_details.billnumber,
@@ -2045,6 +2079,7 @@ def hms_mb_get_patient_test_details(request):
 @permission_classes([HasRoleAndDataPermission])
 def franchise_mb_get_patient_test_details(request):
     barcode = request.GET.get('barcode')
+    record_ids_param = request.GET.get('record_ids', '')
     # Check if barcode is provided
     if not barcode:
         return JsonResponse({'error': 'Barcode is required'}, status=400)
@@ -2086,7 +2121,11 @@ def franchise_mb_get_patient_test_details(request):
         franchise_sample = franchise_sample_collection.find_one({"barcode": barcode})
         
         # Get TestValue records using barcode from Django model
-        test_values = MBTestValue.objects.filter(barcode=barcode)
+        if record_ids_param:
+            record_ids = [rid.strip() for rid in record_ids_param.split(',') if rid.strip()]
+            test_values = MBTestValue.objects.filter(barcode=barcode, _id__in=record_ids)
+        else:
+            test_values = MBTestValue.objects.filter(barcode=barcode)
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
         
@@ -2270,6 +2309,8 @@ def franchise_mb_get_patient_test_details(request):
                     test_detail = {
                         "test_id": test_id,
                         "parameter_type": parameter_type,
+                        "record_id": str(test_value_record._id),
+                        "is_preliminary": test.get("is_preliminary", False),
                         "testname": testname,
                         "department": department,
                         "specimen_type": specimen_type,

@@ -631,6 +631,11 @@ from pymongo import MongoClient
 import os
 
 def convert_to_float(value):
+    from bson.decimal128 import Decimal128
+    if isinstance(value, Decimal128):
+        return float(value.to_decimal())
+    if isinstance(value, dict) and "$numberDecimal" in value:
+        return float(value["$numberDecimal"])
     try:
         return float(value)
     except (ValueError, TypeError):
@@ -646,6 +651,11 @@ import os, json
 from pymongo import MongoClient
 
 def convert_to_float(val):
+    from bson.decimal128 import Decimal128
+    if isinstance(val, Decimal128):
+        return float(val.to_decimal())
+    if isinstance(val, dict) and "$numberDecimal" in val:
+        return float(val["$numberDecimal"])
     try:
         return float(val)
     except (ValueError, TypeError):
@@ -673,6 +683,10 @@ def patient_report(request):
     patients_collection = db["core_billing"]
     invoice_collection = db["core_invoice"]
 
+    # Corporate Database Connection
+    corporate_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    corporate_db = corporate_client.Corporatehealthcheckup
+
     report_by_date = defaultdict(lambda: {
         'gross_amount': 0,
         'discount': 0,
@@ -685,16 +699,17 @@ def patient_report(request):
         'payment_totals': {
             'Cash': 0, 'UPI': 0, 'Neft': 0,
             'Cheque': 0, 'Credit': 0
-        }
+        },
+        'corporate_collection': 0
     })
 
     # ✅ Patients query within range (Billing Date)
     patients = patients_collection.find({
-        "date": {"$gte": start_date, "$lt": end_date}
+        "bill_date": {"$gte": start_date, "$lt": end_date}
     })
 
     for patient in patients:
-        patient_date = patient.get('date')
+        patient_date = patient.get('bill_date')
 
         if isinstance(patient_date, dict) and "$date" in patient_date:
             patient_date = datetime.fromisoformat(patient_date["$date"].replace("Z", "+00:00"))
@@ -784,6 +799,147 @@ def patient_report(request):
                     except:
                         continue
 
+    # ✅ NEW: Process direct payments from Corporatehealthcheckup.core_billing
+    corp_billing_patients = corporate_db["core_billing"].find({
+        "$or": [
+            {"date": {"$gte": start_date, "$lt": end_date}},
+            {"paid_at": {"$gte": start_date, "$lt": end_date}}
+        ]
+    })
+
+    for corp_patient in corp_billing_patients:
+        # Determine Date for Gross/Discount/Credit
+        p_date = corp_patient.get('date')
+        if isinstance(p_date, dict) and "$date" in p_date:
+            p_date = datetime.fromisoformat(p_date["$date"].replace("Z", "+00:00"))
+        elif isinstance(p_date, str):
+            try: p_date = datetime.fromisoformat(p_date.replace("Z", "+00:00"))
+            except: p_date = None
+            
+        date_key = p_date.strftime("%Y-%m-%d") if isinstance(p_date, datetime) else None
+        
+        # Determine Paid At for Collection
+        paid_at = corp_patient.get('paid_at')
+        if isinstance(paid_at, dict) and "$date" in paid_at:
+            paid_at = datetime.fromisoformat(paid_at["$date"].replace("Z", "+00:00"))
+        elif isinstance(paid_at, str):
+            try: paid_at = datetime.fromisoformat(paid_at.replace("Z", "+00:00"))
+            except: paid_at = p_date # fallback to date if parse fails
+        else:
+            paid_at = p_date # fallback to date if missing
+            
+        paid_at_key = paid_at.strftime("%Y-%m-%d") if isinstance(paid_at, datetime) else date_key
+        
+        gross = convert_to_float(corp_patient.get('totalAmount') or corp_patient.get('netAmount') or 0)
+        discount = convert_to_float(corp_patient.get('discount', 0))
+        credit = convert_to_float(corp_patient.get('credit_amount', 0))
+        
+        payment_mode = corp_patient.get('paymentMode') or corp_patient.get('payment_mode')
+        payment_method_raw = corp_patient.get('payment_method') or corp_patient.get('payment_method_dict')
+        
+        if payment_mode == "Credit" and credit == 0:
+            credit = gross - discount
+            
+        # 1. Gross/Discount/Credit applies to `date_key` ONLY IF `p_date` is within range
+        if isinstance(p_date, datetime) and start_date <= p_date < end_date:
+            report_by_date[date_key]['gross_amount'] += gross
+            report_by_date[date_key]['discount'] += discount
+            report_by_date[date_key]['due_amount'] += credit
+            
+        # 2. Collection applies to `paid_at_key` ONLY IF `paid_at` is within range
+        if isinstance(paid_at, datetime) and start_date <= paid_at < end_date:
+            method = ""
+            if isinstance(payment_method_raw, dict):
+                method = payment_method_raw.get("paymentmethod")
+            elif isinstance(payment_method_raw, str) and payment_method_raw.startswith('{'):
+                try:
+                    pm_json = json.loads(payment_method_raw)
+                    method = pm_json.get("paymentmethod")
+                except:
+                    method = payment_method_raw
+            elif isinstance(payment_method_raw, str):
+                method = payment_method_raw
+                
+            if not method and payment_mode:
+                method = payment_mode
+                
+            transaction_id = corp_patient.get('transaction_id', '')
+            if transaction_id and str(transaction_id).strip():
+                method = "UPI"
+                
+            if method in ["Cash", "UPI", "Card", "Neft", "Cheque"]:
+                net_to_add = gross - discount - credit
+                report_by_date[paid_at_key]['corporate_collection'] += net_to_add
+                if method in report_by_date[paid_at_key]['payment_totals']:
+                    report_by_date[paid_at_key]['payment_totals'][method] += net_to_add
+                else:
+                    report_by_date[paid_at_key]['payment_totals'][method] = net_to_add
+            elif method == "Credit":
+                if "Credit" in report_by_date[paid_at_key]['payment_totals']:
+                    report_by_date[paid_at_key]['payment_totals']["Credit"] += credit
+                else:
+                    report_by_date[paid_at_key]['payment_totals']["Credit"] = credit
+            elif method == "Multiple Payment":
+                multiple = corp_patient.get("MultiplePayment", [])
+                if isinstance(multiple, str):
+                    try: multiple = json.loads(multiple)
+                    except: multiple = []
+                for m in multiple:
+                    m_method = m.get("paymentMethod")
+                    m_amt = convert_to_float(m.get("amount", 0))
+                    if m_method in ["Cash", "UPI", "Card", "Neft", "Cheque"]:
+                        report_by_date[paid_at_key]['corporate_collection'] += m_amt
+                        if m_method in report_by_date[paid_at_key]['payment_totals']:
+                            report_by_date[paid_at_key]['payment_totals'][m_method] += m_amt
+                        else:
+                            report_by_date[paid_at_key]['payment_totals'][m_method] = m_amt
+                    elif m_method == "Credit":
+                        if "Credit" in report_by_date[paid_at_key]['payment_totals']:
+                            report_by_date[paid_at_key]['payment_totals']["Credit"] += m_amt
+                        else:
+                            report_by_date[paid_at_key]['payment_totals']["Credit"] = m_amt
+    
+    # We will use a separate key for invoice payments to avoid double counting in total_collection
+    for date_key in report_by_date:
+        report_by_date[date_key]['invoice_payments'] = 0
+
+    # ✅ Process Corporate Invoices (Corporatehealthcheckup Database)
+    corp_invoice_collection = corporate_db.core_corporate_invoices
+    
+    # We query all invoices that have payment history
+    corp_invoices = corp_invoice_collection.find({
+        "payment_history": {"$exists": True, "$ne": []}
+    })
+    
+    for corp_inv in corp_invoices:
+        history = corp_inv.get('payment_history', [])
+        for payment in history:
+            pay_date_str = payment.get('date')
+            if not pay_date_str: continue
+            
+            try:
+                # Handle ISO format strings
+                if 'T' in pay_date_str:
+                    pay_date = datetime.fromisoformat(pay_date_str.replace("Z", "+00:00")).date()
+                else:
+                    pay_date = datetime.strptime(pay_date_str, "%Y-%m-%d").date()
+                
+                if start_date.date() <= pay_date < end_date.date():
+                    date_key = pay_date.strftime("%Y-%m-%d")
+                    amt = convert_to_float(payment.get('amount', 0))
+                    method = payment.get('method', 'Cash')
+                    
+                    # Invoice payments are NOT in net_amount, so we track them for total_collection
+                    report_by_date[date_key]['invoice_payments'] += amt
+                    report_by_date[date_key]['corporate_collection'] += amt
+                    
+                    if method in report_by_date[date_key]['payment_totals']:
+                        report_by_date[date_key]['payment_totals'][method] += amt
+                    else:
+                        report_by_date[date_key]['payment_totals'][method] = amt
+            except:
+                continue
+
     # ✅ NEW: Process Credit Payments from credit_details (Billing Collection)
     credit_patients = patients_collection.find({
         "credit_details": {"$exists": True, "$ne": "[]"}
@@ -859,14 +1015,53 @@ def patient_report(request):
             except:
                 continue
 
+    # ✅ Process Corporate Invoices (Corporatehealthcheckup Database)
+    corp_invoice_collection = corporate_db.core_corporate_invoices
+    
+    # We query all invoices that have payment history
+    corp_invoices = corp_invoice_collection.find({
+        "payment_history": {"$exists": True, "$ne": []}
+    })
+    
+    for corp_inv in corp_invoices:
+        history = corp_inv.get('payment_history', [])
+        for payment in history:
+            pay_date_str = payment.get('date')
+            if not pay_date_str: continue
+            
+            try:
+                # Handle ISO format strings
+                if 'T' in pay_date_str:
+                    pay_date = datetime.fromisoformat(pay_date_str.replace("Z", "+00:00")).date()
+                else:
+                    pay_date = datetime.strptime(pay_date_str, "%Y-%m-%d").date()
+                
+                if start_date.date() <= pay_date < end_date.date():
+                    date_key = pay_date.strftime("%Y-%m-%d")
+                    amt = convert_to_float(payment.get('amount', 0))
+                    method = payment.get('method', 'Cash')
+                    
+                    report_by_date[date_key]['corporate_collection'] += amt
+                    
+                    if method in report_by_date[date_key]['payment_totals']:
+                        report_by_date[date_key]['payment_totals'][method] += amt
+                    else:
+                        report_by_date[date_key]['payment_totals'][method] = amt
+            except:
+                continue
+    corporate_client.close()
+
     # 📊 Final Report
     report_list = []
 
     for date, data in sorted(report_by_date.items()):
+        # net_amount represents only the regular Diagnostics.core_billing collection
         net_amount = data['gross_amount'] - (data['discount'] + data['due_amount'])
+        
         total_collection = (
             net_amount
             + data['credit_payment_received']
+            + data.get('invoice_payments', 0)
             - data['refund_amount']
         )
 
@@ -876,6 +1071,7 @@ def patient_report(request):
             'discount': round(data['discount'], 2),
             'due_amount': round(data['due_amount'], 2),
             'credit_payment_received': round(data['credit_payment_received'], 2),
+            'corporate_collection': round(data['corporate_collection'], 2),
             'refund_amount': round(data['refund_amount'], 2),
             'net_amount': round(net_amount, 2),
             'total_collection': round(total_collection, 2),

@@ -107,15 +107,13 @@ def send_whatsapp(request):
         # API likely expects simple CSV.
         template_params = ",".join([str(p) for p in template_params_list])
 
+        template_name = request.data.get("template_name", "diagnostics_report_main")
+
         params = {
             "apikey": "ccbb8c923474d5b9d605b391f545a5688fbd54e0cad69d17",
             "contact": phone,
-            "template": "diagnostics_report_main",
+            "template": template_name,
             "params": template_params,
-            # These seem not required by the new API according to the fetch example, 
-            # but usually for file sending one might need more. 
-            # However, the user example is `sendtemplatemessage`, which sends text. 
-            # The template has a link in it {{4}}.
         }
 
         # print("Sending params:", params)
@@ -159,6 +157,7 @@ def send_whatsapp(request):
             details=details
         )
         return Response({"success": False, "error": str(e)}, status=500)
+
 
 
 @csrf_exempt

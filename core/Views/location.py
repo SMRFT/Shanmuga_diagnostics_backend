@@ -210,7 +210,14 @@ def sample_collector_location(request):
                         route[i].get("lat", 0), route[i].get("lng", 0)
                     )
 
-                total_distance = f"{total:.2f}"
+                # Haversine distance is in meters, convert to km
+                haversine_distance_km = total / 1000
+                total_distance = f"{haversine_distance_km:.2f}"
+                
+                # If the frontend passes a more accurate distance (e.g. from Google Maps API)
+                if data.get("distance_travelled"):
+                    total_distance = str(data.get("distance_travelled"))
+
                 item.endTime = timezone.now()
                 item.distance_travelled = total_distance
                 

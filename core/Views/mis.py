@@ -410,7 +410,7 @@ class HMSConsolidatedDataView(APIView):
             barcode_records = list(
                 Hmsbarcode.objects.filter(
                     date__gte=from_date_ist,
-                    date__lte=to_date_ist + timedelta(days=1)
+                    date__lte=to_date_ist
                 ).order_by('-date', 'barcode')
             )
             
@@ -696,6 +696,7 @@ class HMSConsolidatedDataView(APIView):
             return Response({
                 "error": str(e)
             }, status=500)
+
 
 @permission_classes([HasRoleAndDataPermission])
 class FranchiseConsolidatedDataView(APIView):
@@ -1131,6 +1132,9 @@ class HMSTestCountView(APIView):
         
         for record in qs:
             td = record.testdetails
+            gender = str(record.gender).lower() if hasattr(record, 'gender') and record.gender else 'unknown'
+            ipop_type = str(record.IPOPType).upper() if hasattr(record, 'IPOPType') and record.IPOPType else 'UNKNOWN'
+            
             if isinstance(td, str):
                 try:
                     td = json.loads(td)
@@ -1147,14 +1151,21 @@ class HMSTestCountView(APIView):
                 
                 if test_id:
                     # Use a unique key for grouping
-                    key = (test_id, test_name)
+                    key = (test_id, test_name, ipop_type)
                     if key not in test_counts:
                         test_counts[key] = {
                             "test_id": test_id,
                             "test_name": test_name,
-                            "count": 0
+                            "ipop_type": ipop_type,
+                            "count": 0,
+                            "male_count": 0,
+                            "female_count": 0
                         }
                     test_counts[key]["count"] += 1
+                    if gender in ['male', 'm']:
+                        test_counts[key]["male_count"] += 1
+                    elif gender in ['female', 'f']:
+                        test_counts[key]["female_count"] += 1
 
         # Convert to list and sort by count descending
         report_data = list(test_counts.values())

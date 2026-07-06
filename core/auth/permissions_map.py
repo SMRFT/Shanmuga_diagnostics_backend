@@ -5,7 +5,12 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/communication_logs/?(\?.*)?$': 'SD-P-CL',
     '/_b_a_c_k_e_n_d/LIS/create_patient/': 'SD-P-PF',
     r'^/_b_a_c_k_e_n_d/LIS/create_patient/?(\?.*)?$': 'SD-P-PG',
+    r'^/_b_a_c_k_e_n_d/LIS/update_patient/[^/]+/?(\?.*)?$': 'SD-P-PF',
     '/_b_a_c_k_e_n_d/LIS/latest-patient-id/': 'SD-P-LPI',
+    r'^/_b_a_c_k_e_n_d/LIS/patient_list/?(\?.*)?$': 'SD-P-PF',
+    r'^/_b_a_c_k_e_n_d/LIS/patient_record_dashboard/?(\?.*)?$': 'SD-P-PF',
+    r'^/_b_a_c_k_e_n_d/LIS/patient_full_record(?:/[^/]+)+/?(\?.*)?$': 'SD-P-PF',
+    r'^/_b_a_c_k_e_n_d/LIS/prescription_image(?:/[^/]+)+/?(\?.*)?$': 'SD-P-PF',
     r'^/_b_a_c_k_e_n_d/LIS/patient-get/?(\?.*)?$': 'SD-P-SP',
     '/_b_a_c_k_e_n_d/LIS/latest-bill-no/': 'SD-P-LBN',
     '/_b_a_c_k_e_n_d/LIS/create_bill/': 'SD-P-PB',
@@ -23,8 +28,10 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/approve_test/?(\?.*)?$':'SD-P-TE',
     '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-API-GD',
     '/_b_a_c_k_e_n_d/LIS/appointments/':'SD-P-BA',
+    r'^/_b_a_c_k_e_n_d/LIS/appointments_by_date/?(\?.*)?$':'SD-P-BA',
+    r'^/_b_a_c_k_e_n_d/LIS/appointments/[^/]+/cancel/?(\?.*)?$':'SD-P-BA',
     r'^/_b_a_c_k_e_n_d/LIS/patient_report/?(\?.*)?$': 'SD-API-PR',
-
+    r'^/_b_a_c_k_e_n_d/LIS/b2b_packages/?(\?.*)?$': 'SD-API-CN',
 
     #Refund and Cancellation
     r'^/_b_a_c_k_e_n_d/LIS/search_refund/?(\?.*)?$': 'SD-API-GR',
@@ -59,15 +66,25 @@ PAGE_MAPPING = {
 
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/first_approve/?(\?.*)?$':'SD-P-SCU',
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/final_approve/?(\?.*)?$':'SD-P-SCU',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/reject/?(\?.*)?$':'SD-P-SCU',
  
     #Logistics
-    '/_b_a_c_k_e_n_d/LIS/logistics/': 'SD-P-LTA',
+    r'^/_b_a_c_k_e_n_d/LIS/logistics/?(\?.*)?$': 'SD-P-LTA',
     r'^/_b_a_c_k_e_n_d/LIS/logistics_by_collector/?(\?.*)?$': 'SD-P-LBC',
     r'^/_b_a_c_k_e_n_d/LIS/logistics-dashboard/?(\?.*)?$': 'SD-P-LD',
     r'^/_b_a_c_k_e_n_d/LIS/logistics-tat-report/?(\?.*)?$': 'SD-P-LTR',
-    r'^/_b_a_c_k_e_n_d/LIS/logistics(/.*)?/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/logistics/.*$': 'SD-P-LTM',
     '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
     r'^/_b_a_c_k_e_n_d/LIS/sample-collector-location-history/?(\\?.*)?$': 'SD-P-LGD',
+
+    r'^/_b_a_c_k_e_n_d/LIS/routesetup/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/start/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/end/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/mark/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/image/[^/]+/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/active/[^/]+/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/today-status/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/admin-report/?(\?.*)?$': 'SD-P-LTA',
 
 
     #Sample Status: 
@@ -119,6 +136,16 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/mb-test-approval(?:/[^/]+)+/$':'SD-P-MBDF',
     r'^/_b_a_c_k_e_n_d/LIS/mb-test-rerun(?:/[^/]+)+/$':'SD-P-MBDF',
 
+    #Mole/Bio Test Values:
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology_testvalue/?(\?.*)?$':'SD-P-MOLPD',       
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-compare_test_details/?(\?.*)?$':'SD-P-MOLPD',  
+    '/_b_a_c_k_e_n_d/LIS/mol_biology-test-value/save/':'SD-P-MOLPD',
+
+    #Mole/Bio Test Approval:
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-test-values/?(\?.*)?$':'SD-P-MOLDF',       
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-test-approval(?:/[^/]+)+/$':'SD-P-MOLDF',
+    r'^/_b_a_c_k_e_n_d/LIS/mol_biology-test-rerun(?:/[^/]+)+/$':'SD-P-MOLDF',
+
     #Test Approval:
     r'^/_b_a_c_k_e_n_d/LIS/test-values/?(\?.*)?$':'SD-API-TV',       
     r'^/_b_a_c_k_e_n_d/LIS/test-approved-values/?(\?.*)?$':'SD-API-TV',       
@@ -155,6 +182,13 @@ PAGE_MAPPING = {
     '/_b_a_c_k_e_n_d/LIS/get-invoices/': 'SD-API-IVM',
     '/_b_a_c_k_e_n_d/LIS/generate-invoice/': 'SD-API-IVM',
     '/_b_a_c_k_e_n_d/LIS/all-patients/': 'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/corporate_credit_billing/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/generate_corporate_invoice/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/get_corporate_invoices/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/update_corporate_invoice/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/delete_corporate_invoice/?(\?.*)?$':'SD-API-IVM',
+    r'^/_b_a_c_k_e_n_d/LIS/export_corporate_invoice_pdf/?(\?.*)?$':'SD-API-IVM',
+
 
     #Hms Billing
     '/_b_a_c_k_e_n_d/LIS/hms_patient_billing/':'SD-P-HMSPB',

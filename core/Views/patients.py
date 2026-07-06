@@ -1,5 +1,5 @@
 from rest_framework.response import Response
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse, Http404
 from django.views.decorators.http import require_http_methods
 from rest_framework import status
 from django.utils import timezone
@@ -23,7 +23,7 @@ import gridfs
 
 # auth
 from rest_framework.decorators import api_view, permission_classes
-from pyauth.auth import HasRoleAndDataPermission
+from pyauth.auth import HasRolePermission
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -38,7 +38,7 @@ FS = gridfs.GridFS(MONGO_DB)
 
 
 @api_view(["GET", "POST"])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def appointment_booking(request):
 
     employee_id = (
@@ -60,7 +60,6 @@ def appointment_booking(request):
         data = request.data.copy()
 
         data["created_by"] = employee_id
-        data["lastmodified_by"] = employee_id
 
         serializer = AppointmentSerializer(data=data)
 
@@ -79,9 +78,70 @@ def appointment_booking(request):
         }, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view(["PATCH"])
+@permission_classes([HasRolePermission])
+def cancel_appointment(request, appointment_id):
+    try:
+        appointment = Appointment.objects.get(appointment_id=appointment_id)
+        
+        # Soft delete by changing status
+        appointment.status = "Cancelled"
+        
+        employee_id = (
+            request.data.get('auth-user-id') or
+            request.headers.get('auth-user-id') or
+            "system"
+        )
+        appointment.lastmodified_by = employee_id
+        appointment.lastmodified_date = timezone.now()
+        
+        appointment.save()
+        
+        return Response({
+            "success": True,
+            "message": "Appointment cancelled successfully"
+        })
+    except Appointment.DoesNotExist:
+        return Response({
+            "success": False,
+            "message": "Appointment not found"
+        }, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({
+            "success": False,
+            "message": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+@permission_classes([HasRolePermission])
+def get_appointments_by_date(request):
+    try:
+        from_date = request.GET.get('from_date')
+        to_date = request.GET.get('to_date')
+
+        appointments = Appointment.objects.all().order_by("appointment_date")
+        
+        if from_date:
+            appointments = appointments.filter(appointment_date__gte=from_date)
+        if to_date:
+            appointments = appointments.filter(appointment_date__lte=to_date)
+
+        serializer = AppointmentSerializer(appointments, many=True)
+        return Response({
+            "success": True,
+            "appointments": serializer.data
+        })
+    except Exception as e:
+        return Response({
+            "success": False,
+            "message": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 @csrf_exempt
 @api_view(['POST'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def create_patient(request):
     try:
         data = request.data.copy()
@@ -136,6 +196,61 @@ def create_patient(request):
             "details": str(e)
         }, status=500)
     
+@csrf_exempt
+@api_view(['PUT'])
+@permission_classes([HasRolePermission])
+def update_patient(request, patient_id):
+    try:
+        patient = Patient.objects.get(patient_id=patient_id)
+        
+        data = request.data.copy()
+        
+        employee_id = (
+            request.data.get('auth-user-id') or
+            request.headers.get('auth-user-id') or
+            "system"
+        )
+        
+        patient_data = {
+            "patientname": data.get("patientname"),
+            "age": data.get("age"),
+            "age_type": data.get("age_type", "Years"),
+            "gender": data.get("gender"),
+            "phone": data.get("phone", ""),
+            "email": data.get("email", ""),
+            "address": data.get("address") if isinstance(data.get("address"), dict) else {},
+            "lastmodified_by": employee_id,
+            "lastmodified_date": timezone.now(),
+        }
+
+        # Filter out None values to allow partial updates
+        patient_data = {k: v for k, v in patient_data.items() if v is not None}
+
+        serializer = PatientSerializer(patient, data=patient_data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({
+                "success": True,
+                "message": "Patient updated successfully",
+                "patient_id": patient_id,
+                "data": serializer.data
+            }, status=200)
+
+        return Response({
+            "success": False,
+            "error": "Patient update failed",
+            "details": serializer.errors
+        }, status=400)
+        
+    except Patient.DoesNotExist:
+        return Response({"success": False, "error": "Patient not found"}, status=404)
+    except Exception as e:
+        return Response({
+            "success": False,
+            "error": "Internal server error",
+            "details": str(e)
+        }, status=500)
+    
 
 # MongoDB Connection Setup
 def get_mongodb_connection():
@@ -146,7 +261,7 @@ def get_mongodb_connection():
 
 @csrf_exempt
 @api_view(['POST'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def create_bill(request):
     """
     Create a bill and upload prescription file to GridFS if provided.
@@ -157,6 +272,8 @@ def create_bill(request):
 
         # Validate patient
         patient_id = data.get("patient_id")
+        appointment_id = data.get("appointment_id")
+        
         if not patient_id:
             return Response({"error": "patient_id is required"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -271,6 +388,18 @@ def create_bill(request):
 
         if serializer.is_valid():
             billing = serializer.save()
+            
+            # If this bill originated from an appointment, update its status
+            if appointment_id:
+                try:
+                    appointment = Appointment.objects.get(appointment_id=appointment_id)
+                    appointment.status = "Registered"
+                    appointment.lastmodified_by = employee_id
+                    appointment.lastmodified_date = timezone.now()
+                    appointment.save()
+                except Appointment.DoesNotExist:
+                    pass
+            
             return Response({
                 "success": True,
                 "message": "Bill created successfully",
@@ -295,7 +424,7 @@ def create_bill(request):
     
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_latest_patient_id(request):
     try:
         max_patient = Patient.objects.aggregate(max_pid=Max('patient_id'))['max_pid']
@@ -310,7 +439,7 @@ def get_latest_patient_id(request):
         return Response({"success": False, "error": "Failed to generate patient ID", "details": str(e)}, status=500)
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_latest_bill_no(request):
     try:
         today = datetime.now().strftime('%Y%m%d')
@@ -323,7 +452,7 @@ def get_latest_bill_no(request):
 
 @csrf_exempt
 @api_view(['PUT'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def update_bill(request):
     """
     Updated bill update function to handle MongoDB collection updates
@@ -558,7 +687,7 @@ def update_bill(request):
         
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def patient_get(request):
     """
     Get patient details by patient_id or phone.
@@ -716,7 +845,7 @@ def patient_get(request):
 
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_patients_by_date(request):
 
     start_date = request.GET.get('start_date')
@@ -852,7 +981,7 @@ def patient_overview(request):
 
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def get_patientsbyb2b(request):
     """Fetch patients registered on a given date with payment mode options based on segment"""
     date_str = request.GET.get('date', None)
@@ -900,7 +1029,7 @@ import os
 
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def dashboard_data(request):
     try:
         # -------------------------
@@ -1084,7 +1213,7 @@ def dashboard_data(request):
 
 
 @api_view(['PATCH'])
-@permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRolePermission])
 def update_credit_amount(request):
     try:
         data = request.data
@@ -1182,3 +1311,240 @@ def safe_parse_list(data):
                 pass
     return []
 
+from django.db.models import Q
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+
+@api_view(["GET"])
+@permission_classes([HasRolePermission])
+def get_patient_list(request):
+    try:
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 10))
+        search_query = request.GET.get('search', '').strip()
+
+        patients = Patient.objects.all().order_by('-created_date', '-patient_id')
+
+        if search_query:
+            patients = patients.filter(
+                Q(patient_id__icontains=search_query) |
+                Q(patientname__icontains=search_query) |
+                Q(phone__icontains=search_query)
+            )
+
+        paginator = Paginator(patients, limit)
+        
+        try:
+            paginated_patients = paginator.page(page)
+        except PageNotAnInteger:
+            paginated_patients = paginator.page(1)
+        except EmptyPage:
+            paginated_patients = paginator.page(paginator.num_pages)
+
+        serializer = PatientSerializer(paginated_patients, many=True)
+
+        return Response({
+            "success": True,
+            "patients": serializer.data,
+            "total_pages": paginator.num_pages,
+            "current_page": paginated_patients.number,
+            "total_count": paginator.count
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        print(f"Error in get_patient_list: {str(e)}")
+        return Response({
+            "success": False,
+            "error": "Internal server error",
+            "details": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(["GET"])
+@permission_classes([HasRolePermission])
+def get_patient_full_record(request, patient_id):
+    try:
+        # Fetch Patient Data
+        try:
+            patient = Patient.objects.get(patient_id=patient_id)
+            patient_data = PatientSerializer(patient).data
+        except Patient.DoesNotExist:
+            return Response({"success": False, "error": "Patient not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Fetch Bills using Django ORM
+        bills_queryset = Billing.objects.filter(patient_id=patient_id).order_by('-date')
+        bills = BillingSerializer(bills_queryset, many=True).data
+
+        return Response({
+            "success": True,
+            "patient": patient_data,
+            "bills": bills
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        print(f"Error in get_patient_full_record: {str(e)}")
+        return Response({
+            "success": False,
+            "error": "Internal server error",
+            "details": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+def get_prescription_image(request, file_id):
+    try:
+        if not ObjectId.is_valid(file_id):
+            return HttpResponse(status=400, content="Invalid file ID")
+        
+        try:
+            grid_out = FS.get(ObjectId(file_id))
+        except gridfs.errors.NoFile:
+            return HttpResponse(status=404, content="File not found")
+
+        # Usually grid_out.content_type holds the mime type if it was set during upload
+        content_type = getattr(grid_out, 'content_type', 'image/jpeg')
+        if not content_type:
+            content_type = 'image/jpeg'
+            
+        response = HttpResponse(grid_out.read(), content_type=content_type)
+        response['Content-Disposition'] = f'inline; filename="{getattr(grid_out, "filename", file_id)}"'
+        return response
+
+    except Exception as e:
+        print(f"Error in get_prescription_image: {str(e)}")
+        return HttpResponse(status=500, content="Internal server error")
+
+@api_view(["GET"])
+@permission_classes([HasRolePermission])
+def patient_record_dashboard(request):
+    try:
+        from core.models import Patient, Billing
+        from django.db.models import Q
+        from datetime import datetime, timedelta
+        
+        start_date = request.GET.get('start_date')
+        end_date = request.GET.get('end_date')
+        sample_collector = request.GET.get('sample_collector')
+        sales_mapping = request.GET.get('salesMapping')
+        search_query = request.GET.get('search', '').strip()
+        export = request.GET.get('export') == 'true'
+        segment = request.GET.get('segment')
+        
+        page = int(request.GET.get('page', 1))
+        limit = int(request.GET.get('limit', 10))
+        
+        # Start with all bills
+        bills = Billing.objects.all()
+        
+        if start_date and end_date:
+            try:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+                bills = bills.filter(date__gte=start_dt, date__lt=end_dt)
+            except ValueError:
+                pass
+
+        if sample_collector:
+            bills = bills.filter(sample_collector__icontains=sample_collector)
+            
+        if sales_mapping:
+            bills = bills.filter(salesMapping__icontains=sales_mapping)
+            
+        if segment:
+            bills = bills.filter(segment__iexact=segment)
+            
+        # Search patient details
+        if search_query:
+            patients = Patient.objects.filter(
+                Q(patient_id__icontains=search_query) |
+                Q(patientname__icontains=search_query) |
+                Q(phone__icontains=search_query)
+            ).values_list('patient_id', flat=True)
+            bills = bills.filter(patient_id__in=patients)
+            
+        # Sort by latest
+        bills = bills.order_by('-date')
+        
+        # Calculate total revenue for filtered bills
+        total_revenue = 0
+        all_bills = list(bills)
+        for bill in all_bills:
+            try:
+                amt = float(bill.totalAmount) if bill.totalAmount else 0
+                total_revenue += amt
+            except:
+                pass
+                
+        # Handle export
+        if export:
+            export_data = []
+            patient_ids = [b.patient_id for b in all_bills]
+            patients_qs = Patient.objects.filter(patient_id__in=patient_ids)
+            patient_map = {p.patient_id: p for p in patients_qs}
+            
+            for bill in all_bills:
+                patient = patient_map.get(bill.patient_id)
+                patient_name = patient.patientname if patient else "N/A"
+                phone = patient.phone if patient else "N/A"
+                
+                export_data.append({
+                    "Patient ID": bill.patient_id,
+                    "Name": patient_name,
+                    "Phone": phone,
+                    "Bill No": bill.bill_no,
+                    "Date": bill.date.strftime('%Y-%m-%d %H:%M') if bill.date else "",
+                    "Sample Collector": bill.sample_collector,
+                    "Sales Mapping": bill.salesMapping,
+                    "B2B": bill.B2B,
+                    "Amount": bill.totalAmount,
+                    "Status": bill.status
+                })
+            return Response({"success": True, "data": export_data})
+            
+        # Pagination
+        from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+        paginator = Paginator(all_bills, limit)
+        try:
+            paginated_bills = paginator.page(page)
+        except PageNotAnInteger:
+            paginated_bills = paginator.page(1)
+        except EmptyPage:
+            paginated_bills = paginator.page(paginator.num_pages)
+            
+        # Prepare response data
+        patient_ids = [b.patient_id for b in paginated_bills]
+        patients_qs = Patient.objects.filter(patient_id__in=patient_ids)
+        patient_map = {p.patient_id: p for p in patients_qs}
+        
+        from core.serializers import BillingSerializer
+        
+        result = []
+        for bill in paginated_bills:
+            patient = patient_map.get(bill.patient_id)
+            bill_data = BillingSerializer(bill).data
+            if patient:
+                bill_data['patient_details'] = {
+                    'patientname': patient.patientname,
+                    'age': patient.age,
+                    'age_type': patient.age_type,
+                    'gender': patient.gender,
+                    'phone': patient.phone
+                }
+            else:
+                bill_data['patient_details'] = {}
+            result.append(bill_data)
+            
+        return Response({
+            "success": True,
+            "data": result,
+            "total_revenue": total_revenue,
+            "total_records": paginator.count,
+            "total_pages": paginator.num_pages,
+            "current_page": paginated_bills.number
+        })
+
+    except Exception as e:
+        print(f"Error in patient_record_dashboard: {str(e)}")
+        return Response({
+            "success": False,
+            "error": "Internal server error",
+            "details": str(e)
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

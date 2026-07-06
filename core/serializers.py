@@ -1,6 +1,5 @@
 from rest_framework import serializers
 from bson import ObjectId
-
 class ObjectIdField(serializers.Field):
     def to_representation(self, value):
         return str(value)
@@ -10,7 +9,8 @@ class ObjectIdField(serializers.Field):
 
 from .models import Appointment
 class AppointmentSerializer(serializers.ModelSerializer):
-    id = ObjectIdField(read_only=True)
+    appointment_id = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = Appointment
         fields = '__all__'
@@ -128,3 +128,43 @@ class LogisticsSerializer(serializers.ModelSerializer):
         model = Logistics
         fields = "__all__"
 
+
+from .models import RouteSetup, RouteAnalysis, B2BPackage
+
+class RouteSetupSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(read_only=True)
+    clinical_name_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RouteSetup
+        fields = "__all__"
+
+    def get_clinical_name_display(self, obj):
+        from .Views.logistic import get_clinical_name_map, _as_list
+        # clinical_name may be stored as a JSON string by djongo — parse defensively
+        codes = _as_list(obj.clinical_name) if obj.clinical_name else []
+        if not codes:
+            return []
+        name_map = get_clinical_name_map(codes)
+        return [{"referrerCode": c, "clinicalname": name_map.get(c)} for c in codes]
+
+
+class RouteAnalysisSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+    route_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RouteAnalysis
+        fields = "__all__"
+
+    def get_route_name(self, obj):
+        route = RouteSetup.objects.filter(id=obj.route_id).first()
+        return route.route_name if route else None
+
+from .models import B2BPackage
+
+class B2BPackageSerializer(serializers.ModelSerializer):
+    package_id = serializers.IntegerField(read_only=True)
+    class Meta:
+        model = B2BPackage
+        fields = "__all__"

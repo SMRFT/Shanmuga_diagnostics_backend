@@ -60,7 +60,7 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
     
     # Determine status for each department
     for dept, tests in tests_by_dept.items():
-        dept_test_ids = {t.get('test_id') for t in tests if t.get('test_id')}
+        dept_test_ids = {int(t.get('test_id')) for t in tests if t.get('test_id')}
         
         # Get test values for this barcode
         all_test_values = []
@@ -70,8 +70,11 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
             all_test_values.extend(mb_test_value_map[barcode].get('testdetails', []))
         
         # Filter test values for this department - match by test_id
-        dept_test_values = [tv for tv in all_test_values 
-                           if tv.get('test_id') in dept_test_ids and not tv.get('rerun', False)]
+        dept_test_values = [
+    tv for tv in all_test_values 
+    if tv.get('test_id') and int(tv.get('test_id')) in dept_test_ids 
+    and not tv.get('rerun', False)
+]
         
         # Check sample collection status
         sample_tests = sample_status_map.get(barcode, [])
@@ -96,34 +99,46 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
                 # Check if tests have values
                 def has_test_values(test):
                     parameters = test.get("parameters", [])
-                    if not parameters:
-                        return bool(test.get("value"))
-                    return any(
-                        param.get("value") is not None and str(param.get("value")).strip() != ""
-                        for param in parameters
-                    )
+
+                    if parameters:
+                        return any(
+                            param.get("value") is not None and str(param.get("value")).strip() != ""
+                            for param in parameters
+                        )
+
+                    # Biochemistry
+                    if test.get("value") is not None and str(test.get("value")).strip() != "":
+                        return True
+
+                    # ✅ Microbiology FIX
+                    if test.get("remarks") or test.get("parameter_type"):
+                        return True
+
+                    return False
                 
-                all_tested = all(has_test_values(tv) for tv in dept_test_values)
-                
-                # Check approval status
-                approved_test_ids = {tv.get('test_id') for tv in dept_test_values if tv.get('approve', False)}
-                
-                all_approved = dept_test_ids.issubset(approved_test_ids) and len(approved_test_ids) > 0
-                
-                # Check dispatch status
-                approved_dept_tests = [tv for tv in dept_test_values if tv.get('approve', False)]
-                all_dispatched = all(tv.get('dispatch', False) for tv in approved_dept_tests) if approved_dept_tests else False
-                
-                if all_dispatched and all_approved:
+                any_tested = any(has_test_values(tv) for tv in dept_test_values)
+                # Collect statuses from all test values
+                any_dispatched = any(tv.get('dispatch', False) for tv in dept_test_values)
+                any_approved = any(tv.get('approve', False) for tv in dept_test_values)
+                any_tested = any(has_test_values(tv) for tv in dept_test_values)
+
+                if any_dispatched:
                     department_status[dept] = 'Dispatched'
-                elif all_approved:
+
+                elif any_approved:
                     department_status[dept] = 'Approved'
-                elif all_tested:
+
+                elif any_tested:
                     department_status[dept] = 'Tested'
+
                 elif all_received:
                     department_status[dept] = 'Received'
+
+                elif all_collected:
+                    department_status[dept] = 'Collected'
+
                 else:
-                    department_status[dept] = 'In Progress'
+                    department_status[dept] = 'Pending'
     
     return department_status
 
@@ -195,7 +210,7 @@ def hms_overall_report(request):
         barcode_records = list(Hmsbarcode.objects.filter(**barcode_query).values(
             'billnumber', 'barcode', 'date', 'testdetails',
             'patient_id', 'patientname', 'age', 'age_type', 'gender', 
-            'IPOPType', 'ref_doctor', 'ipnumber', 'location_id'
+            'IPOPType', 'ref_doctor', 'ipnumber', 'location_id', 'phone', 'created_date'
         ))
         print(f"Found {len(barcode_records)} HMS barcode records")
         if barcode_records:
@@ -519,13 +534,24 @@ def hms_overall_report(request):
                         # Check if test has values
                         has_values = False
                         parameters = test_value_info.get("parameters", [])
-                        if not parameters:
-                            has_values = bool(test_value_info.get("value"))
-                        else:
+
+                        # Biochemistry (parameters)
+                        if parameters:
                             has_values = any(
                                 param.get("value") is not None and str(param.get("value")).strip() != ""
                                 for param in parameters
                             )
+
+                        # Biochemistry (single value)
+                        elif test_value_info.get("value") is not None and str(test_value_info.get("value")).strip() != "":
+                            has_values = True
+
+                        # ✅ Microbiology FIX
+                        elif test_value_info.get("remarks") or test_value_info.get("parameter_type"):
+                            has_values = True
+
+                        else:
+                            has_values = False
                         
                         if has_values:
                             test_status = "Tested"
@@ -554,12 +580,22 @@ def hms_overall_report(request):
                 # Check testing status
                 def has_test_values(test):
                     parameters = test.get("parameters", [])
-                    if not parameters:
-                        return bool(test.get("value"))
-                    return any(
-                        param.get("value") is not None and str(param.get("value")).strip() != ""
-                        for param in parameters
-                    )
+
+                    if parameters:
+                        return any(
+                            param.get("value") is not None and str(param.get("value")).strip() != ""
+                            for param in parameters
+                        )
+
+                    # Biochemistry
+                    if test.get("value") is not None and str(test.get("value")).strip() != "":
+                        return True
+
+                    # ✅ Microbiology FIX
+                    if test.get("remarks") or test.get("parameter_type"):
+                        return True
+
+                    return False
                
                 all_tested = all(has_test_values(t) for t in valid_test_values)
                 partially_tested = any(has_test_values(t) for t in valid_test_values)
@@ -648,6 +684,14 @@ def hms_overall_report(request):
                 else:
                     test_created_date_formatted = str(test_created_date)
 
+            barcode_created_date = record.get("created_date")
+            barcode_created_date_formatted = None
+            if barcode_created_date:
+                if isinstance(barcode_created_date, datetime):
+                    barcode_created_date_formatted = barcode_created_date.isoformat()
+                else:
+                    barcode_created_date_formatted = str(barcode_created_date)
+
             formatted_data.append({
                 "date": formatted_date,
                 "registration_date": registration_date,
@@ -659,6 +703,8 @@ def hms_overall_report(request):
                 "opiptype": opiptype,
                 "refby": refby,
                 "branch": branch,
+                "phone": record.get("phone", "N/A"),
+                "barcode_generated_time": barcode_created_date_formatted,
                 "test_names": testnames,
                 "department": department,
                 "department_statuses": department_statuses,
@@ -826,11 +872,15 @@ def get_hms_patient_test_details(request):
                 testname      = core_test.get("test_name")
                 department    = core_test.get("department", "N/A")
                 NABL          = core_test.get("NABL", False)
+                interpretation= core_test.get("interpretation", "")
+                critical_range= core_test.get("critical_range", "")
+                lod           = core_test.get("lod", "")
+                labels        = core_test.get("labels", "")
                 outsourced    = test.get("outsourced", False)
                 comment       = test.get("comment", "")
                 verified_by   = test.get("verified_by", "N/A")
                 approve_time  = test.get("approve_time", "N/A")
-                specimen_type = core_test.get("specimen_type", "N/A")
+                specimen_type = test.get("specimen_type") or core_test.get("specimen_type", "N/A")
 
                 status = None
                 if sample_status.exists():
@@ -865,6 +915,10 @@ def get_hms_patient_test_details(request):
                     "dispatch_time":       dispatch_time,
                     "samplecollected_time": samplecollected_time,
                     "received_time":       received_time,
+                    "interpretation":      interpretation,
+                    "critical_range":      critical_range,
+                    "lod":                 lod,
+                    "labels":              labels,
                 }
 
                 # ── Parameterised test ────────────────────────────────────────
@@ -971,140 +1025,3 @@ def get_hms_patient_test_details(request):
         import traceback
         print(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
-
-# Define IST timezone
-TIME_ZONE = 'Asia/Kolkata'
-IST = pytz.timezone(TIME_ZONE)
-
-@api_view(['PATCH'])
-@permission_classes([HasRoleAndDataPermission])
-def hms_update_dispatch_status(request, barcode):
-    """
-    Update dispatch status for tests in core_testvalue collection.
-    Uses test_id instead of testname for accurate tracking.
-    """
-    # MongoDB connection
-    password = quote_plus('Smrft@2024')
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client.Diagnostics  # Database name
-    collection = db.core_testvalue
-    
-    try:
-        # Get auth-user-id from request data
-        auth_user_id = request.data.get('auth-user-id')
-        auth_user_name = request.data.get('auth-user-name')
-        
-        if not auth_user_id:
-            return Response(
-                {"error": "auth-user-id parameter is required"}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # Build the query filter with only barcode
-        query_filter = {
-            "barcode": barcode
-        }
-        
-        # Find ALL documents with the same barcode, sorted by created_date descending (latest first)
-        test_value_records = list(collection.find(query_filter).sort("created_date", -1))
-        
-        if not test_value_records:
-            return Response({
-                "error": f"No TestValue records found for barcode: {barcode}"
-            }, status=status.HTTP_404_NOT_FOUND)
-        
-        # Dictionary to track the latest document for each test_id
-        latest_documents_by_test_id = {}
-        
-        # Process each document to find the latest one for each test_id
-        for record in test_value_records:
-            # Parse the testdetails field
-            test_details = json.loads(record.get("testdetails", "[]"))
-            
-            for test in test_details:
-                test_id = test.get("test_id")
-                
-                # Skip if test_id is missing
-                if not test_id:
-                    continue
-                
-                # If this test_id hasn't been seen yet, or this document is newer
-                if test_id not in latest_documents_by_test_id:
-                    latest_documents_by_test_id[test_id] = {
-                        "document": record,
-                        "test_details": test_details,
-                        "created_date": record.get("created_date"),
-                        "testname": test.get("testname", "Unknown")
-                    }
-                # Since records are sorted by created_date descending,
-                # the first occurrence is the latest
-        
-        updated_count = 0
-        total_tests_updated = 0
-        updated_records = []
-        
-        # Update dispatch status for the latest document of each test_id
-        for test_id, doc_info in latest_documents_by_test_id.items():
-            document = doc_info["document"]
-            test_details = doc_info["test_details"]
-            tests_updated_in_doc = 0
-            
-            # Update dispatch status for all tests in this document
-            for test in test_details:
-                # Only update if dispatch is currently false
-                if not test.get("dispatch", False):
-                    test["dispatch"] = True
-                    test["dispatched_by"] = auth_user_name
-                    test["dispatch_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
-                    tests_updated_in_doc += 1
-            
-            # Convert the updated testdetails back to a JSON string
-            updated_test_details = json.dumps(test_details)
-            
-            # Update the document in MongoDB using the document's _id
-            result = collection.update_one(
-                {"_id": document["_id"]},
-                {"$set": {
-                    "testdetails": updated_test_details,
-                    "lastmodified_by": auth_user_id,
-                    "lastmodified_date": datetime.now(IST)
-                }}
-            )
-            
-            if result.matched_count > 0:
-                updated_count += 1
-                total_tests_updated += tests_updated_in_doc
-                updated_records.append({
-                    "document_id": str(document["_id"]),
-                    "created_date": document.get("created_date"),
-                    "test_id": test_id,
-                    "testname": doc_info["testname"],
-                    "tests_updated": tests_updated_in_doc,
-                    "all_tests": [
-                        {
-                            "test_id": t.get("test_id", "Unknown"),
-                            "testname": t.get("testname", "Unknown")
-                        } 
-                        for t in test_details
-                    ]
-                })
-        
-        if updated_count == 0:
-            return Response({
-                "message": f"No records were updated for barcode: {barcode}. All tests may already be dispatched."
-            }, status=status.HTTP_200_OK)
-        
-        return Response({
-            "message": "Dispatch status updated successfully for latest documents of each test.",
-            "barcode": barcode,
-            "unique_test_ids_processed": len(latest_documents_by_test_id),
-            "documents_updated": updated_count,
-            "total_tests_updated": total_tests_updated,
-            "modified_by": auth_user_id,
-            "updated_records": updated_records
-        }, status=status.HTTP_200_OK)
-        
-    except Exception as e:
-        return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-    finally:
-        client.close()
