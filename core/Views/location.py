@@ -8,6 +8,7 @@ import json
 import math
 
 from ..models import SampleCollectorLocation
+from core.utils import get_employee_name
 
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -53,7 +54,7 @@ def format_location_response(item):
 
     return {
         "id": str(item.location_id),
-        "sampleCollector": item.sampleCollector,
+        "sampleCollector": get_employee_name(item.sampleCollector) if item.sampleCollector else item.sampleCollector,
         "date": item.date.isoformat() if item.date else None,
         "latitudeStart": lat_start,
         "longitudeStart": lng_start,

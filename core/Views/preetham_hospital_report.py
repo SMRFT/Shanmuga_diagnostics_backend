@@ -4,6 +4,7 @@ from django.views.decorators.csrf import csrf_exempt
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 from bson.errors import InvalidId
+from core.utils import get_employee_name
 import json
 import os
 import traceback
@@ -250,7 +251,7 @@ def preetham_hospital_report(request):
                 "discount": record.get("discount", 0),
                 "credit_amount": record.get("credit_amount", 0),
                 "payment_method": record.get("payment_method", "N/A"),
-                "sample_collector": record.get("sample_collector", "N/A"),
+                "sample_collector": get_employee_name(record.get("sample_collector", "")) or "N/A",
                 "status": status,
                 "refby": record.get("refby", "N/A"),
                 "branch": record.get("branch", "N/A"),
@@ -373,7 +374,7 @@ def get_preethampatient_test_details(request):
             "B2B": billing_data.get("B2B", "N/A"),
             "bill_no": billing_data.get("bill_no", "N/A"),
             "bill_date": billing_data.get("date", ""),
-            "sample_collector": billing_data.get("sample_collector", "N/A"),
+            "sample_collector": get_employee_name(billing_data.get("sample_collector", "")) or "N/A",
             
             "barcodes": [barcode],
             "testdetails": test_details,

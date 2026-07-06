@@ -391,7 +391,7 @@ def logistics_dashboard(request):
                 }
             },
             'filters': {
-                'sample_collector': collector,
+                'sample_collector': get_employee_name(collector) if collector else collector,
                 'start_date': start_date,
                 'end_date': end_date
             }
@@ -561,7 +561,7 @@ def logistics_tat_report(request):
             tat_data.append({
                 'task_id': task.task_id,
                 'lab_name': task.clinicalname,
-                'sample_collector': task.sample_collector,
+                'sample_collector': get_employee_name(task.sample_collector) if task.sample_collector else task.sample_collector,
                 'sales_person': task.sales_person if hasattr(task, 'sales_person') else None,
                 'date': str(task.date),
                 'order_time': order_time_str,
@@ -594,7 +594,7 @@ def logistics_tat_report(request):
                 'avg_total_tat_minutes': avg_total_tat,
             },
             'filters': {
-                'sample_collector': collector,
+                'sample_collector': get_employee_name(collector) if collector else collector,
                 'clinicalname': clinicalname,
                 'start_date': start_date,
                 'end_date': end_date,
@@ -614,8 +614,10 @@ def logistics_tat_report(request):
 
 import json
 from bson import ObjectId
-from gridfs import GridFS
+import os
+import requests
 from pymongo import MongoClient
+from core.utils import get_employee_name
 from django.http import HttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt

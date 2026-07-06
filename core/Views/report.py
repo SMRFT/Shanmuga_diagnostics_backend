@@ -424,7 +424,9 @@ def overall_report(request):
             segment = record.get("segment", barcode_data.get("segment", "N/A"))
             b2b = record.get("B2B", "N/A")
             branch = record.get("branch", "N/A")
-            sample_collector = record.get("sample_collector", "N/A")
+            sample_collector = get_employee_name(record.get("sample_collector", ""))
+            if not sample_collector:
+                sample_collector = "N/A"
             sales_mapping = record.get("salesMapping", "N/A")
             bill_no = record.get("bill_no", "N/A")
             registeredby = record.get("created_by", "N/A")
@@ -1859,7 +1861,7 @@ def get_home_collection_report(request):
                 "patient_name": patient_name,
                 "phone": phone,
                 "address": formatted_address,
-                "sample_collector": record.get("sample_collector", "N/A"),
+                "sample_collector": get_employee_name(record.get("sample_collector", "")) or "N/A",
                 "test_names": test_names,
                 "total_amount": record.get("totalAmount", 0),
                 "paid_amount": record.get("paid_amount", 0),

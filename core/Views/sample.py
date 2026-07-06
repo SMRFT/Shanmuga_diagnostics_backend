@@ -13,6 +13,7 @@ from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from dotenv import load_dotenv
 from django.utils.timezone import make_aware
+from core.utils import get_employee_name
 
 load_dotenv()
 
@@ -150,7 +151,7 @@ def get_samplepatients_by_date(request):
                 if billing_record:
                     sample_collector = billing_record.get('sample_collector', '')
                 
-                patient_dict['sample_collector'] = sample_collector if sample_collector else ''
+                patient_dict['sample_collector'] = get_employee_name(sample_collector) if sample_collector else ''
                 
                 # Get branch (processing location)
                 branch = ''

@@ -6,7 +6,11 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.db.models import Max
 from datetime import datetime, timedelta
+import json
+import ast
+import random
 from django.forms.models import model_to_dict
+from core.utils import get_employee_name
 from django.utils.timezone import make_aware
 from django.db import transaction
 import json
@@ -50,9 +54,13 @@ def appointment_booking(request):
     if request.method == "GET":
         appointments = Appointment.objects.all().order_by("appointment_date")
         serializer = AppointmentSerializer(appointments, many=True)
+        data = list(serializer.data)
+        for apt in data:
+            if apt.get('sample_collector'):
+                apt['sample_collector'] = get_employee_name(apt['sample_collector'])
         return Response({
             "success": True,
-            "appointments": serializer.data
+            "appointments": data
         })
 
     if request.method == "POST":
@@ -128,9 +136,14 @@ def get_appointments_by_date(request):
             appointments = appointments.filter(appointment_date__lte=to_date)
 
         serializer = AppointmentSerializer(appointments, many=True)
+        data = list(serializer.data)
+        for apt in data:
+            if apt.get('sample_collector'):
+                apt['sample_collector'] = get_employee_name(apt['sample_collector'])
+                
         return Response({
             "success": True,
-            "appointments": serializer.data
+            "appointments": data
         })
     except Exception as e:
         return Response({
@@ -1491,7 +1504,7 @@ def patient_record_dashboard(request):
                     "Phone": phone,
                     "Bill No": bill.bill_no,
                     "Date": bill.date.strftime('%Y-%m-%d %H:%M') if bill.date else "",
-                    "Sample Collector": bill.sample_collector,
+                    "Sample Collector": get_employee_name(bill.sample_collector) if bill.sample_collector else bill.sample_collector,
                     "Sales Mapping": bill.salesMapping,
                     "B2B": bill.B2B,
                     "Amount": bill.totalAmount,
@@ -1530,6 +1543,9 @@ def patient_record_dashboard(request):
                 }
             else:
                 bill_data['patient_details'] = {}
+            if bill_data.get('sample_collector'):
+                bill_data['sample_collector'] = get_employee_name(bill_data['sample_collector'])
+            
             result.append(bill_data)
             
         return Response({

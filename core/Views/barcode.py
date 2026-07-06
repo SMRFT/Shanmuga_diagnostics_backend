@@ -4,7 +4,9 @@ from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view
 from rest_framework import  status
 from django.views.decorators.csrf import csrf_exempt
+import re
 from datetime import datetime
+from core.utils import get_employee_name
 from django.forms.models import model_to_dict
 from django.db.models import Max
 from ..models import BarcodeTestDetails,Patient,Billing
@@ -246,7 +248,7 @@ def get_barcode_by_date(request):
                     'segment': billing.segment,
                     'B2B': billing.B2B,
                     'salesMapping': billing.salesMapping,
-                    'sample_collector': billing.sample_collector,
+                    'sample_collector': get_employee_name(billing.sample_collector) if billing.sample_collector else billing.sample_collector,
                     'refby': billing.refby,
                     'branch': billing.branch,
                     'status': billing.status,
