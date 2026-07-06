@@ -5,7 +5,12 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/communication_logs/?(\?.*)?$': 'SD-P-CL',
     '/_b_a_c_k_e_n_d/LIS/create_patient/': 'SD-P-PF',
     r'^/_b_a_c_k_e_n_d/LIS/create_patient/?(\?.*)?$': 'SD-P-PG',
+    r'^/_b_a_c_k_e_n_d/LIS/update_patient/[^/]+/?(\?.*)?$': 'SD-P-PF',
     '/_b_a_c_k_e_n_d/LIS/latest-patient-id/': 'SD-P-LPI',
+    r'^/_b_a_c_k_e_n_d/LIS/patient_list/?(\?.*)?$': 'SD-P-PF',
+    r'^/_b_a_c_k_e_n_d/LIS/patient_record_dashboard/?(\?.*)?$': 'SD-P-PF',
+    r'^/_b_a_c_k_e_n_d/LIS/patient_full_record(?:/[^/]+)+/?(\?.*)?$': 'SD-P-PF',
+    r'^/_b_a_c_k_e_n_d/LIS/prescription_image(?:/[^/]+)+/?(\?.*)?$': 'SD-P-PF',
     r'^/_b_a_c_k_e_n_d/LIS/patient-get/?(\?.*)?$': 'SD-P-SP',
     '/_b_a_c_k_e_n_d/LIS/latest-bill-no/': 'SD-P-LBN',
     '/_b_a_c_k_e_n_d/LIS/create_bill/': 'SD-P-PB',
@@ -23,8 +28,10 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/approve_test/?(\?.*)?$':'SD-P-TE',
     '/_b_a_c_k_e_n_d/LIS/get_devices/':'SD-API-GD',
     '/_b_a_c_k_e_n_d/LIS/appointments/':'SD-P-BA',
+    r'^/_b_a_c_k_e_n_d/LIS/appointments_by_date/?(\?.*)?$':'SD-P-BA',
+    r'^/_b_a_c_k_e_n_d/LIS/appointments/[^/]+/cancel/?(\?.*)?$':'SD-P-BA',
     r'^/_b_a_c_k_e_n_d/LIS/patient_report/?(\?.*)?$': 'SD-API-PR',
-
+    r'^/_b_a_c_k_e_n_d/LIS/b2b_packages/?(\?.*)?$': 'SD-API-CN',
 
     #Refund and Cancellation
     r'^/_b_a_c_k_e_n_d/LIS/search_refund/?(\?.*)?$': 'SD-API-GR',
@@ -59,6 +66,7 @@ PAGE_MAPPING = {
 
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/first_approve/?(\?.*)?$':'SD-P-SCU',
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/final_approve/?(\?.*)?$':'SD-P-SCU',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/reject/?(\?.*)?$':'SD-P-SCU',
  
     #Logistics
     r'^/_b_a_c_k_e_n_d/LIS/logistics/?(\?.*)?$': 'SD-P-LTA',
@@ -68,10 +76,15 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/logistics/.*$': 'SD-P-LTM',
     '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
     r'^/_b_a_c_k_e_n_d/LIS/sample-collector-location-history/?(\\?.*)?$': 'SD-P-LGD',
-    r'^/_b_a_c_k_e_n_d/LIS/routesetup/?(\?.*)?$': 'SD-P-LTA',
-    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/start/?(\?.*)?$': 'SD-P-LTA',
-    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/end/?(\?.*)?$': 'SD-P-LTA',
-    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/mark/?(\?.*)?$': 'SD-P-LTA',
+
+    r'^/_b_a_c_k_e_n_d/LIS/routesetup/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/start/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/end/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/mark/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/image/[^/]+/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/active/[^/]+/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/today-status/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/admin-report/?(\?.*)?$': 'SD-P-LTA',
 
 
     #Sample Status: 

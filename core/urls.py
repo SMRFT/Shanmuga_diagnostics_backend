@@ -12,9 +12,14 @@ urlpatterns = [
     #Registration and Billing:
     path('create_patient/', patients.create_patient, name='create_patient'),
     path('create_patient/<str:patient_id>/', patients.create_patient, name='create_patient'),
+    path('update_patient/<str:patient_id>/', patients.update_patient, name='update_patient'),
     path('latest-patient-id/', patients.get_latest_patient_id, name='get_latest_patient_id'),
     path('patient-get/', patients.patient_get, name='patient_get'),
     path('create_bill/', patients.create_bill, name='create_bill'),
+    path('patient_list/', patients.get_patient_list, name='get_patient_list'),
+    path('patient_record_dashboard/', patients.patient_record_dashboard, name='patient_record_dashboard'),
+    path('patient_full_record/<str:patient_id>/', patients.get_patient_full_record, name='get_patient_full_record'),
+    path('prescription_image/<str:file_id>/', patients.get_prescription_image, name='get_prescription_image'),
     path('update_bill/', patients.update_bill, name='update_bill'),
     path('latest-bill-no/', patients.get_latest_bill_no, name='get_latest_bill_no'),
     path('patients_by_date/', patients.get_patients_by_date, name='get_patients_by_date'),
@@ -29,9 +34,10 @@ urlpatterns = [
     path('dashboard-data/', patients.dashboard_data, name='sales_person'),
     path('refby/', form.refby, name='refby'),
     path("appointments/", patients.appointment_booking, name="appointment_booking"),
+    path("appointments_by_date/", patients.get_appointments_by_date, name="get_appointments_by_date"),
+    path("appointments/<int:appointment_id>/cancel/", patients.cancel_appointment, name="cancel_appointment"),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
-
-
+    path('b2b_packages/', clinicalname.b2b_packages, name='b2b_packages'),
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
@@ -66,6 +72,7 @@ urlpatterns = [
     path('clinical-names/<str:referrerCode>/', clinicalname.ClinicalNameViewSet.as_view({'get': 'retrieve'}), name='clinical-name-detail'),
     path('clinical-names/<str:referrerCode>/first_approve/', clinicalname.ClinicalNameViewSet.as_view({'patch': 'first_approve'}), name='clinical-name-first-approve'),
     path('clinical-names/<str:referrerCode>/final_approve/', clinicalname.ClinicalNameViewSet.as_view({'patch': 'final_approve'}), name='clinical-name-final-approve'),
+    path('clinical-names/<str:referrerCode>/reject/', clinicalname.clinicalname_reject, name='clinical-name-reject'),
     path('mou-preview/<str:file_id>/',clinicalname.preview_mou_file, name='preview_mou_file'),
 
     #Logistics
@@ -83,6 +90,10 @@ urlpatterns = [
     path('route-analysis/start/', logistic.start_route_analysis, name='start-route-analysis'),
     path('route-analysis/end/', logistic.end_route_analysis, name='end-route-analysis'),
     path('route-analysis/mark/', logistic.mark_visit, name='mark-visit'),
+    path('route-analysis/image/<str:file_id>/', logistic.get_route_image, name='get-route-image'),
+    path('route-analysis/active/<int:route_id>/', logistic.get_active_route_analysis, name='get-active-route-analysis'),
+    path('route-analysis/today-status/', logistic.get_todays_route_status, name='get-todays-route-status'),
+    path('route-analysis/admin-report/', logistic.route_analysis_admin_report, name='route-analysis-admin-report'),
 
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),

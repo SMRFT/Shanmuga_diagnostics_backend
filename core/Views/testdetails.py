@@ -618,7 +618,7 @@ def handle_patch_request(request):
         update_fields = {}
         for k, v in data.items():
             # Exclude identifiers
-            if k in ('test_name', 'test_id', '_id'):
+            if k in ('test_id', '_id'):
                 continue
             # Exclude immutable audit fields
             if k in ('created_at', 'created_by', 'created_by_name'):

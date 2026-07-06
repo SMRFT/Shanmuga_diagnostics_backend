@@ -9,7 +9,8 @@ class ObjectIdField(serializers.Field):
 
 from .models import Appointment
 class AppointmentSerializer(serializers.ModelSerializer):
-    id = ObjectIdField(read_only=True)
+    appointment_id = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = Appointment
         fields = '__all__'
@@ -128,7 +129,7 @@ class LogisticsSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-from .models import RouteSetup, RouteAnalysis
+from .models import RouteSetup, RouteAnalysis, B2BPackage
 
 class RouteSetupSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(read_only=True)
@@ -139,8 +140,11 @@ class RouteSetupSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
     def get_clinical_name_display(self, obj):
-        from .Views.logistic import get_clinical_name_map  # or move helper to a shared module
-        codes = obj.clinical_name or []
+        from .Views.logistic import get_clinical_name_map, _as_list
+        # clinical_name may be stored as a JSON string by djongo — parse defensively
+        codes = _as_list(obj.clinical_name) if obj.clinical_name else []
+        if not codes:
+            return []
         name_map = get_clinical_name_map(codes)
         return [{"referrerCode": c, "clinicalname": name_map.get(c)} for c in codes]
 
@@ -156,3 +160,11 @@ class RouteAnalysisSerializer(serializers.ModelSerializer):
     def get_route_name(self, obj):
         route = RouteSetup.objects.filter(id=obj.route_id).first()
         return route.route_name if route else None
+
+from .models import B2BPackage
+
+class B2BPackageSerializer(serializers.ModelSerializer):
+    package_id = serializers.IntegerField(read_only=True)
+    class Meta:
+        model = B2BPackage
+        fields = "__all__"

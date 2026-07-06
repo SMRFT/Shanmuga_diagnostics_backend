@@ -27,7 +27,7 @@ def sample_collector(request):
         mongo_url = os.getenv("GLOBAL_DB_HOST")
         client = MongoClient(mongo_url)
         db = client["Global"]
-        collection = db["backend_diagnostics_profile"]  # <-- Same here
+        collection = db["backend_diagnostics_profile"]
         # Query: employees with primaryRole == "SD-R-SMC" OR additionalRoles contains "SD-R-SMC"
         query = {
             "$or": [
@@ -36,10 +36,14 @@ def sample_collector(request):
             ]
         }
 
-        docs = collection.find(query, {"employeeName": 1, "_id": 0})
-        employee_names = [doc.get("employeeName") for doc in docs if doc.get("employeeName")]
+        docs = collection.find(query, {"employeeName": 1, "employeeId": 1, "_id": 0})
+        employees = [
+            {"employeeId": doc.get("employeeId"), "employeeName": doc.get("employeeName")}
+            for doc in docs
+            if doc.get("employeeName")
+        ]
 
-        return Response(employee_names, status=status.HTTP_200_OK)
+        return Response(employees, status=status.HTTP_200_OK)
 
     except Exception as e:
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -705,11 +705,11 @@ def patient_report(request):
 
     # ✅ Patients query within range (Billing Date)
     patients = patients_collection.find({
-        "date": {"$gte": start_date, "$lt": end_date}
+        "bill_date": {"$gte": start_date, "$lt": end_date}
     })
 
     for patient in patients:
-        patient_date = patient.get('date')
+        patient_date = patient.get('bill_date')
 
         if isinstance(patient_date, dict) and "$date" in patient_date:
             patient_date = datetime.fromisoformat(patient_date["$date"].replace("Z", "+00:00"))
@@ -801,86 +801,103 @@ def patient_report(request):
 
     # ✅ NEW: Process direct payments from Corporatehealthcheckup.core_billing
     corp_billing_patients = corporate_db["core_billing"].find({
-        "date": {"$gte": start_date, "$lt": end_date}
+        "$or": [
+            {"date": {"$gte": start_date, "$lt": end_date}},
+            {"paid_at": {"$gte": start_date, "$lt": end_date}}
+        ]
     })
 
     for corp_patient in corp_billing_patients:
+        # Determine Date for Gross/Discount/Credit
         p_date = corp_patient.get('date')
         if isinstance(p_date, dict) and "$date" in p_date:
             p_date = datetime.fromisoformat(p_date["$date"].replace("Z", "+00:00"))
         elif isinstance(p_date, str):
             try: p_date = datetime.fromisoformat(p_date.replace("Z", "+00:00"))
-            except: continue
+            except: p_date = None
+            
+        date_key = p_date.strftime("%Y-%m-%d") if isinstance(p_date, datetime) else None
         
-        if not isinstance(p_date, datetime): continue
-        date_key = p_date.strftime("%Y-%m-%d")
+        # Determine Paid At for Collection
+        paid_at = corp_patient.get('paid_at')
+        if isinstance(paid_at, dict) and "$date" in paid_at:
+            paid_at = datetime.fromisoformat(paid_at["$date"].replace("Z", "+00:00"))
+        elif isinstance(paid_at, str):
+            try: paid_at = datetime.fromisoformat(paid_at.replace("Z", "+00:00"))
+            except: paid_at = p_date # fallback to date if parse fails
+        else:
+            paid_at = p_date # fallback to date if missing
+            
+        paid_at_key = paid_at.strftime("%Y-%m-%d") if isinstance(paid_at, datetime) else date_key
         
-        # Only count immediate payments (Cash, UPI, Card) - ignore Credit as it goes to invoice
         gross = convert_to_float(corp_patient.get('totalAmount') or corp_patient.get('netAmount') or 0)
         discount = convert_to_float(corp_patient.get('discount', 0))
         credit = convert_to_float(corp_patient.get('credit_amount', 0))
         
-        # If paymentMode is Credit and credit_amount is 0/missing, use the net total
         payment_mode = corp_patient.get('paymentMode') or corp_patient.get('payment_mode')
-        if payment_mode == "Credit" and credit == 0:
-            credit = gross - discount
-            
-        # We add these to main gross/discount/due so they appear in those columns
-        report_by_date[date_key]['gross_amount'] += gross
-        report_by_date[date_key]['discount'] += discount
-        report_by_date[date_key]['due_amount'] += credit
-        
         payment_method_raw = corp_patient.get('payment_method') or corp_patient.get('payment_method_dict')
-        payment_mode = corp_patient.get('paymentMode') or corp_patient.get('payment_mode')
         
-        # If paymentMode is Credit and credit_amount is 0/missing, use the net total
         if payment_mode == "Credit" and credit == 0:
             credit = gross - discount
             
-        # Handle payment method name
-        method = ""
-        if isinstance(payment_method_raw, dict):
-            method = payment_method_raw.get("paymentmethod")
-        elif isinstance(payment_method_raw, str) and payment_method_raw.startswith('{'):
-            try:
-                pm_json = json.loads(payment_method_raw)
-                method = pm_json.get("paymentmethod")
-            except:
-                method = payment_method_raw
-        elif isinstance(payment_method_raw, str):
-            method = payment_method_raw
+        # 1. Gross/Discount/Credit applies to `date_key` ONLY IF `p_date` is within range
+        if isinstance(p_date, datetime) and start_date <= p_date < end_date:
+            report_by_date[date_key]['gross_amount'] += gross
+            report_by_date[date_key]['discount'] += discount
+            report_by_date[date_key]['due_amount'] += credit
             
-        # Fallback to payment_mode if method is empty
-        if not method and payment_mode:
-            method = payment_mode
-
-        if method in ["Cash", "UPI", "Card", "Neft", "Cheque"]:
-            net_to_add = gross - discount - credit
-            # This is direct payment at counter, already in net_amount calculation
-            report_by_date[date_key]['corporate_collection'] += net_to_add
-            if method in report_by_date[date_key]['payment_totals']:
-                report_by_date[date_key]['payment_totals'][method] += net_to_add
-            else:
-                report_by_date[date_key]['payment_totals'][method] = net_to_add
-        elif method == "Credit":
-            if "Credit" in report_by_date[date_key]['payment_totals']:
-                report_by_date[date_key]['payment_totals']["Credit"] += credit
-            else:
-                report_by_date[date_key]['payment_totals']["Credit"] = credit
-        elif method == "Multiple Payment":
-            multiple = corp_patient.get("MultiplePayment", [])
-            if isinstance(multiple, str):
-                try: multiple = json.loads(multiple)
-                except: multiple = []
-            for m in multiple:
-                m_method = m.get("paymentMethod")
-                m_amt = convert_to_float(m.get("amount", 0))
-                if m_method in ["Cash", "UPI", "Card", "Neft", "Cheque"]:
-                    report_by_date[date_key]['corporate_collection'] += m_amt
-                    if m_method in report_by_date[date_key]['payment_totals']:
-                        report_by_date[date_key]['payment_totals'][m_method] += m_amt
-                    else:
-                        report_by_date[date_key]['payment_totals'][m_method] = m_amt
+        # 2. Collection applies to `paid_at_key` ONLY IF `paid_at` is within range
+        if isinstance(paid_at, datetime) and start_date <= paid_at < end_date:
+            method = ""
+            if isinstance(payment_method_raw, dict):
+                method = payment_method_raw.get("paymentmethod")
+            elif isinstance(payment_method_raw, str) and payment_method_raw.startswith('{'):
+                try:
+                    pm_json = json.loads(payment_method_raw)
+                    method = pm_json.get("paymentmethod")
+                except:
+                    method = payment_method_raw
+            elif isinstance(payment_method_raw, str):
+                method = payment_method_raw
+                
+            if not method and payment_mode:
+                method = payment_mode
+                
+            transaction_id = corp_patient.get('transaction_id', '')
+            if transaction_id and str(transaction_id).strip():
+                method = "UPI"
+                
+            if method in ["Cash", "UPI", "Card", "Neft", "Cheque"]:
+                net_to_add = gross - discount - credit
+                report_by_date[paid_at_key]['corporate_collection'] += net_to_add
+                if method in report_by_date[paid_at_key]['payment_totals']:
+                    report_by_date[paid_at_key]['payment_totals'][method] += net_to_add
+                else:
+                    report_by_date[paid_at_key]['payment_totals'][method] = net_to_add
+            elif method == "Credit":
+                if "Credit" in report_by_date[paid_at_key]['payment_totals']:
+                    report_by_date[paid_at_key]['payment_totals']["Credit"] += credit
+                else:
+                    report_by_date[paid_at_key]['payment_totals']["Credit"] = credit
+            elif method == "Multiple Payment":
+                multiple = corp_patient.get("MultiplePayment", [])
+                if isinstance(multiple, str):
+                    try: multiple = json.loads(multiple)
+                    except: multiple = []
+                for m in multiple:
+                    m_method = m.get("paymentMethod")
+                    m_amt = convert_to_float(m.get("amount", 0))
+                    if m_method in ["Cash", "UPI", "Card", "Neft", "Cheque"]:
+                        report_by_date[paid_at_key]['corporate_collection'] += m_amt
+                        if m_method in report_by_date[paid_at_key]['payment_totals']:
+                            report_by_date[paid_at_key]['payment_totals'][m_method] += m_amt
+                        else:
+                            report_by_date[paid_at_key]['payment_totals'][m_method] = m_amt
+                    elif m_method == "Credit":
+                        if "Credit" in report_by_date[paid_at_key]['payment_totals']:
+                            report_by_date[paid_at_key]['payment_totals']["Credit"] += m_amt
+                        else:
+                            report_by_date[paid_at_key]['payment_totals']["Credit"] = m_amt
     
     # We will use a separate key for invoice payments to avoid double counting in total_collection
     for date_key in report_by_date:
