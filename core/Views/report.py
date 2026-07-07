@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from django.core.mail import EmailMessage
 from django.conf import settings 
 from django.utils.timezone import make_aware 
+from core.utils import get_employee_name
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from ..models import Patient
@@ -159,9 +160,6 @@ def overall_report(request):
         selected_date = request.GET.get("selected_date")
         patient_id = request.GET.get("patient_id")
 
-        print("Received query parameters:", request.GET)
-        print(f"from_date: {from_date}, to_date: {to_date}, selected_date: {selected_date}, patient_id: {patient_id}")
-
         def parse_tat_format(tat_str):
             """Parse TAT format like '2D 3H 45M' and return total seconds"""
             if not tat_str or tat_str == 'N/A':
@@ -189,11 +187,10 @@ def overall_report(request):
                 selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
                 from_date = selected_date_parsed
                 to_date = selected_date_parsed + timedelta(days=1)
-                print(f"Using selected_date: {selected_date}, parsed from_date: {from_date}, to_date: {to_date}")
+
             elif from_date and to_date:
                 from_date = datetime.strptime(from_date, "%Y-%m-%d")
                 to_date = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                print(f"Using date range - parsed from_date: {from_date}, to_date: {to_date}")
             else:
                 print("Missing date parameters")
                 return JsonResponse({"error": "Either 'selected_date' or both 'from_date' and 'to_date' are required"}, status=400)
@@ -205,19 +202,14 @@ def overall_report(request):
         billing_query = {"date": {"$gte": from_date, "$lt": to_date}}
         if patient_id:
             billing_query["patient_id"] = patient_id
-        print(f"core_billing query: {billing_query}")
        
         billing_records = list(billing_collection.find(billing_query))
-        print(f"Found {len(billing_records)} core_billing records")
         if billing_records:
             print("Sample core_billing record:", billing_records[0])
 
         if not billing_records:
-            distinct_dates = billing_collection.distinct("date")
-            print("Distinct date values in core_billing:", [str(d) for d in distinct_dates])
             test_query = {"patient_id": "SD0009"}
             test_result = list(billing_collection.find(test_query))
-            print(f"Test query for patient_id SD0009: Found {len(test_result)} documents")
             if test_result:
                 print("Test query result:", test_result[0])
             return JsonResponse([], safe=False)
@@ -239,7 +231,6 @@ def overall_report(request):
 
         # Fetch barcode from BarcodeTestDetails using PyMongo
         bill_nos = [record['bill_no'] for record in billing_records if record.get('bill_no')]
-        print(f"Fetching BarcodeTestDetails for {len(bill_nos)} bill_nos")
         
         barcode_collection = db.core_barcodetestdetails
         barcode_records = fetch_in_chunks(
@@ -251,7 +242,6 @@ def overall_report(request):
         )
         
         barcode_map = {record['bill_no']: record for record in barcode_records}
-        print(f"Found {len(barcode_records)} BarcodeTestDetails records")
         if barcode_records:
             print("Sample BarcodeTestDetails record:", barcode_records[0])
 
@@ -268,13 +258,11 @@ def overall_report(request):
             )
             for patient_record in patient_records:
                 patient_details_map[patient_record['patient_id']] = patient_record
-            print(f"Fetched {len(patient_details_map)} patient records from Patient model via PyMongo")
         except Exception as e:
             print(f"Error fetching patient details from Patient model: {str(e)}")
 
         # Fetch status and test data
         barcodes = [record['barcode'] for record in barcode_records if record.get('barcode')]
-        print(f"Barcodes for querying: {len(barcodes)}")
         
         # Prepare date query based on naive datetime
         date_query = {"$gte": from_date, "$lt": to_date}
@@ -287,7 +275,6 @@ def overall_report(request):
             additional_query={"date": date_query},
             chunk_size=50
         )
-        print(f"Fetched {len(sample_status_records)} SampleStatus records")
 
         test_value_collection = db.core_testvalue
         test_value_records = fetch_in_chunks(
@@ -297,7 +284,6 @@ def overall_report(request):
             additional_query={"date": date_query},
             chunk_size=50
         )
-        print(f"Fetched {len(test_value_records)} TestValue records")
 
         # Fetch MBTestValue records using PyMongo
         mb_test_value_collection = db.core_mbtestvalue
@@ -308,7 +294,6 @@ def overall_report(request):
             additional_query={"date": date_query},
             chunk_size=50
         )
-        print(f"Fetched {len(mb_test_value_records)} MBTestValue records")
 
         # Organize status data
         sample_status_map = {}
@@ -351,7 +336,6 @@ def overall_report(request):
             if created_date > test_value_map[barcode]["created_date"]:
                 test_value_map[barcode]["created_date"] = created_date
 
-        print(f"Processed test value map with {len(test_value_map)} unique barcodes")
 
         # Organize MBTestValue data - COMBINE ALL RECORDS FOR SAME BARCODE
         mb_test_value_map = {}
@@ -381,8 +365,6 @@ def overall_report(request):
             # Update to latest created_date
             if created_date and (not mb_test_value_map[barcode]["created_date"] or created_date > mb_test_value_map[barcode]["created_date"]):
                 mb_test_value_map[barcode]["created_date"] = created_date
-
-        print(f"Processed MB test value map with {len(mb_test_value_map)} unique barcodes")
 
         # Format response
         formatted_data = []
@@ -496,7 +478,6 @@ def overall_report(request):
             if not test_list:
                 test_names_str = record.get("test_names", "")
                 if test_names_str:
-                    print(f"Using test_names fallback for barcode {barcode_data.get('barcode')}: {test_names_str}")
                     test_list = [{"testname": name.strip(), "department": "N/A"} for name in test_names_str.split(",") if name.strip()]
 
             testnames = ", ".join([test.get("testname", "") for test in test_list])
@@ -550,7 +531,6 @@ def overall_report(request):
             # Combine test values from both sources
             if mb_test_values:
                 all_test_values.extend(mb_test_values)
-                print(f"Added {len(mb_test_values)} MB test values for barcode {barcode}")
                 
                 # Update to latest created_date between both sources
                 if mb_created_date:
@@ -566,8 +546,6 @@ def overall_report(request):
                         valid_test_values.append(test_record)
                         if not test_record.get("approve", False):
                             unapproved_tests.append(test_record)
-
-            print(f"Barcode: {barcode}, Total test records: {len(all_test_values)}, Valid (non-rerun) tests: {len(valid_test_values)}, Unapproved tests: {len(unapproved_tests)}")
 
             # Sample collection status and timestamps
             all_collected = all(t.get("samplestatus") == "Sample Collected" for t in sample_tests) if sample_tests else False
@@ -710,8 +688,6 @@ def overall_report(request):
                         # Check if test has values
                             parameters = test_value_info.get("parameters", [])
 
-                        # Biochemistry (parameters)
-                        print("parameters", parameters)
                         if parameters:
                             has_values = any(
                                 param.get("value") is not None and str(param.get("value")).strip() != ""
@@ -835,8 +811,6 @@ def overall_report(request):
                     status = "Dispatched"
                 elif partially_dispatched:
                     status = "Partially Dispatched"
-
-            print(f"Final status for {barcode}: {status}")
            
             # Date formatting
             formatted_date = record["date"].strftime("%Y-%m-%d") if record.get("date") else "N/A"
@@ -1382,8 +1356,6 @@ def send_approval_email(request):
                 data = json.loads(request.body.decode('utf-8'))
                 test_name = data.get('test_name')
                 recipient_email = data.get('recipient_email')
-                print(f"Test name from request: {test_name}")
-                print(f"Recipient email from request: {recipient_email}")
                 if not test_name:
                     print("Error: Test name is missing")
                     return JsonResponse({'error': 'Test name is required'}, status=400)
@@ -1399,12 +1371,10 @@ def send_approval_email(request):
                 # Check if test exists and get all test details
                 test = collection.find_one({'test_name': test_name})
                 if not test:
-                    print(f"Test not found: {test_name}")
                     return JsonResponse({'error': 'Test not found'}, status=404)
                 # Convert ObjectId to string for JSON serialization if needed
                 if '_id' in test:
                     test['_id'] = str(test['_id'])
-                print(f"Test found: {test_name}")
             except Exception as mongo_err:
                 print(f"MongoDB connection error: {mongo_err}")
                 return JsonResponse({'error': f'Database error: {str(mongo_err)}'}, status=500)
@@ -1698,9 +1668,6 @@ def b2b_ledger_report(request):
         from_date = request.GET.get('from_date')
         to_date = request.GET.get('to_date')
         b2b_name = request.GET.get('b2b_name')
-
-        print(f"b2b_ledger_report: from={from_date}, to={to_date}, b2b={b2b_name}")
-
         query = {}
         if from_date and to_date:
             try:

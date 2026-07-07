@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from django.core.files.storage import default_storage
 
 from collections import defaultdict
-
+from core.utils import get_employee_name
 
 from ..models import Logistics, Billing
 from ..serializers import LogisticsSerializer, BillingSerializer
@@ -617,7 +617,6 @@ from bson import ObjectId
 import os
 import requests
 from pymongo import MongoClient
-from core.utils import get_employee_name
 from django.http import HttpResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
