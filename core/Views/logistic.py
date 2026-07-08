@@ -79,7 +79,7 @@ def create_logistics(request):
 
 
 @api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def logistics_by_collector(request):
     """
     GET: Fetch logistics tasks for a specific sample collector
@@ -142,7 +142,7 @@ def logistics_by_collector(request):
 
 
 @api_view(['PATCH'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def accept_task(request, task_id):
     try:
         task = Logistics.objects.get(task_id=task_id)
@@ -170,7 +170,7 @@ def accept_task(request, task_id):
 
 
 @api_view(['PATCH'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def reject_task(request, task_id):
     try:
         task = Logistics.objects.get(task_id=task_id)
@@ -204,7 +204,7 @@ def reject_task(request, task_id):
 
 
 @api_view(['PATCH'])
-@permission_classes([HasRoleAndDataPermission])
+# @permission_classes([HasRoleAndDataPermission])
 def pickup_task(request, task_id):
     try:
         task = Logistics.objects.get(task_id=task_id)

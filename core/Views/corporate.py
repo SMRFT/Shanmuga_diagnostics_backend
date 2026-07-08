@@ -698,8 +698,6 @@ def corporate_overall_report(request):
         selected_date = request.GET.get("selected_date")
         employee_id = request.GET.get("employee_id")
 
-        print("Received query parameters:", request.GET)
-
         try:
             if selected_date:
                 selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
@@ -718,7 +716,7 @@ def corporate_overall_report(request):
             "date": {"$gte": from_date, "$lt": to_date}
         }
         sample_records = list(sample_status_collection.find(sample_query))
-        print(f"Found {len(sample_records)} core_sample records")
+
 
         if not sample_records:
             return JsonResponse([], safe=False)
@@ -726,7 +724,6 @@ def corporate_overall_report(request):
         # ── STEP 2: Extract barcodes from sample records ───────────────────────
         barcodes = [r.get("barcode") for r in sample_records if r.get("barcode")]
         barcodes = list(set(barcodes))  # deduplicate
-        print(f"Barcodes from core_sample: {barcodes}")
 
         # Build sample date map and sample status map by barcode
         sample_date_by_barcode = {}
@@ -773,7 +770,6 @@ def corporate_overall_report(request):
             billing_query["employee_id"] = employee_id
 
         billing_records = list(patients_collection.find(billing_query))
-        print(f"Found {len(billing_records)} billing records")
 
         if not billing_records:
             return JsonResponse([], safe=False)
@@ -801,8 +797,6 @@ def corporate_overall_report(request):
             )
             for pd in patient_details:
                 patient_details_map[pd.get("employee_id")] = pd
-
-        print(f"Fetched {len(patient_details_map)} patient detail records")
 
         # ── STEP 5: TestValue records by barcode ───────────────────────────────
         test_value_records = TestValue.objects.filter(
@@ -1560,14 +1554,12 @@ def corporate_approval_report(request):
             sample_query["date"] = {"$lt": to_date}
 
         sample_records = list(sample_status_collection.find(sample_query))
-        print(f"Found {len(sample_records)} core_sample records")
 
         if not sample_records:
             return JsonResponse([], safe=False)
 
         # ── STEP 2: Extract barcodes from sample records ──────────────────────
         barcodes = list(set(r.get("barcode") for r in sample_records if r.get("barcode")))
-        print(f"Barcodes from core_sample: {barcodes}")
 
         # Build sample date map, testdetails map, and valid test count map by barcode
         sample_date_by_barcode = {}
@@ -1632,7 +1624,6 @@ def corporate_approval_report(request):
             billing_query["employee_id"] = employee_id
 
         billing_records = list(patients_collection.find(billing_query))
-        print(f"Found {len(billing_records)} billing records")
 
         if not billing_records:
             return JsonResponse([], safe=False)
@@ -1657,8 +1648,6 @@ def corporate_approval_report(request):
         if employee_ids:
             for pd in franchise_patient_collection.find({"employee_id": {"$in": employee_ids}}):
                 patient_details_map[pd.get("employee_id")] = pd
-
-        print(f"Fetched {len(patient_details_map)} patient detail records")
 
         # Collect all company_ids
         company_ids = list(set(
@@ -2837,7 +2826,6 @@ def get_batch_corporate_health_reports(request):
         return JsonResponse({'error': 'Maximum 100 barcodes allowed per batch'}, status=400)
 
     barcodes = [str(bc) for bc in barcodes]
-    print(f"Processing batch of {len(barcodes)} barcodes")
 
     try:
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))

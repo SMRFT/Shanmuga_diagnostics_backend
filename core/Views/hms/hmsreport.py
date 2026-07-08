@@ -158,9 +158,6 @@ def hms_overall_report(request):
         selected_date = request.GET.get("selected_date")
         patient_id = request.GET.get("patient_id")
 
-        print("Received query parameters:", request.GET)
-        print(f"from_date: {from_date}, to_date: {to_date}, selected_date: {selected_date}, patient_id: {patient_id}")
-
         # ADD THIS HELPER FUNCTION AT THE TOP
         def parse_tat_format(tat_str):
             """Parse TAT format like '2D 3H 45M' and return total seconds"""
@@ -189,30 +186,24 @@ def hms_overall_report(request):
                 selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
                 from_date = selected_date_parsed
                 to_date = selected_date_parsed + timedelta(days=1)
-                print(f"Using selected_date: {selected_date}, parsed from_date: {from_date}, to_date: {to_date}")
             elif from_date and to_date:
                 from_date = datetime.strptime(from_date, "%Y-%m-%d")
                 to_date = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                print(f"Using date range - parsed from_date: {from_date}, to_date: {to_date}")
             else:
-                print("Missing date parameters")
                 return JsonResponse({"error": "Either 'selected_date' or both 'from_date' and 'to_date' are required"}, status=400)
         except ValueError:
-            print("Invalid date format received")
             return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
         # Query Hmsbarcode as the primary source
         barcode_query = {"date__gte": from_date, "date__lt": to_date}
         if patient_id:
             barcode_query["patient_id"] = patient_id
-        print(f"HMS Barcode query: {barcode_query}")
         
         barcode_records = list(Hmsbarcode.objects.filter(**barcode_query).values(
             'billnumber', 'barcode', 'date', 'testdetails',
             'patient_id', 'patientname', 'age', 'age_type', 'gender', 
             'IPOPType', 'ref_doctor', 'ipnumber', 'location_id', 'phone', 'created_date'
         ))
-        print(f"Found {len(barcode_records)} HMS barcode records")
         if barcode_records:
             print("Sample HMS barcode record:", barcode_records[0])
 
@@ -221,26 +212,22 @@ def hms_overall_report(request):
 
         # Fetch status and test data
         barcodes = [record['barcode'] for record in barcode_records if record['barcode']]
-        print(f"Barcodes for querying: {barcodes}")
         
         sample_status_records = Hmssamplestatus.objects.filter(
             barcode__in=barcodes,
             date__range=(make_aware(from_date), make_aware(to_date))
         ).values("barcode", "testdetails")
-        print(f"Fetched {len(sample_status_records)} HMS Sample Status records")
 
         test_value_records = TestValue.objects.filter(
             barcode__in=barcodes,
             date__range=(from_date.date(), to_date.date())
         ).values("barcode", "testdetails", "created_date")
-        print(f"Fetched {len(test_value_records)} TestValue records")
 
         # Fetch MBTestValue records using Django ORM
         mb_test_value_records = MBTestValue.objects.filter(
             barcode__in=barcodes,
             date__range=(make_aware(from_date), make_aware(to_date))
         ).values("barcode", "testdetails", "created_date")
-        print(f"Fetched {len(mb_test_value_records)} MBTestValue records")
 
         # Organize status data
         sample_status_map = {}
@@ -276,8 +263,6 @@ def hms_overall_report(request):
             if created_date > test_value_map[barcode]["created_date"]:
                 test_value_map[barcode]["created_date"] = created_date
 
-        print(f"Processed test value map with {len(test_value_map)} unique barcodes")
-
         # Organize MBTestValue data - COMBINE ALL RECORDS FOR SAME BARCODE
         mb_test_value_map = {}
         for record in mb_test_value_records:
@@ -306,8 +291,6 @@ def hms_overall_report(request):
             # Update to latest created_date
             if created_date and (not mb_test_value_map[barcode]["created_date"] or created_date > mb_test_value_map[barcode]["created_date"]):
                 mb_test_value_map[barcode]["created_date"] = created_date
-
-        print(f"Processed MB test value map with {len(mb_test_value_map)} unique barcodes")
 
         # Format response
         formatted_data = []
@@ -340,7 +323,6 @@ def hms_overall_report(request):
                 try:
                     test_field = json.loads(test_field.strip('"'))
                 except json.JSONDecodeError as e:
-                    print(f"Error parsing test_field for billnumber {billnumber}: {e}")
                     test_field = []
             elif isinstance(test_field, list):
                 test_field = test_field
@@ -411,7 +393,6 @@ def hms_overall_report(request):
             # Combine test values from both sources
             if mb_test_values:
                 all_test_values.extend(mb_test_values)
-                print(f"Added {len(mb_test_values)} MB test values for barcode {barcode}")
                 
                 # Update to latest created_date between both sources
                 if mb_created_date:
@@ -427,8 +408,6 @@ def hms_overall_report(request):
                         valid_test_values.append(test_record)
                         if not test_record.get("approve", False):
                             unapproved_tests.append(test_record)
-
-            print(f"Barcode: {barcode}, Total test records: {len(all_test_values)}, Valid (non-rerun) tests: {len(valid_test_values)}, Unapproved tests: {len(unapproved_tests)}")
 
             # Sample collection status
             all_collected = all(t.get("samplestatus") == "Sample Collected" for t in sample_tests) if sample_tests else False
@@ -668,8 +647,6 @@ def hms_overall_report(request):
                     status = "Dispatched"
                 elif partially_dispatched:
                     status = "Partially Dispatched"
-
-            print(f"Final status for {barcode}: {status}")
            
             # Date formatting
             formatted_date = record["date"].strftime("%Y-%m-%d") if record.get("date") else "N/A"

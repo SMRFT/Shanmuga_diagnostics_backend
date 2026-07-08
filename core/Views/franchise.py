@@ -625,7 +625,6 @@ def franchise_overall_report(request):
         selected_date  = request.GET.get("selected_date")
         patient_id_req = request.GET.get("patient_id")
 
-        print("Received query parameters:", request.GET)
 
         # ── Helpers ───────────────────────────────────────────────────────────
 
@@ -715,7 +714,6 @@ def franchise_overall_report(request):
             query["patient_id"] = patient_id_req
 
         patients = list(patients_collection.find(query))
-        print(f"Found {len(patients)} franchise billing records")
 
         if not patients:
             return JsonResponse([], safe=False)
@@ -759,8 +757,6 @@ def franchise_overall_report(request):
             if parsed:
                 sample_status_map.setdefault(rec_barcode, []).extend(parsed)
 
-        print(f"Fetched {len(sample_status_records)} franchise sample status records")
-
         # ── TestValue records keyed by barcode ────────────────────────────────
 
         test_value_records = TestValue.objects.filter(
@@ -791,8 +787,6 @@ def franchise_overall_report(request):
                 if not existing or created_date > existing:
                     test_value_map[rec_barcode]["created_date"] = created_date
 
-        print(f"Processed test value map with {len(test_value_map)} unique barcodes")
-
         # ── MBTestValue records keyed by barcode ──────────────────────────────
 
         mb_test_value_records = MBTestValue.objects.filter(
@@ -822,8 +816,6 @@ def franchise_overall_report(request):
                 existing = mb_test_value_map[rec_barcode]["created_date"]
                 if not existing or created_date > existing:
                     mb_test_value_map[rec_barcode]["created_date"] = created_date
-
-        print(f"Processed MB test value map with {len(mb_test_value_map)} unique barcodes")
 
         # ── Build response ────────────────────────────────────────────────────
 
@@ -1177,8 +1169,6 @@ def franchise_overall_report(request):
                 if all_dispatched:         status = "Dispatched"
                 elif partially_dispatched: status = "Partially Dispatched"
 
-            print(f"Final status for Patient {pid}: {status}")
-
             # Department statuses
             department_statuses = {}
             if pid and test_list:
@@ -1243,7 +1233,6 @@ def franchise_overall_report(request):
         return JsonResponse(formatted_data, safe=False)
 
     except Exception as e:
-        print("Critical Error:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
 
