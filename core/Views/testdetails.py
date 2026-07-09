@@ -621,7 +621,7 @@ def handle_patch_request(request):
             if k in ('test_id', '_id'):
                 continue
             # Exclude immutable audit fields
-            if k in ('created_at', 'created_by', 'created_by_name'):
+            if k in ('created_at', 'created_by', 'created_byw_name'):
                 continue
             # Exclude last_modified fields (we will set them manually)
             if k in ('last_modified_at', 'last_modified_by', 'last_modified_by_name'):
