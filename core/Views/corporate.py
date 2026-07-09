@@ -1348,6 +1348,7 @@ def corporate_patient_test_details(request):
                         "approve_time":         approve_time,
                         "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
                         "received_time":        sample_status.get("received_time")         if sample_status else None,
+                        "notes":                core_test.get("notes", "") if core_test else "",
                     }
 
                     if billing_info:
@@ -1384,6 +1385,7 @@ def corporate_patient_test_details(request):
                                     "sub_title":       param_def.get("sub_title", ""),
                                     "value_option":    param_def.get("value_option", []),
                                     "comment":         param_comment,
+                                    "notes":           param_def.get("notes", "") or "",
                                 }
                             else:
                                 # Fallback: no core definition found
@@ -1398,6 +1400,7 @@ def corporate_patient_test_details(request):
                                     "sub_title":       param_value.get("sub_title", ""),
                                     "value_option":    [],
                                     "comment":         param_comment,
+                                    "notes":           "",
                                 }
 
                             enriched_parameters.append(enriched_param)

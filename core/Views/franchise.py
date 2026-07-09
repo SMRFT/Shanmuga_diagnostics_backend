@@ -1458,7 +1458,6 @@ def franchise_patient_test_details(request):
                 "lod":                   lod,
                 "labels":                labels,
                 "MRP":                   billing_test.get("MRP", "N/A"),
-                "specimen_type":         specimen_type,
                 "samplestatus":          sample_status.get("samplestatus", "N/A")          if sample_status else "N/A",
                 "samplecollected_time":  sample_status.get("samplecollected_time")          if sample_status else None,
                 "collected_by":          sample_status.get("collected_by", "N/A")           if sample_status else "N/A",
@@ -1468,6 +1467,7 @@ def franchise_patient_test_details(request):
                 "received_by":           sample_status.get("received_by", "N/A")            if sample_status else "N/A",
                 "batch_number":          sample_status.get("batch_number", "N/A")           if sample_status else "N/A",
                 "remarks":               sample_status.get("remarks")                        if sample_status else None,
+                "notes":                 core_test.get("notes", "") if core_test else "",
             }
 
             if test_value_details:
@@ -1519,6 +1519,7 @@ def franchise_patient_test_details(request):
                                 "sub_title":       param_def.get("sub_title", ""),
                                 "value_option":    param_def.get("value_option", []),
                                 "comment":         param_comment,
+                                "notes":           param_def.get("notes", "") or "",
                             }
                         else:
                             # Fallback: no core definition found
@@ -1533,6 +1534,7 @@ def franchise_patient_test_details(request):
                                 "sub_title":       "",
                                 "value_option":    [],
                                 "comment":         param_comment,
+                                "notes":           "",
                             }
 
                         enriched_parameters.append(enriched_param)
