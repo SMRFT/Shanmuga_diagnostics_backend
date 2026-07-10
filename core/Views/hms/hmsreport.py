@@ -896,6 +896,7 @@ def get_hms_patient_test_details(request):
                     "critical_range":      critical_range,
                     "lod":                 lod,
                     "labels":              labels,
+                    "notes":               core_test.get("notes", ""),
                 }
 
                 # ── Parameterised test ────────────────────────────────────────
@@ -928,6 +929,7 @@ def get_hms_patient_test_details(request):
                                 "sub_title":       param_def.get("sub_title", ""),
                                 "value_option":    param_def.get("value_option", []),
                                 "comment":         param_comment,
+                                "notes":           param_def.get("notes", ""),
                             }
                         else:
                             # Fallback: no core definition found
@@ -942,6 +944,7 @@ def get_hms_patient_test_details(request):
                                 "sub_title":       "",
                                 "value_option":    [],
                                 "comment":         param_comment,
+                                "notes":           "",
                             }
 
                         enriched_parameters.append(enriched_param)
