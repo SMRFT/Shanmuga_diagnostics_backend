@@ -1194,7 +1194,6 @@ def get_patient_test_details(request):
                     "dispatch_time":       dispatch_time,
                     "samplecollected_time": samplecollected_time,
                     "received_time":       received_time,
-                    "notes":               core_test.get("notes", "") if core_test else "",
                 }
 
                 # ── Parameterised test ────────────────────────────────────────
@@ -1227,7 +1226,6 @@ def get_patient_test_details(request):
                                 "sub_title":       param_def.get("sub_title", ""),
                                 "value_option":    param_def.get("value_option", []),
                                 "comment":         param_comment,
-                                "notes":           param_def.get("notes", "") or "",
                             }
                         else:
                             # Fallback: no core definition found for this param
@@ -1242,7 +1240,6 @@ def get_patient_test_details(request):
                                 "sub_title":       param_value.get("sub_title", ""),
                                 "value_option":    [],
                                 "comment":         param_comment,
-                                "notes":           "",
                             }
 
                         enriched_parameters.append(enriched_param)
