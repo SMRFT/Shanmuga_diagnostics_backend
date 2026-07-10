@@ -8,6 +8,7 @@ from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 
 
+
 @api_view(["POST"])
 @permission_classes([HasRoleAndDataPermission])
 @csrf_exempt
