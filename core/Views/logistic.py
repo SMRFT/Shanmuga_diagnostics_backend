@@ -8,6 +8,9 @@ from django.db.models import Q, Count, Case, When, IntegerField
 from pymongo import MongoClient
 from datetime import datetime, timedelta
 from django.core.files.storage import default_storage
+from pymongo import MongoClient
+import certifi
+from gridfs import GridFS
 
 from collections import defaultdict
 from core.utils import get_employee_name
@@ -641,7 +644,7 @@ def _as_list(value):
 
 def _gridfs():
     client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
-    db = client["HMS"]
+    db = client["Diagnostics"]
     return client, GridFS(db)
 
 
@@ -1189,3 +1192,208 @@ def get_route_image(request, file_id):
         return Response({"error": str(e)}, status=status.HTTP_404_NOT_FOUND)
     finally:
         client.close()
+
+
+from .dbcollection import profile_collection, B2B_ROLES
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def get_b2b_employees(request):
+    try:
+        employee_id =  request.data.get("auth-user-id")
+        print(f"Fetching B2B employees for employee_id: {employee_id}")
+ 
+        query = {
+            "$or": [
+                {"primaryRole": {"$in": B2B_ROLES}},
+                {"additionalRoles": {"$in": B2B_ROLES}}
+            ]
+        }
+ 
+        projection = {
+            "_id": 0,
+            "employeeId": 1,
+            "employeeName": 1,
+            "primaryRole": 1,
+            "additionalRoles": 1,
+            "hospitalCode": 1
+        }
+ 
+        employees = list(profile_collection.find(query, projection))
+ 
+        return Response(
+            {
+                "status": True,
+                "message": "B2B Employees fetched successfully",
+                "data": employees
+            },
+            status=status.HTTP_200_OK
+        )
+ 
+    except Exception as e:
+        return Response(
+            {
+                "status": False,
+                "message": str(e),
+                "data": []
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+from bson import ObjectId
+from bson.errors import InvalidId
+
+from ..models import Busfare
+from ..serializers import BusfareSerializer
+
+
+
+
+ 
+ 
+@api_view(['GET', 'POST', 'PATCH'])
+@permission_classes([HasRoleAndDataPermission])
+def bus_fare(request):
+    """
+    GET   /bus_fare/                  -> list all bus fare entries
+    GET   /bus_fare/?date=YYYY-MM-DD  -> filter by date (optional)
+    GET   /bus_fare/?collectedby=NAME -> filter by collectedby (optional)
+    POST  /bus_fare/                  -> create a new bus fare entry
+                                          - image field: bustphoto (optional, stored in GridFS)
+                                          Frontend retrieves the image via:
+                                          GET /bus_fare/photo/<file_id>/
+    PATCH /bus_fare/                  -> mark an entry as picked up
+                                          body: { "busfare_id": <id>, "pickedupby": "<employeeId>" }
+    """
+    try:
+        if request.method == 'GET':
+            queryset = Busfare.objects.all().order_by('-date', '-busfare_id')
+
+            date_filter = request.query_params.get('date')
+            if date_filter:
+                queryset = queryset.filter(date=date_filter)
+
+            collectedby_filter = request.query_params.get('collectedby')
+            if collectedby_filter:
+                queryset = queryset.filter(collectedby=collectedby_filter)
+
+            serializer = BusfareSerializer(queryset, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        if request.method == 'POST':
+            # NOTE: for multipart requests, DRF's request.data is a QueryDict
+            # that merges POST fields AND uploaded files together — so a plain
+            # request.data.copy() triggers QueryDict.__deepcopy__(), which
+            # tries to pickle every value, including the raw uploaded file
+            # object (wrapping an unpicklable _io.BufferedRandom/_io.BytesIO).
+            # That crash mid-deepcopy is also what leaves Django's temp file
+            # cleanup in a bad state (the noisy but harmless
+            # "TemporaryFile object has no attribute 'close_called'" error
+            # you see logged right after).
+            #
+            # Fix: exclude file keys before copying, since the file itself is
+            # already read out separately below via request.FILES.
+            file_keys = set(request.FILES.keys())
+            data = {key: value for key, value in request.data.items() if key not in file_keys}
+
+            employee_id = request.data.get("auth-user-id")
+            data['created_by'] = employee_id
+            data['created_date'] = timezone.now()
+
+            # Defensive cleanup: multipart/form-data requests can hand us
+            # amount as something other than a clean decimal string (stray
+            # whitespace, thousands separators, etc). Normalize it so
+            # DecimalField doesn't choke on it.
+            raw_amount = data.get('amount')
+            if raw_amount is not None:
+                data['amount'] = str(raw_amount).strip().replace(',', '')
+
+            # ── Upload photo to GridFS (if provided) ──────────────────────
+            uploaded_file = request.FILES.get('bustphoto')
+            print(f"bus_fare POST request.FILES keys={list(request.FILES.keys())} bustphoto={uploaded_file!r}")
+            if uploaded_file:
+                client, fs = _gridfs()
+                try:
+                    file_id = fs.put(
+                        uploaded_file.read(),
+                        filename=uploaded_file.name,
+                        content_type=uploaded_file.content_type,
+                    )
+                    data['bustphoto'] = str(file_id)  # ObjectId -> plain string
+                    print(f"bus_fare POST photo stored in GridFS, file_id={file_id}")
+                except Exception as upload_err:
+                    print(f"bus_fare POST photo upload FAILED: {upload_err}")
+                    return Response(
+                        {'error': f'Image upload failed: {upload_err}'},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+                finally:
+                    client.close()
+            else:
+                print("bus_fare POST no bustphoto file present in request.FILES")
+                data.pop('bustphoto', None)
+
+            serializer = BusfareSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # PATCH - mark a bus fare entry as picked up
+        busfare_id = request.data.get('busfare_id')
+        if not busfare_id:
+            return Response(
+                {'error': 'busfare_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        employee_id = request.data.get("auth-user-id")
+
+        updated_count = Busfare.objects.filter(busfare_id=busfare_id).update(
+            pickedupby=request.data.get('pickedupby'),
+            lastmodified_by=employee_id,
+            lastmodified_date=timezone.now(),
+        )
+
+        if not updated_count:
+            return Response(
+                {'error': f'Busfare {busfare_id} not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        busfare = Busfare.objects.get(busfare_id=busfare_id)
+        serializer = BusfareSerializer(busfare)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+ 
+ 
+@api_view(['GET'])
+def bus_fare_photo(request):
+    """
+    GET /bus_fare_photo/?file_id=<file_id> -> streams a GridFS-stored
+    bus fare photo back so the frontend can display it directly in an
+    <img src="..."> tag.
+    """
+    file_id = request.query_params.get('file_id')
+    if not file_id:
+        return Response({'error': 'file_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+ 
+    try:
+        client, fs = _gridfs()
+        try:
+            grid_file = fs.get(ObjectId(file_id))
+            content = grid_file.read()
+            content_type = grid_file.content_type or 'image/jpeg'
+        finally:
+            client.close()
+ 
+        return HttpResponse(content, content_type=content_type)
+ 
+    except (InvalidId, GridFS.NoFile):
+        return Response({'error': 'Photo not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

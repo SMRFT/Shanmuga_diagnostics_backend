@@ -168,3 +168,10 @@ class B2BPackageSerializer(serializers.ModelSerializer):
     class Meta:
         model = B2BPackage
         fields = "__all__"
+
+from .models import Busfare
+class BusfareSerializer(serializers.ModelSerializer):
+    busfare_id = serializers.IntegerField(read_only=True)
+    class Meta:
+        model = Busfare
+        fields = "__all__"

@@ -401,3 +401,30 @@ class B2BPackage(AuditModel):
 
     def __str__(self):
         return self.packageName
+    
+
+    
+from django.db import models
+from django.db import transaction
+
+class Busfare(AuditModel):
+    busfare_id = models.IntegerField(primary_key=True)
+
+    date = models.DateField()
+    location = models.CharField(max_length=255)
+    amount = models.DecimalField(max_digits=10, decimal_places=2)
+    collectedby = models.CharField(max_length=255)
+    pickedupby = models.CharField(max_length=255, blank=True, null=True)
+    pickuptime = models.TimeField()
+    busreachedtime = models.TimeField()
+    bustphoto = models.CharField(max_length=255, blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        if not self.busfare_id:
+            with transaction.atomic():
+                last = Busfare.objects.select_for_update().order_by('-busfare_id').first()
+                self.busfare_id = (last.busfare_id + 1) if last else 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Busfare {self.busfare_id} - {self.amount}"

@@ -95,6 +95,9 @@ urlpatterns = [
     path('route-analysis/today-status/', logistic.get_todays_route_status, name='get-todays-route-status'),
     path('route-analysis/admin-report/', logistic.route_analysis_admin_report, name='route-analysis-admin-report'),
 
+    path("bus_fare/", logistic.bus_fare, name="bus_fare"),
+    path("bus_fare_photo/", logistic.bus_fare_photo, name="bus_fare_photo"),
+    path("get_b2b_employees/", logistic.get_b2b_employees, name="get_b2b_employees"),
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
@@ -266,5 +269,8 @@ urlpatterns = [
     path('preetham_hospital_ledger/', preetham_hospital_report.preetham_hospital_ledger, name='preetham_hospital_ledger'),
     
     path("test-summary/", dashboard.test_summary, name="test-summary"),
+
+   
+
 ]
 
