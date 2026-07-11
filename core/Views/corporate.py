@@ -1342,6 +1342,7 @@ def corporate_patient_test_details(request):
                         "approve_time":         approve_time,
                         "samplecollected_time": sample_status.get("samplecollected_time") if sample_status else None,
                         "received_time":        sample_status.get("received_time")         if sample_status else None,
+                        "notes":                core_test.get("notes", "") if core_test else "",
                     }
 
                     if billing_info:
@@ -1378,6 +1379,7 @@ def corporate_patient_test_details(request):
                                     "sub_title":       param_def.get("sub_title", ""),
                                     "value_option":    param_def.get("value_option", []),
                                     "comment":         param_comment,
+                                    "notes":           param_def.get("notes", "") or "",
                                 }
                             else:
                                 # Fallback: no core definition found
@@ -1392,6 +1394,7 @@ def corporate_patient_test_details(request):
                                     "sub_title":       param_value.get("sub_title", ""),
                                     "value_option":    [],
                                     "comment":         param_comment,
+                                    "notes":           "",
                                 }
 
                             enriched_parameters.append(enriched_param)
@@ -2262,6 +2265,11 @@ def corporate_health_report(request):
                         comment = test_detail.get("comment", "")
                         if comment:
                             test_response["comment"] = comment
+                        notes = test_detail.get("notes", "")
+                        if not notes and core_test:
+                            notes = core_test.get("notes", "")
+                        if notes:
+                            test_response["notes"] = notes
                         if sample_status:
                             if sample_status.get("samplecollected_time"):
                                 test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
@@ -2293,6 +2301,11 @@ def corporate_health_report(request):
                                     processed_param["specimen_type"]   = specimen_type
                                     processed_param["reference_range"] = ref_range   # gender-resolved
                                     processed_param["method"]          = param_def.get("method", "")
+                                    param_notes = param.get("notes", "")
+                                    if not param_notes and param_def:
+                                        param_notes = param_def.get("notes", "")
+                                    if param_notes:
+                                        processed_param["notes"] = param_notes
                                     if param_def.get("sub_title"):
                                         processed_param["sub_title"] = param_def.get("sub_title")
                                     if param_comment:
@@ -2311,6 +2324,8 @@ def corporate_health_report(request):
                                         processed_param["reference_range"] = param.get("reference_range")
                                     if param.get("method"):
                                         processed_param["method"]          = param.get("method")
+                                    if param.get("notes"):
+                                        processed_param["notes"]           = param.get("notes")
                                     if param.get("sub_title"):
                                         processed_param["sub_title"]       = param.get("sub_title")
                                     if param_comment:
@@ -3192,6 +3207,11 @@ def get_batch_corporate_health_reports(request):
                                 comment = test_detail.get("comment", "")
                                 if comment:
                                     test_response["comment"] = comment
+                                notes = test_detail.get("notes", "")
+                                if not notes and core_test:
+                                    notes = core_test.get("notes", "")
+                                if notes:
+                                    test_response["notes"] = notes
                                 if sample_status:
                                     if sample_status.get("samplecollected_time"):
                                         test_response["samplecollected_time"] = sample_status.get("samplecollected_time")
@@ -3223,6 +3243,11 @@ def get_batch_corporate_health_reports(request):
                                             processed_param["specimen_type"]   = specimen_type
                                             processed_param["reference_range"] = ref_range   # gender-resolved
                                             processed_param["method"]          = param_def.get("method", "")
+                                            param_notes = param.get("notes", "")
+                                            if not param_notes and param_def:
+                                                param_notes = param_def.get("notes", "")
+                                            if param_notes:
+                                                processed_param["notes"] = param_notes
                                             if param_def.get("sub_title"):
                                                 processed_param["sub_title"] = param_def.get("sub_title")
                                             if param_comment:
@@ -3241,6 +3266,8 @@ def get_batch_corporate_health_reports(request):
                                                 processed_param["reference_range"] = param.get("reference_range")
                                             if param.get("method"):
                                                 processed_param["method"]          = param.get("method")
+                                            if param.get("notes"):
+                                                processed_param["notes"]           = param.get("notes")
                                             if param.get("sub_title"):
                                                 processed_param["sub_title"]       = param.get("sub_title")
                                             if param_comment:
