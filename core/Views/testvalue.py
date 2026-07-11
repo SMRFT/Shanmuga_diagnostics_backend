@@ -1093,6 +1093,7 @@ def process_test_data(
                     "received_date":     received_date,
                     "sub_title":         None,
                     "value_option":      test_detail.get("value_option", []),
+                    "comment_options":   test_detail.get("comment_options", []),
                     "specimen_options":  test_detail.get("specimen_options", []),
                     "interpretation":    test_detail.get("interpretation", ""),
                     "critical_range":    test_detail.get("critical_range", ""),
@@ -1245,6 +1246,7 @@ def process_test_data(
                         "received_date":     received_date,
                         "sub_title":         param.get("sub_title"),
                         "value_option":      param.get("value_option"),
+                        "comment_options":   test_detail.get("comment_options", []),
                         "specimen_options":  test_detail.get("specimen_options", []),
                         "interpretation":    test_detail.get("interpretation", ""),
                         "critical_range":    test_detail.get("critical_range", ""),
@@ -1282,6 +1284,7 @@ def process_test_data(
                 "received_date":     None,
                 "sub_title":         None,
                 "value_option":      None,
+                "comment_options":   [],
             })
 
     return {"test_data": final_test_data, "processed_records": processed_records}
