@@ -1200,50 +1200,7 @@ def get_route_image(request, file_id):
 
 
 
-@api_view(['GET'])
-@csrf_exempt
-@permission_classes([HasRoleAndDataPermission])
-def get_b2b_employees(request):
-    try:
-        employee_id =  request.data.get("auth-user-id")
-        print(f"Fetching B2B employees for employee_id: {employee_id}")
- 
-        query = {
-            "$or": [
-                {"primaryRole": {"$in": B2B_ROLES}},
-                {"additionalRoles": {"$in": B2B_ROLES}}
-            ]
-        }
- 
-        projection = {
-            "_id": 0,
-            "employeeId": 1,
-            "employeeName": 1,
-            "primaryRole": 1,
-            "additionalRoles": 1,
-            "hospitalCode": 1
-        }
- 
-        employees = list(profile_collection.find(query, projection))
- 
-        return Response(
-            {
-                "status": True,
-                "message": "B2B Employees fetched successfully",
-                "data": employees
-            },
-            status=status.HTTP_200_OK
-        )
- 
-    except Exception as e:
-        return Response(
-            {
-                "status": False,
-                "message": str(e),
-                "data": []
-            },
-            status=status.HTTP_500_INTERNAL_SERVER_ERROR
-        )
+
 
 
 
