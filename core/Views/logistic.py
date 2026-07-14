@@ -6,6 +6,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.db.models import Q, Count, Case, When, IntegerField
 from pymongo import MongoClient
+import certifi
+from gridfs import GridFS
 from datetime import datetime, timedelta
 from django.core.files.storage import default_storage
 from pymongo import MongoClient
