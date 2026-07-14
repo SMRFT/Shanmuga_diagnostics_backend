@@ -1,4 +1,6 @@
 import json
+import os
+from pymongo import MongoClient
 from django.db.models import Sum
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -61,6 +63,22 @@ def test_summary(request):
     patients = Patient.objects.filter(patient_id__in=patient_ids).values('patient_id', 'gender')
     patient_genders = {p['patient_id']: str(p['gender']).lower() for p in patients if p.get('gender')}
 
+    # Fetch valid test mappings from MongoDB
+    try:
+        mongo_client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+        core_collection = mongo_client.Diagnostics.core_testdetails
+        valid_tests = {}
+        for t in core_collection.find({}, {"test_id": 1, "test_name": 1, "is_servicecharge": 1}):
+            # Skip if 'is_servicecharge' field is present (regardless of true/false)
+            if "is_servicecharge" in t:
+                continue
+            tid = t.get("test_id")
+            if tid:
+                valid_tests[str(tid)] = t.get("test_name")
+    except Exception as e:
+        print(f"Error fetching core_testdetails: {e}")
+        valid_tests = {}
+
     # --- Process each bill ---
     for bill in bills:
         raw_data = bill.testdetails
@@ -85,7 +103,19 @@ def test_summary(request):
 
         # Count tests
         for test in test_list:
-            name = test.get("test_name") or test.get("testname")
+            # Skip if 'is_servicecharge' field is present in billing testdetails
+            if "is_servicecharge" in test:
+                continue
+
+            test_id = test.get("test_id") or test.get("testid")
+            if not test_id:
+                continue
+                
+            test_id_str = str(test_id)
+            if test_id_str not in valid_tests:
+                continue
+                
+            name = valid_tests[test_id_str]
             amount = float(test.get("MRP", test.get("amount", 0)))
             if not name:
                 continue
