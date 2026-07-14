@@ -403,7 +403,7 @@ class B2BPackage(AuditModel):
         return self.packageName
     
 
-    
+
 from django.db import models
 from django.db import transaction
 
@@ -428,3 +428,35 @@ class Busfare(AuditModel):
 
     def __str__(self):
         return f"Busfare {self.busfare_id} - {self.amount}"
+
+
+
+from django.db import models
+
+class CustomerComplaint(AuditModel):
+    complaint_id = models.IntegerField(primary_key=True)
+
+    labcode  = models.CharField(max_length=255)
+    issuetype = models.CharField(max_length=255)
+    comments = models.TextField()
+
+    assignedby = models.CharField(max_length=255)
+
+    completion_comments = models.TextField(blank=True, null=True)
+
+    status = models.CharField(max_length=20, default="pending")
+
+   
+   
+
+    def save(self, *args, **kwargs):
+        if not self.complaint_id:
+            last = CustomerComplaint.objects.order_by('-complaint_id').first()
+            if last:
+                self.complaint_id = last.complaint_id + 1
+            else:
+                self.complaint_id = 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.labname} - {self.status}"

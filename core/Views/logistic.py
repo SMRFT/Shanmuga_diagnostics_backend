@@ -15,8 +15,11 @@ from gridfs import GridFS
 from collections import defaultdict
 from core.utils import get_employee_name
 
-from ..models import Logistics, Billing
-from ..serializers import LogisticsSerializer, BillingSerializer
+from ..models import Logistics, Billing, CustomerComplaint
+from ..serializers import LogisticsSerializer, BillingSerializer,CustomerComplaintSerializer
+
+
+from .dbcollection import profile_collection, B2B_ROLES, B2B_LAB_Roles, BIO_CHESMISTRY_ROLES
 
 #auth
 from rest_framework.permissions import IsAuthenticated
@@ -1194,7 +1197,6 @@ def get_route_image(request, file_id):
         client.close()
 
 
-from .dbcollection import profile_collection, B2B_ROLES
 
 @api_view(['GET'])
 @csrf_exempt
@@ -1241,6 +1243,8 @@ def get_b2b_employees(request):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
+
+
 from bson import ObjectId
 from bson.errors import InvalidId
 
@@ -1256,9 +1260,13 @@ from ..serializers import BusfareSerializer
 @permission_classes([HasRoleAndDataPermission])
 def bus_fare(request):
     """
-    GET   /bus_fare/                  -> list all bus fare entries
-    GET   /bus_fare/?date=YYYY-MM-DD  -> filter by date (optional)
-    GET   /bus_fare/?collectedby=NAME -> filter by collectedby (optional)
+    GET   /bus_fare/                                -> list all bus fare entries
+    GET   /bus_fare/?date=YYYY-MM-DD                 -> filter by exact date (optional)
+    GET   /bus_fare/?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
+                                                      -> filter by date range (optional)
+                                                         (from_date alone = date >= from_date,
+                                                          to_date alone   = date <= to_date)
+    GET   /bus_fare/?collectedby=NAME                -> filter by collectedby (optional)
     POST  /bus_fare/                  -> create a new bus fare entry
                                           - image field: bustphoto (optional, stored in GridFS)
                                           Frontend retrieves the image via:
@@ -1273,6 +1281,18 @@ def bus_fare(request):
             date_filter = request.query_params.get('date')
             if date_filter:
                 queryset = queryset.filter(date=date_filter)
+
+            # Date range filter — used by the table's From/To date picker.
+            # Independent of the exact `date` filter above so either can be
+            # used on its own without interfering with the other.
+            from_date = request.query_params.get('from_date')
+            to_date = request.query_params.get('to_date')
+            if from_date and to_date:
+                queryset = queryset.filter(date__gte=from_date, date__lte=to_date)
+            elif from_date:
+                queryset = queryset.filter(date__gte=from_date)
+            elif to_date:
+                queryset = queryset.filter(date__lte=to_date)
 
             collectedby_filter = request.query_params.get('collectedby')
             if collectedby_filter:
@@ -1370,6 +1390,11 @@ def bus_fare(request):
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
  
+
+
+
+
+
  
 @api_view(['GET'])
 def bus_fare_photo(request):
@@ -1395,5 +1420,247 @@ def bus_fare_photo(request):
  
     except (InvalidId, GridFS.NoFile):
         return Response({'error': 'Photo not found'}, status=status.HTTP_404_NOT_FOUND)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+
+
+
+
+from .dbcollection import profile_collection, B2B_ROLES, B2B_LAB_Roles
+
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def get_b2b_employees(request):
+    try:
+        employee_id = request.data.get("auth-user-id")
+        print(f"Fetching B2B employees for employee_id: {employee_id}")
+
+        query = {
+            "$or": [
+                {"primaryRole": {"$in": B2B_ROLES}},
+                {"additionalRoles": {"$in": B2B_ROLES}}
+            ]
+        }
+
+        projection = {
+            "_id": 0,
+            "employeeId": 1,
+            "employeeName": 1,
+            "primaryRole": 1,
+            "additionalRoles": 1,
+            "hospitalCode": 1
+        }
+
+        employees = list(profile_collection.find(query, projection))
+
+        return Response(
+            {
+                "status": True,
+                "message": "B2B Employees fetched successfully",
+                "data": employees
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {
+                "status": False,
+                "message": str(e),
+                "data": []
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+
+
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def get_b2b_lab_employees(request):
+    try:
+        employee_id = request.data.get("auth-user-id")
+        print(f"Fetching B2B Lab employees for employee_id: {employee_id}")
+
+        query = {
+            "$or": [
+                {"primaryRole": {"$in": B2B_LAB_Roles}},
+                {"additionalRoles": {"$in": B2B_LAB_Roles}},
+                {"designation": {"$in": BIO_CHESMISTRY_ROLES}}
+            ]
+        }
+
+        projection = {
+            "_id": 0,
+            "employeeId": 1,
+            "employeeName": 1,
+            "primaryRole": 1,
+            "additionalRoles": 1,
+            "designation": 1,
+            "hospitalCode": 1
+        }
+
+        employees = list(profile_collection.find(query, projection))
+
+        return Response(
+            {
+                "status": True,
+                "message": "B2B Lab Employees fetched successfully",
+                "data": employees
+            },
+            status=status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return Response(
+            {
+                "status": False,
+                "message": str(e),
+                "data": []
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+
+
+
+from datetime import datetime, time, timedelta
+ 
+from django.utils import timezone
+
+
+@api_view(['GET', 'POST', 'PATCH'])
+@csrf_exempt
+@permission_classes([HasRoleAndDataPermission])
+def customer_complaints(request):
+    """
+    GET   /customer_complaints/                                -> list all complaints, ordered by complaint_id (ascending)
+    GET   /customer_complaints/?status=pending                 -> filter by status (optional)
+    GET   /customer_complaints/?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
+                                                                 -> filter by created_date range (optional)
+                                                                    (from_date alone = created_date >= start of from_date,
+                                                                     to_date alone   = created_date <  start of the day AFTER to_date)
+                                                                    NOTE: uses plain __gte/__lt on created_date rather than
+                                                                    the __date lookup, because djongo/Mongo's DB backend
+                                                                    doesn't implement datetime_cast_date_sql() (that's a
+                                                                    SQL-only cast) — so __date__gte/__date__lte raise
+                                                                    "subclasses of BaseDatabaseOperations may require a
+                                                                    datetime_cast_date_sql() method." on Mongo.
+    POST  /customer_complaints/                                 -> create a new complaint
+                                                                    body: { labcode, issuetype, comments, assignedby }
+                                                                    status is always forced to 'pending' on create;
+                                                                    completion_comments starts out null.
+    PATCH /customer_complaints/                                 -> mark a complaint completed
+                                                                    body: { complaint_id, completion_comments }
+                                                                    sets status -> 'completed'
+    """
+    try:
+        if request.method == 'GET':
+            # Ascending by complaint_id so the table reads ID 1, 2, 3... in order.
+            queryset = CustomerComplaint.objects.all().order_by('complaint_id')
+
+            status_filter = request.query_params.get('status')
+            if status_filter:
+                queryset = queryset.filter(status=status_filter)
+
+            # Date range filter — used by the table's From/To date picker.
+            # Built as explicit datetime bounds (start of from_date, start
+            # of the day AFTER to_date) so we only ever need __gte/__lt on
+            # the raw created_date field — Mongo-safe, no SQL date casting.
+            from_date = request.query_params.get('from_date')
+            to_date = request.query_params.get('to_date')
+
+            if from_date:
+                try:
+                    from_day = datetime.strptime(from_date, '%Y-%m-%d').date()
+                    start_dt = timezone.make_aware(datetime.combine(from_day, time.min))
+                    queryset = queryset.filter(created_date__gte=start_dt)
+                except ValueError:
+                    return Response(
+                        {'error': 'from_date must be in YYYY-MM-DD format'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            if to_date:
+                try:
+                    to_day = datetime.strptime(to_date, '%Y-%m-%d').date()
+                    end_dt = timezone.make_aware(datetime.combine(to_day + timedelta(days=1), time.min))
+                    queryset = queryset.filter(created_date__lt=end_dt)
+                except ValueError:
+                    return Response(
+                        {'error': 'to_date must be in YYYY-MM-DD format'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            serializer = CustomerComplaintSerializer(queryset, many=True)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        if request.method == 'POST':
+            data = request.data.copy()
+
+            employee_id = request.data.get("auth-user-id")
+
+            required_fields = ['labcode', 'issuetype', 'comments', 'assignedby']
+            missing = [f for f in required_fields if not data.get(f)]
+            if missing:
+                return Response(
+                    {'error': f"Missing required field(s): {', '.join(missing)}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Every new complaint starts pending with no completion comments,
+            # regardless of what (if anything) the client sent for these.
+            data['status'] = 'pending'
+            data['completion_comments'] = None
+            data['created_by'] = employee_id
+
+            serializer = CustomerComplaintSerializer(data=data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # PATCH - mark a complaint as completed, with mandatory comments
+        complaint_id = request.data.get('complaint_id')
+        completion_comments = request.data.get('completion_comments')
+
+        if not complaint_id:
+            return Response(
+                {'error': 'complaint_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not completion_comments:
+            return Response(
+                {'error': 'completion_comments is required to mark a complaint as completed'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        employee_id = request.data.get("auth-user-id")
+
+        updated_count = CustomerComplaint.objects.filter(complaint_id=complaint_id).update(
+            completion_comments=completion_comments,
+            status='completed',
+            lastmodified_by=employee_id,
+            lastmodified_date=timezone.now(),
+        )
+
+        if not updated_count:
+            return Response(
+                {'error': f'Complaint {complaint_id} not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        complaint = CustomerComplaint.objects.get(complaint_id=complaint_id)
+        serializer = CustomerComplaintSerializer(complaint)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

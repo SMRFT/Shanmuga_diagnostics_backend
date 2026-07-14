@@ -28,7 +28,7 @@ urlpatterns = [
     path('approve_test/', testdetails.approve_test, name='approve_test'),
     path('test_details_test/', testdetails.handle_patch_request, name='get_test_details'),
     path('clinical_name/last/', clinicalname.get_last_referrer_code, name='get_last_referrer_code'),
-    path('clinical_name/', clinicalname.clinical_name, name='create_organisation'),
+    path('clinical_name/', clinicalname.clinical_name, name='clinical_name'),
     path('sample-collector/', form.sample_collector, name='create_sample_collector'),
     path('sales_person/', clinicalname.sales_person, name='sales_person'),
     path('dashboard-data/', patients.dashboard_data, name='sales_person'),
@@ -98,6 +98,9 @@ urlpatterns = [
     path("bus_fare/", logistic.bus_fare, name="bus_fare"),
     path("bus_fare_photo/", logistic.bus_fare_photo, name="bus_fare_photo"),
     path("get_b2b_employees/", logistic.get_b2b_employees, name="get_b2b_employees"),
+    path("get_b2b_lab_employees/", logistic.get_b2b_lab_employees, name="get_b2b_lab_employees"),
+    path("customer_complaints/", logistic.customer_complaints, name="customer_complaints"),
+
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),

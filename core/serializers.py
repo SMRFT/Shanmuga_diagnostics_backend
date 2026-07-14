@@ -175,3 +175,13 @@ class BusfareSerializer(serializers.ModelSerializer):
     class Meta:
         model = Busfare
         fields = "__all__"
+
+
+
+
+from .models import CustomerComplaint
+class CustomerComplaintSerializer(serializers.ModelSerializer):
+    complaint_id= serializers.IntegerField(read_only=True)
+    class Meta:
+        model = CustomerComplaint
+        fields = "__all__"
