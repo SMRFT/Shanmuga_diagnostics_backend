@@ -1230,8 +1230,14 @@ def bus_fare(request):
                                           - image field: bustphoto (optional, stored in GridFS)
                                           Frontend retrieves the image via:
                                           GET /bus_fare/photo/<file_id>/
+                                          Response shape: { "message": str, "data": {...} }
+                                          on success (201), or
+                                          { "message": str, "errors": {...} } on
+                                          validation failure (400).
     PATCH /bus_fare/                  -> mark an entry as picked up
                                           body: { "busfare_id": <id>, "pickedupby": "<employeeId>" }
+                                          Response shape: { "message": str, "data": {...} }
+                                          on success (200).
     """
     try:
         if request.method == 'GET':
@@ -1304,7 +1310,7 @@ def bus_fare(request):
                 except Exception as upload_err:
                     print(f"bus_fare POST photo upload FAILED: {upload_err}")
                     return Response(
-                        {'error': f'Image upload failed: {upload_err}'},
+                        {'message': f'Image upload failed: {upload_err}'},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
                     )
                 finally:
@@ -1316,39 +1322,66 @@ def bus_fare(request):
             serializer = BusfareSerializer(data=data)
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                return Response(
+                    {
+                        'message': 'Bus fare entry saved successfully.',
+                        'data': serializer.data,
+                    },
+                    status=status.HTTP_201_CREATED
+                )
 
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    'message': 'Failed to save bus fare entry. Please check the highlighted fields.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # PATCH - mark a bus fare entry as picked up
         busfare_id = request.data.get('busfare_id')
         if not busfare_id:
             return Response(
-                {'error': 'busfare_id is required'},
+                {'message': 'busfare_id is required to update an entry.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        pickedupby = request.data.get('pickedupby')
+        if not pickedupby:
+            return Response(
+                {'message': 'pickedupby is required to mark this entry as picked up.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         employee_id = request.data.get("auth-user-id")
 
         updated_count = Busfare.objects.filter(busfare_id=busfare_id).update(
-            pickedupby=request.data.get('pickedupby'),
+            pickedupby=pickedupby,
             lastmodified_by=employee_id,
             lastmodified_date=timezone.now(),
         )
 
         if not updated_count:
             return Response(
-                {'error': f'Busfare {busfare_id} not found'},
+                {'message': f'No bus fare entry found with busfare_id {busfare_id}. It may have already been removed.'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
         busfare = Busfare.objects.get(busfare_id=busfare_id)
         serializer = BusfareSerializer(busfare)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(
+            {
+                'message': 'Pickup details updated successfully.',
+                'data': serializer.data,
+            },
+            status=status.HTTP_200_OK
+        )
 
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
- 
+        return Response(
+            {'message': f'Something went wrong: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 
