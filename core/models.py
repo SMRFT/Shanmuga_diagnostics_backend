@@ -1,6 +1,8 @@
 from django.db import models
-from bson import ObjectId  # Import ObjectId from bson
+from bson import ObjectId  
 from django.utils import timezone
+import json
+from django.db.models import Max
 
 
 class AuditModel(models.Model):
@@ -435,20 +437,14 @@ from django.db import models
 
 class CustomerComplaint(AuditModel):
     complaint_id = models.IntegerField(primary_key=True)
-
+    patient_id = models.CharField(max_length=255,blank=True, null=True)
     labcode  = models.CharField(max_length=255)
     issuetype = models.CharField(max_length=255)
     comments = models.TextField()
-
     assignedby = models.CharField(max_length=255)
-
     completion_comments = models.TextField(blank=True, null=True)
-
-    status = models.CharField(max_length=20, default="pending")
-
+    status = models.CharField(max_length=20, default="pending") 
    
-   
-
     def save(self, *args, **kwargs):
         if not self.complaint_id:
             last = CustomerComplaint.objects.order_by('-complaint_id').first()
@@ -460,3 +456,49 @@ class CustomerComplaint(AuditModel):
 
     def __str__(self):
         return f"{self.labname} - {self.status}"
+    
+
+
+class RawJSONField(models.JSONField):
+    """
+    Django's JSONField always runs json.dumps() in get_prep_value(),
+    which djongo then persists as a plain string instead of a native
+    BSON array/document. This override skips that step so lists/dicts
+    are stored natively in Mongo, and defensively parses back to
+    Python on read in case any existing rows were saved as strings.
+    """
+    def get_prep_value(self, value):
+        return value
+ 
+    def from_db_value(self, value, expression, connection):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (TypeError, ValueError):
+                return value
+        return value
+ 
+ 
+class SalesPlan(AuditModel):
+ 
+    sales_plan_id = models.IntegerField(primary_key=True)
+    employee_id = models.CharField(max_length=100)
+    category = models.CharField(max_length=100)
+    month = models.IntegerField()
+    year = models.IntegerField()
+    date = models.DateField()
+    entries = RawJSONField(default=list, blank=True)
+   
+ 
+    def save(self, *args, **kwargs):
+        if not self.sales_plan_id:
+            last_id = SalesPlan.objects.aggregate(
+                Max('sales_plan_id')
+            )['sales_plan_id__max']
+ 
+            if last_id:
+                self.sales_plan_id = last_id + 1
+            else:
+                self.sales_plan_id = 1
+ 
+        super().save(*args, **kwargs)

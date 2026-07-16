@@ -3,8 +3,8 @@ from bson.objectid import ObjectId
 import gridfs
 from rest_framework.response import Response
 from rest_framework import status
-from ..models import SalesVisitLog,Billing,Patient,ClinicalName
-from ..serializers import SalesVisitLogSerializer, HospitalLabSerializer,PatientSerializer,BillingSerializer,ClinicalNameSerializer
+from ..models import SalesVisitLog,Billing,Patient,ClinicalName,SalesPlan
+from ..serializers import SalesVisitLogSerializer, HospitalLabSerializer,PatientSerializer,BillingSerializer,ClinicalNameSerializer,SalesPlanSerializer
 from django.db.models import Max
 import re
 from django.utils import timezone
@@ -13,6 +13,7 @@ from pyauth.auth import HasRoleAndDataPermission
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime
 import os
+from datetime import date as date_cls
 
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
@@ -281,79 +282,145 @@ def Adminview_salesexecutive_report(request):
 
 
 from datetime import datetime, timedelta
-from django.http import JsonResponse
-from django.utils.timezone import make_aware, is_naive
-
 import json
+from calendar import monthrange
+from django.http import JsonResponse
+from django.utils import timezone
+from django.utils.timezone import make_aware
+from django.db.models import Q
+from rest_framework.decorators import api_view, permission_classes
+
+def _to_float(value):
+    """netAmount is declared as CharField but Mongo may hand back a raw
+    number or a numeric string depending on how the doc was inserted."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+ 
+ 
+def _make_aware_if_needed(dt):
+    if settings.USE_TZ and timezone.is_naive(dt):
+        return timezone.make_aware(dt)
+    return dt
+ 
+ 
+def _summarize(bills):
+    """Aggregate a list of Billing instances into the stat block the
+    frontend renders. Cancelled/refunded line items are excluded from
+    totalTests and testCounts since they weren't actually delivered."""
+    patient_ids = set()
+    total_amount = 0.0
+    total_tests = 0
+    test_counts = {}
+ 
+    for bill in bills:
+        if bill.patient_id:
+            patient_ids.add(bill.patient_id)
+ 
+        total_amount += _to_float(bill.netAmount)
+ 
+        for test in (bill.testdetails or []):
+            if test.get('refund') or test.get('cancellation'):
+                continue
+            total_tests += 1
+            name = test.get('testname') or 'Unknown'
+            test_counts[name] = test_counts.get(name, 0) + 1
+ 
+    return {
+        'totalPatients': len(patient_ids),
+        'totalAmount': round(total_amount, 2),
+        'totalTests': total_tests,
+        'testCounts': test_counts,
+    }
+ 
+ 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def salesdashboard(request):
-    sales_mapping = request.GET.get("salesMapping")
-    date_str = request.GET.get("date")
-    month_str = request.GET.get("month")
-
-    if not sales_mapping:
-        return JsonResponse({"error": "Missing salesMapping parameter"}, status=400)
-
-    try:
-        if date_str:  # Daily filter
-            start_date = datetime.strptime(date_str, "%Y-%m-%d")
-            if timezone.is_naive(start_date):
-                start_date = make_aware(start_date)
-            end_date = start_date + timedelta(days=1)
-
-        elif month_str:  # Monthly filter
-            start_date = datetime.strptime(month_str, "%Y-%m")
-            if timezone.is_naive(start_date):
-                start_date = make_aware(start_date)
-            # Calculate first day of next month
-            next_month = (start_date.replace(day=1) + timedelta(days=32)).replace(day=1)
-            if timezone.is_naive(next_month):
-                next_month = make_aware(next_month)
-            end_date = next_month
-
+    sales_mapping = (request.GET.get('salesMapping') or '').strip()
+    employee_id = (request.GET.get('employeeId') or '').strip()
+    date_param = request.GET.get('date')
+    month_param = request.GET.get('month')
+ 
+    # ---- build the salesMapping/employeeId filter ----
+    # salesMapping on Billing sometimes holds the executive's name and
+    # sometimes their id, so match against either. Empty means "All".
+    filters = Q()
+    if sales_mapping or employee_id:
+        mapping_filter = Q()
+        if sales_mapping:
+            mapping_filter |= Q(salesMapping=sales_mapping)
+        if employee_id:
+            mapping_filter |= Q(salesMapping=employee_id)
+        filters &= mapping_filter
+ 
+    # ---- resolve the date range ----
+    trend_days = []  # list of date objects, only populated for month filter
+ 
+    if month_param:
+        try:
+            year, month = (int(part) for part in month_param.split('-'))
+        except (ValueError, AttributeError):
+            today = timezone.localdate() if settings.USE_TZ else datetime.today().date()
+            year, month = today.year, today.month
+ 
+        range_start = datetime(year, month, 1)
+        days_in_month = monthrange(year, month)[1]
+        range_end = range_start + timedelta(days=days_in_month)
+        trend_days = [range_start + timedelta(days=i) for i in range(days_in_month)]
+    else:
+        if date_param:
+            try:
+                day = datetime.strptime(date_param, '%Y-%m-%d')
+            except ValueError:
+                return Response(
+                    {'error': "Invalid 'date' format, expected YYYY-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         else:
-            return JsonResponse({"error": "Missing date or month parameter"}, status=400)
-
-        # ✅ Filter billing data
-        patients = Billing.objects.filter(
-            salesMapping=sales_mapping,
-            date__gte=start_date,
-            date__lt=end_date
-        )
-
-        total_patients = patients.count()
-        total_amount = sum(float(patient.totalAmount or 0) for patient in patients)
-
-        test_counts = {}
-        total_tests = 0
-
-        for patient in patients:
-            test_data = getattr(patient, "testdetails", "[]")
-            if isinstance(test_data, str):
-                try:
-                    test_data = json.loads(test_data)
-                except json.JSONDecodeError:
-                    test_data = []
-            if isinstance(test_data, list):
-                for test in test_data:
-                    test_name = test.get("testname", "Unknown")
-                    test_counts[test_name] = test_counts.get(test_name, 0) + 1
-                    total_tests += 1
-
-        return JsonResponse({
-            "totalPatients": total_patients,
-            "totalAmount": total_amount,
-            "totalTests": total_tests,
-            "testCounts": test_counts
-        })
-
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
-    
-
-
-
+            # No date sent at all -> default to today, per requirement #1
+            today = timezone.localdate() if settings.USE_TZ else datetime.today().date()
+            day = datetime(today.year, today.month, today.day)
+ 
+        range_start = day
+        range_end = day + timedelta(days=1)
+ 
+    range_start = _make_aware_if_needed(range_start)
+    range_end = _make_aware_if_needed(range_end)
+ 
+    filters &= Q(date__gte=range_start, date__lt=range_end)
+ 
+    bills = list(Billing.objects.filter(filters))
+ 
+    summary = _summarize(bills)
+ 
+    trend_data = []
+    if trend_days:
+        bills_by_day = {}
+        for bill in bills:
+            if not bill.date:
+                continue
+            bill_local_date = timezone.localtime(bill.date).date() if settings.USE_TZ else bill.date.date()
+            bills_by_day.setdefault(bill_local_date, []).append(bill)
+ 
+        for day in trend_days:
+            day_key = day.date()
+            day_summary = _summarize(bills_by_day.get(day_key, []))
+            trend_data.append({
+                'date': day_key.strftime('%Y-%m-%d'),
+                'totalPatients': day_summary['totalPatients'],
+                'totalAmount': day_summary['totalAmount'],
+                'totalTests': day_summary['totalTests'],
+            })
+ 
+    response_data = {
+        **summary,
+        'monthlyData': [],
+        'trendData': trend_data,
+    }
+    return Response(response_data)
+ 
 
 
 @api_view(['PUT'])
@@ -381,7 +448,6 @@ def update_clinicalname(request):
 
 
 @api_view(['GET'])
-# @permission_classes([HasRoleAndDataPermission])
 def serve_sales_image(request, file_id):
     try:
         # Use the global db connection defined earlier
@@ -399,3 +465,150 @@ def serve_sales_image(request, file_id):
         return response
     except Exception as e:
         return HttpResponse(status=500)
+    
+
+
+
+@api_view(['GET', 'POST', 'PATCH'])
+@permission_classes([HasRoleAndDataPermission])
+def salesplan(request):
+ 
+    # ---------------- GET ----------------
+    if request.method == 'GET':
+        month = request.query_params.get('month')
+        year = request.query_params.get('year')
+        category = request.query_params.get('category')
+ 
+        filters = {}
+        if month is not None:
+            filters['month'] = int(month)
+        if year is not None:
+            filters['year'] = int(year)
+        if category:
+            filters['category'] = category
+ 
+        queryset = SalesPlan.objects.filter(**filters)
+        serializer = SalesPlanSerializer(queryset, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+ 
+    # ---------------- POST (bulk save whole grid for a category) ----------------
+    if request.method == 'POST':
+        data = request.data.copy()
+        employee_id = data.get('auth-user-id')
+ 
+        plans = data.get('plans', [])
+        if not isinstance(plans, list):
+            return Response(
+                {"error": "plans must be a list"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+ 
+        results = []
+        now = timezone.now()
+ 
+        for plan_item in plans:
+            plan_employee_id = plan_item.get('employee_id')
+            plan_category = plan_item.get('category')
+            plan_month = int(plan_item.get('month'))
+            plan_year = int(plan_item.get('year'))
+            plan_entries = plan_item.get('entries', [])
+ 
+            existing = SalesPlan.objects.filter(
+                employee_id=plan_employee_id,
+                category=plan_category,
+                month=plan_month,
+                year=plan_year
+            ).first()
+ 
+            if existing:
+                existing_entries = existing.entries or []
+                entry_map = {e['date']: e for e in existing_entries}
+                for entry in plan_entries:
+                    entry_map[entry['date']] = entry
+                merged_entries = list(entry_map.values())
+ 
+                SalesPlan.objects.filter(sales_plan_id=existing.sales_plan_id).update(
+                    entries=merged_entries,
+                    lastmodified_by=employee_id,
+                    lastmodified_date=now
+                )
+                updated = SalesPlan.objects.get(sales_plan_id=existing.sales_plan_id)
+                results.append(SalesPlanSerializer(updated).data)
+            else:
+                serializer = SalesPlanSerializer(data={
+                    'employee_id': plan_employee_id,
+                    'category': plan_category,
+                    'month': plan_month,
+                    'year': plan_year,
+                    'date': date_cls(plan_year, plan_month, 1),
+                    'entries': plan_entries,
+                    'created_by': employee_id,
+                    'lastmodified_by': employee_id,
+                })
+                if serializer.is_valid():
+                    serializer.save()
+                    results.append(serializer.data)
+                else:
+                    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+ 
+        return Response(results, status=status.HTTP_201_CREATED)
+ 
+    # ---------------- PATCH (single cell edit, upsert) ----------------
+    if request.method == 'PATCH':
+        data = request.data.copy()
+        employee_id = data.get('auth-user-id')
+ 
+        sales_plan_id = data.get('sales_plan_id')
+        emp_id = data.get('employee_id')
+        category = data.get('category')
+        month = int(data.get('month'))
+        year = int(data.get('year'))
+        day = int(data.get('day'))
+        amount = data.get('amount')
+ 
+        if sales_plan_id:
+            # Known record — go straight to it, skip the compound lookup.
+            plan = SalesPlan.objects.filter(sales_plan_id=int(sales_plan_id)).first()
+        else:
+            plan = SalesPlan.objects.filter(
+                employee_id=emp_id,
+                category=category,
+                month=month,
+                year=year
+            ).first()
+ 
+        if not plan:
+            serializer = SalesPlanSerializer(data={
+                'employee_id': emp_id,
+                'category': category,
+                'month': month,
+                'year': year,
+                'date': date_cls(year, month, 1),
+                'entries': [{'date': day, 'amount': amount}],
+                'created_by': employee_id,
+                'lastmodified_by': employee_id,
+            })
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+ 
+        entries = plan.entries or []
+        found = False
+        for entry in entries:
+            if entry.get('date') == day:
+                entry['amount'] = amount
+                found = True
+                break
+        if not found:
+            entries.append({'date': day, 'amount': amount})
+ 
+        SalesPlan.objects.filter(sales_plan_id=plan.sales_plan_id).update(
+            entries=entries,
+            lastmodified_by=employee_id,
+            lastmodified_date=timezone.now()
+        )
+ 
+        updated = SalesPlan.objects.get(sales_plan_id=plan.sales_plan_id)
+        return Response(SalesPlanSerializer(updated).data, status=status.HTTP_200_OK)
+ 
