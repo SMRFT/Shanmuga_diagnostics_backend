@@ -65,6 +65,7 @@ urlpatterns = [
     path('get_sales_executives/', sales.get_sales_executives, name='get_sales_executives'),
     path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
     path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
+    path('salesplan/', sales.salesplan, name='salesplan'),
     path('salesexecutive_report/', sales.Adminview_salesexecutive_report, name='salesexecutive_report'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
