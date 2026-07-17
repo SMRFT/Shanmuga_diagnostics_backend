@@ -5,7 +5,7 @@ from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view
 from rest_framework import  status
 from urllib.parse import quote_plus
-from pymongo import MongoClient
+from core.mongo_client import get_client
 from rest_framework import status
 from django.views.decorators.csrf import csrf_exempt
 import logging
@@ -24,13 +24,13 @@ from django.conf import settings  # To access the settings for DEFAULT_FROM_EMAI
 import json
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
+from core.pagination import paginate_queryset
 from ..models import Patient,Hmssamplestatus
 from ..models import SampleStatus
 from ..models import TestValue
 from ..models import SampleStatus
 from ..models import BarcodeTestDetails
 from django.http import JsonResponse
-from pymongo import MongoClient
 from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
@@ -43,6 +43,8 @@ from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -53,7 +55,8 @@ def get_os_samplestatus_testvalue(request):
         to_date_str = request.query_params.get('to_date', None)
         date_str = request.query_params.get('date', None)
         source = request.query_params.get('source', 'all')
-        
+        search = request.GET.get('search', '').strip().lower()
+
         # Determine date range
         if from_date_str and to_date_str:
             from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
@@ -86,7 +89,7 @@ def get_os_samplestatus_testvalue(request):
         # ============================================
         # Connect to MongoDB for test details
         # ============================================
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         test_details_collection = db.core_testdetails
         
@@ -476,7 +479,7 @@ def get_os_samplestatus_testvalue(request):
                     chc_processed[barcode] = True
                 
             except Exception as e:
-                print(f"CHC MongoDB error: {str(e)}")
+                logger.error(f"CHC MongoDB error: {str(e)}")
         
         # ============================================
         # Regular MongoDB Processing (Optimized)
@@ -565,16 +568,36 @@ def get_os_samplestatus_testvalue(request):
                     mongo_processed[barcode] = True
                 
             except Exception as e:
-                print(f"MongoDB error: {str(e)}")
+                logger.error(f"MongoDB error: {str(e)}")
         
-        # Close MongoDB connection
-        client.close()
-        
+        # Note: `client` is the shared, pooled MongoClient — do not close it here.
+
         # Sort results
         combined_results.sort(key=lambda x: x.get('date', ''), reverse=True)
-        
-        return Response(combined_results, status=status.HTTP_200_OK)
-        
+
+        # Filter by search term (across ORM + Mongo/CHC/franchise rows) before
+        # pagination so matches on later pages are still found.
+        if search:
+            combined_results = [
+                r for r in combined_results
+                if search in (r.get('patientname') or '').lower()
+                or search in (r.get('barcode') or '').lower()
+                or search in (r.get('patient_id') or '').lower()
+            ]
+
+        # Paginate the combined (ORM + Mongo) rows so the date range,
+        # which is otherwise unbounded, doesn't return the whole result set.
+        page_obj, page_meta = paginate_queryset(combined_results, request)
+
+        # NOTE: response shape changed from a bare JSON array to a paginated
+        # object ({"data": [...], total_pages, current_page, total_count}) to
+        # bound the payload as outsourced samples in the date range grow;
+        # update any frontend caller that expected a raw array here.
+        return Response({
+            "data": list(page_obj),
+            **page_meta
+        }, status=status.HTTP_200_OK)
+
     except ValueError:
         return Response({"error": "Invalid date format. Use YYYY-MM-DD format."}, status=status.HTTP_400_BAD_REQUEST)
     except Exception as e:
@@ -590,7 +613,7 @@ def os_compare_test_details(request):
     Simplified endpoint - only returns test structure from core_testdetails
     No patient data fetching - frontend passes that data
     """
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    client = get_client()
     db = client.Diagnostics
     core_testdetails_collection = db.core_testdetails
 
@@ -632,7 +655,6 @@ def os_compare_test_details(request):
         try:
             query["test_id"] = int(test_id)
         except (ValueError, TypeError):
-            client.close()
             return JsonResponse({
                 'error': 'Invalid test_id parameter - must be a number'
             }, status=400)
@@ -642,13 +664,11 @@ def os_compare_test_details(request):
         test_details_list = list(core_testdetails_collection.find(query))
     else:
         # If no filter, return error
-        client.close()
         return JsonResponse({
             'error': 'Either test_name or test_id parameter is required'
         }, status=400)
 
     if not test_details_list:
-        client.close()
         return JsonResponse({
             'error': f'No test details found for the given parameters'
         }, status=404)
@@ -712,7 +732,7 @@ def os_compare_test_details(request):
                     "value_option": param.get("value_option"),
                 })
 
-    client.close()
+    # Note: `client` is the shared, pooled MongoClient — do not close it here.
 
     if not final_test_data:
         return JsonResponse({

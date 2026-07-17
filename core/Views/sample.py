@@ -5,7 +5,8 @@ import json
 from datetime import timedelta
 from datetime import datetime
 import os
-from pymongo import MongoClient
+import logging
+from core.mongo_client import get_client
 #models
 from ..models import SampleStatus,Billing, TestValue
 from ..models import BarcodeTestDetails
@@ -14,6 +15,9 @@ from pyauth.auth import HasRoleAndDataPermission
 from dotenv import load_dotenv
 from django.utils.timezone import make_aware
 from core.utils import get_employee_name
+from core.pagination import paginate_queryset
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -76,7 +80,7 @@ def get_samplepatients_by_date(request):
         ).order_by('-date', 'patient_id')
         
         # Connect to MongoDB to get test details from core_testdetails
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         test_details_collection = db.core_testdetails
         
@@ -212,7 +216,7 @@ def sample_status(request):
             else:
                 data = json.loads(request.body)
             
-            print(f"Request Data: {data}")  # For debugging
+            logger.debug(f"Request Data: {data}")  # For debugging
             
             # Extract patient data
             employee_id = data.get('auth-user-id')
@@ -291,7 +295,7 @@ def sample_status(request):
         except KeyError as e:
             return JsonResponse({'error': f'Missing key: {str(e)}'}, status=400)
         except Exception as e:
-            print(f"Error saving sample status: {str(e)}")  # For debugging
+            logger.error(f"Error saving sample status: {str(e)}")  # For debugging
             return JsonResponse({'error': str(e)}, status=400)
     
     return JsonResponse({'error': 'Invalid request method'}, status=405)
@@ -303,7 +307,7 @@ def sample_status(request):
 def patch_sample_status(request, barcode):
     from django.utils import timezone
     
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    client = get_client()
     db = client.Diagnostics
     collection = db.core_samplestatus
     
@@ -448,7 +452,7 @@ def get_sample_collected(request):
             samples = samples_query
             
             # Connect to MongoDB to get test details from core_testdetails
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             test_details_collection = db.core_testdetails
             
@@ -562,15 +566,21 @@ def get_sample_collected(request):
             
             # Convert the dictionary to a list
             data = list(patient_data.values())
-            
+            total_records = len(data)
+
+            # Paginate the final per-patient list (page/limit query params;
+            # see core/pagination.py for the shared convention)
+            page_obj, page_meta = paginate_queryset(data, request)
+
             # Return the filtered data as a response
             return JsonResponse({
-                "data": data,
+                "data": list(page_obj),
                 "filters_applied": {
                     "from_date": from_date,
                     "to_date": to_date,
-                    "total_records": len(data)
-                }
+                    "total_records": total_records
+                },
+                **page_meta
             }, safe=False)
             
         except Exception as e:
@@ -585,7 +595,7 @@ def get_outsource_labs(request):
     if request.method == "GET":
         try:
             # MongoDB connection setup
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             collection = db.outsource_lab
             
@@ -609,7 +619,7 @@ def get_outsource_labs(request):
 @permission_classes([HasRoleAndDataPermission])
 def update_sample_collected(request, barcode):
     # MongoDB connection setup
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    client = get_client()
     db = client.Diagnostics
     collection = db.core_samplestatus
     
@@ -810,7 +820,7 @@ def get_rejected_samples(request):
                 except ValueError:
                     return JsonResponse({"error": "Invalid to_date format. Use YYYY-MM-DD"}, status=400)
 
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             test_details_collection = db.core_testdetails
             test_id_cache = {}
@@ -868,9 +878,13 @@ def get_rejected_samples(request):
             # Sort by rejected_time descending (newest first)
             rejected_data.sort(key=lambda x: x.get('rejected_time') or '', reverse=True)
 
+            total_count = len(rejected_data)
+            page_obj, page_meta = paginate_queryset(rejected_data, request)
+
             return JsonResponse({
-                "data": rejected_data,
-                "count": len(rejected_data)
+                "data": list(page_obj),
+                "count": total_count,
+                **page_meta
             }, safe=False)
 
         except Exception as e:
@@ -911,7 +925,7 @@ def get_outsourced_samples(request):
                 except ValueError:
                     return JsonResponse({"error": "Invalid to_date format. Use YYYY-MM-DD"}, status=400)
 
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             test_details_collection = db.core_testdetails
             test_id_cache = {}
@@ -983,7 +997,8 @@ def get_outsourced_samples(request):
                     if isinstance(td, str):
                         try:
                             td = json.loads(td)
-                        except:
+                        except Exception as e:
+                            logger.error(f"Error parsing testdetails JSON: {e}")
                             td = []
                     
                     if not isinstance(td, list):
@@ -1040,14 +1055,16 @@ def get_outsourced_samples(request):
                             try:
                                 dt_out = datetime.strptime(str(out_time_str), f)
                                 break
-                            except: pass
-                        
+                            except Exception as e:
+                                logger.debug(f"Error parsing outsourced_time '{out_time_str}' with format {f}: {e}")
+
                         dt_res = None
                         for f in formats:
                             try:
                                 dt_res = datetime.strptime(str(res_time), f)
                                 break
-                            except: pass
+                            except Exception as e:
+                                logger.debug(f"Error parsing approve_time '{res_time}' with format {f}: {e}")
                             
                         if dt_out and dt_res:
                             diff = dt_res - dt_out
@@ -1059,8 +1076,8 @@ def get_outsourced_samples(request):
                             
                             if total_seconds < 0:
                                 tat = "N/A"
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.error(f"Error calculating TAT: {e}")
                 
                 item['tat'] = tat
                 outsourced_data.append(item)
@@ -1068,9 +1085,13 @@ def get_outsourced_samples(request):
             # Sort by recently outsourced first
             outsourced_data.sort(key=lambda x: x.get('outsourced_time') or '', reverse=True)
 
+            total_count = len(outsourced_data)
+            page_obj, page_meta = paginate_queryset(outsourced_data, request)
+
             return JsonResponse({
-                "data": outsourced_data,
-                "count": len(outsourced_data)
+                "data": list(page_obj),
+                "count": total_count,
+                **page_meta
             }, safe=False)
 
         except Exception as e:

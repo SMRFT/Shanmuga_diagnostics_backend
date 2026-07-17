@@ -1,9 +1,9 @@
 from rest_framework.response import Response
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models import Max
+from django.db.models import Max, Q
 import json
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import certifi
 from gridfs import GridFS
 from django.utils import timezone 
@@ -18,6 +18,7 @@ import os
 #models and serializers
 from ..serializers import ClinicalNameSerializer
 from ..models import ClinicalName
+from core.pagination import paginate_queryset
 
 #auth
 from rest_framework.decorators import api_view, permission_classes
@@ -33,8 +34,8 @@ IST = pytz.timezone(TIME_ZONE)
 
 # MongoDB Connection Setup
 def get_mongodb_connection():
-    # MongoDB connection with TLS certificate
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    # MongoDB connection (shared, pooled client)
+    client = get_client()
     db = client["Diagnostics"]
     return db, GridFS(db)
 
@@ -46,7 +47,7 @@ def sales_person(request):
     try:
         # Connect to global DB
         mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
+        client = get_client()
         db = client["Global"]
         collection = db["backend_diagnostics_profile"]  # <-- Same here
         # Query: employees with primaryRole == "SD-R-SMC" OR additionalRoles contains "SD-R-SMC"
@@ -155,8 +156,16 @@ def clinical_name(request):
 
     elif request.method == 'GET':
         clinical_names = ClinicalName.objects.filter(status="APPROVED")
-        serializer = ClinicalNameSerializer(clinical_names, many=True)
-        return Response(serializer.data)
+        page_obj, page_meta = paginate_queryset(clinical_names, request)
+        serializer = ClinicalNameSerializer(page_obj, many=True)
+        # NOTE: response shape changed from a bare JSON array to a paginated
+        # object ({"data": [...], total_pages, current_page, total_count}) to
+        # bound the payload as approved clinical name records grow; update any
+        # frontend caller that expected a raw array here.
+        return Response({
+            "data": serializer.data,
+            **page_meta
+        })
 
 @permission_classes([HasRoleAndDataPermission])
 class ClinicalNameViewSet(viewsets.ModelViewSet):
@@ -498,8 +507,22 @@ from ..serializers import B2BPackageSerializer
 def b2b_packages(request):
     if request.method == 'GET':
         packages = B2BPackage.objects.all()
-        serializer = B2BPackageSerializer(packages, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        search = request.GET.get('search', '').strip()
+        status_filter = request.GET.get('status', '').strip()
+        if search:
+            packages = packages.filter(Q(packageName__icontains=search) | Q(referrerCode__icontains=search))
+        if status_filter and status_filter.lower() != 'all':
+            packages = packages.filter(status__iexact=status_filter)
+        page_obj, page_meta = paginate_queryset(packages, request)
+        serializer = B2BPackageSerializer(page_obj, many=True)
+        # NOTE: response shape changed from a bare JSON array to a paginated
+        # object ({"data": [...], total_pages, current_page, total_count}) to
+        # bound the payload as B2B package records grow; update any frontend
+        # caller that expected a raw array here.
+        return Response({
+            "data": serializer.data,
+            **page_meta
+        }, status=status.HTTP_200_OK)
     
     elif request.method == 'POST':
         data = request.data.copy()

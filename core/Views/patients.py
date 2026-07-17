@@ -11,16 +11,18 @@ import ast
 import random
 from django.forms.models import model_to_dict
 from core.utils import get_employee_name
+from core.pagination import paginate_queryset
 from django.utils.timezone import make_aware
 from django.db import transaction
 import json
 import re
 from django.utils import timezone
-from pymongo import MongoClient
+from core.mongo_client import get_client
 from bson import ObjectId
 from gridfs import GridFS
 import os
 import traceback
+import logging
 from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 import gridfs
@@ -35,8 +37,10 @@ load_dotenv()
 from ..serializers import PatientSerializer, BillingSerializer, AppointmentSerializer
 from ..models import Patient, Billing, ClinicalName, RefBy, Appointment
 
+logger = logging.getLogger(__name__)
+
 # MongoDB and GridFS setup
-MONGO_CLIENT = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+MONGO_CLIENT = get_client()
 MONGO_DB = MONGO_CLIENT.Diagnostics
 FS = gridfs.GridFS(MONGO_DB)
 
@@ -53,14 +57,16 @@ def appointment_booking(request):
 
     if request.method == "GET":
         appointments = Appointment.objects.all().order_by("appointment_date")
-        serializer = AppointmentSerializer(appointments, many=True)
+        page_obj, page_meta = paginate_queryset(appointments, request)
+        serializer = AppointmentSerializer(page_obj, many=True)
         data = list(serializer.data)
         for apt in data:
             if apt.get('sample_collector'):
                 apt['sample_collector'] = get_employee_name(apt['sample_collector'])
         return Response({
             "success": True,
-            "appointments": data
+            "appointments": data,
+            **page_meta
         })
 
     if request.method == "POST":
@@ -135,15 +141,17 @@ def get_appointments_by_date(request):
         if to_date:
             appointments = appointments.filter(appointment_date__lte=to_date)
 
-        serializer = AppointmentSerializer(appointments, many=True)
+        page_obj, page_meta = paginate_queryset(appointments, request)
+        serializer = AppointmentSerializer(page_obj, many=True)
         data = list(serializer.data)
         for apt in data:
             if apt.get('sample_collector'):
                 apt['sample_collector'] = get_employee_name(apt['sample_collector'])
-                
+
         return Response({
             "success": True,
-            "appointments": data
+            "appointments": data,
+            **page_meta
         })
     except Exception as e:
         return Response({
@@ -267,8 +275,8 @@ def update_patient(request, patient_id):
 
 # MongoDB Connection Setup
 def get_mongodb_connection():
-    # MongoDB connection with TLS certificate
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    # MongoDB connection (shared, pooled client)
+    client = get_client()
     db = client["Diagnostics"]
     return db, GridFS(db)
 
@@ -315,7 +323,8 @@ def create_bill(request):
                 else:
                     dt = datetime.strptime(raw_date, "%Y-%m-%d %H:%M:%S")
                     billing_date = timezone.make_aware(dt)
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse billing date '{raw_date}': {e}")
                 billing_date = timezone.now()
 
         # Convert blank fields
@@ -620,7 +629,8 @@ def update_bill(request):
                 if isinstance(multiple_payment_data, str):
                     try:
                         processed_multiple_payments = json.loads(multiple_payment_data)
-                    except:
+                    except Exception as e:
+                        logger.error(f"Failed to parse MultiplePayment JSON: {e}")
                         processed_multiple_payments = []
                 elif isinstance(multiple_payment_data, list):
                     processed_multiple_payments = []
@@ -657,17 +667,20 @@ def update_bill(request):
         # Prepare Response
         try:
             response_multiple_payment = json.loads(update_data.get("MultiplePayment", "[]"))
-        except:
+        except Exception as e:
+            logger.error(f"Failed to parse MultiplePayment for response: {e}")
             response_multiple_payment = []
-        
+
         try:
             response_payment_method = json.loads(update_data.get("payment_method", "{}"))
-        except:
+        except Exception as e:
+            logger.error(f"Failed to parse payment_method for response: {e}")
             response_payment_method = {}
-        
+
         try:
             response_testdetails = json.loads(update_data.get("testdetails", "[]"))
-        except:
+        except Exception as e:
+            logger.error(f"Failed to parse testdetails for response: {e}")
             response_testdetails = []
         
         return Response({
@@ -690,8 +703,8 @@ def update_bill(request):
             }
         }, status=200)
     except Exception as e:
-        print(f"Error in update_bill: {str(e)}")
-        print(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Error in update_bill: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return Response({
             "success": False,
             "error": "Internal server error",
@@ -722,9 +735,10 @@ def patient_get(request):
                 if isinstance(patient_data.get('address'), str):
                     try:
                         patient_data['address'] = json.loads(patient_data['address'])
-                    except:
+                    except Exception as e:
+                        logger.error(f"Failed to parse patient address JSON: {e}")
                         patient_data['address'] = {"area": "", "pincode": ""}
-                
+
                 return Response({
                     'success': True, 
                     'data': patient_data, 
@@ -740,8 +754,7 @@ def patient_get(request):
             
             # Also search in MongoDB directly for better coverage
             try:
-                from pymongo import MongoClient
-                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+                client = get_client()
                 db = client.Diagnostics
                 mongo_patients = list(db.core_patient.find({"phone": {"$regex": phone_clean}}))
                 
@@ -759,9 +772,10 @@ def patient_get(request):
                         if isinstance(patient_data.get('address'), str):
                             try:
                                 patient_data['address'] = json.loads(patient_data['address'])
-                            except:
+                            except Exception as e:
+                                logger.error(f"Failed to parse patient address JSON: {e}")
                                 patient_data['address'] = {"area": "", "pincode": ""}
-                        
+
                         combined_results.append(patient_data)
                         seen_ids.add(patient.patient_id)
                 
@@ -773,7 +787,8 @@ def patient_get(request):
                         if isinstance(address, str):
                             try:
                                 address = json.loads(address)
-                            except:
+                            except Exception as e:
+                                logger.error(f"Failed to parse mongo patient address JSON: {e}")
                                 address = {"area": "", "pincode": ""}
                         
                         # Format MongoDB data to match serializer output
@@ -816,7 +831,7 @@ def patient_get(request):
                         }, status=200)
                 
             except Exception as mongo_error:
-                print(f"MongoDB search error: {mongo_error}")
+                logger.error(f"MongoDB search error: {mongo_error}")
                 # Fall back to Django ORM only
                 if patients.exists():
                     if patients.count() > 1:
@@ -848,8 +863,8 @@ def patient_get(request):
         }, status=404)
         
     except Exception as e:
-        print(f"Error in patient_get: {str(e)}")
-        print(f"Traceback: {traceback.format_exc()}")
+        logger.error(f"Error in patient_get: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return Response({
             'success': False, 
             'error': 'Internal server error', 
@@ -860,10 +875,12 @@ def patient_get(request):
 @api_view(['GET'])
 @permission_classes([HasRolePermission])
 def get_patients_by_date(request):
+    from django.db.models import Q
 
     start_date = request.GET.get('start_date')
     end_date = request.GET.get('end_date')
     single_date = request.GET.get('date')
+    search = request.GET.get('search', '').strip()
 
     if single_date and not (start_date and end_date):
         start_date = single_date
@@ -888,9 +905,19 @@ def get_patients_by_date(request):
             date__lte=end_date_parsed
         ).order_by('date')
 
+        if search:
+            name_patient_ids = Patient.objects.filter(
+                patientname__icontains=search
+            ).values_list('patient_id', flat=True)
+            patients = patients.filter(
+                Q(patient_id__icontains=search) |
+                Q(lab_id__icontains=search) |
+                Q(patient_id__in=name_patient_ids)
+            )
+
         # ------------------ MongoDB Connection ------------------
         mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
+        client = get_client()
         db = client["Global"]
         profile_col = db.backend_diagnostics_profile
 
@@ -918,7 +945,9 @@ def get_patients_by_date(request):
 
         patient_data = []
 
-        for patient in patients:
+        page_obj, page_meta = paginate_queryset(patients, request)
+
+        for patient in page_obj:
             try:
                 patient_dict = model_to_dict(patient)
 
@@ -964,14 +993,15 @@ def get_patients_by_date(request):
                 patient_data.append(patient_dict)
 
             except Exception as patient_error:
-                print(
+                logger.error(
                     f"Error processing patient {getattr(patient, 'patient_id', 'unknown')}: {patient_error}"
                 )
                 continue
 
         return Response({
             'success': True,
-            'data': patient_data
+            'data': patient_data,
+            **page_meta
         })
 
     except ValueError:
@@ -980,7 +1010,7 @@ def get_patients_by_date(request):
         }, status=400)
 
     except Exception as e:
-        print(f"Error in get_patients_by_date: {str(e)}")
+        logger.error(f"Error in get_patients_by_date: {str(e)}")
         return Response({
             'error': 'An error occurred while fetching patients.'
         }, status=500)
@@ -989,8 +1019,13 @@ def get_patients_by_date(request):
 @api_view(['GET'])
 def patient_overview(request):
     patients = Billing.objects.all()
-    serializer = BillingSerializer(patients, many=True)
-    return Response(serializer.data)
+    page_obj, page_meta = paginate_queryset(patients, request)
+    serializer = BillingSerializer(page_obj, many=True)
+    # NOTE: response shape changed from a bare JSON array to a paginated
+    # object ({"data": [...], total_count, total_pages, current_page}) to
+    # bound the payload as billing records accumulate; update any frontend
+    # caller that expected a raw array here.
+    return Response({"data": serializer.data, **page_meta})
 
 
 @api_view(['GET'])
@@ -1033,7 +1068,6 @@ def get_patientsbyb2b(request):
 
 from datetime import date, datetime
 from urllib.parse import quote_plus
-from pymongo import MongoClient
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 import json
@@ -1070,7 +1104,7 @@ def dashboard_data(request):
         # MongoDB
         # -------------------------
         mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
+        client = get_client()
         db = client["Diagnostics"]
         billing_col = db.core_billing   # ✅ NEW COLLECTION
 
@@ -1099,7 +1133,8 @@ def dashboard_data(request):
         def safe_float(val):
             try:
                 return float(val)
-            except:
+            except Exception as e:
+                logger.error(f"safe_float conversion failed for {val!r}: {e}")
                 return 0.0
 
         def parse_json(val, default):
@@ -1109,7 +1144,8 @@ def dashboard_data(request):
                 return default
             try:
                 return json.loads(val)
-            except:
+            except Exception as e:
+                logger.error(f"parse_json failed for {val!r}: {e}")
                 return default
 
         # -------------------------
@@ -1249,7 +1285,7 @@ def update_credit_amount(request):
              Billing.objects.filter(bill_no=bill_no).update(credit_amount=str(new_credit_amount))
 
         # 2. Update MongoDB core_billing Collection (critical for reports)
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_billing
         
@@ -1304,7 +1340,7 @@ def update_credit_amount(request):
         return Response({"success": True, "message": "Credit amount updated successfully"}, status=200)
 
     except Exception as e:
-        print(f"Error updating credit amount: {str(e)}")
+        logger.error(f"Error updating credit amount: {str(e)}")
         return Response({"error": str(e)}, status=500)
 import ast
 
@@ -1320,7 +1356,8 @@ def safe_parse_list(data):
                 parsed = ast.literal_eval(data)
                 if isinstance(parsed, list):
                     return parsed
-            except:
+            except Exception as e:
+                logger.error(f"safe_parse_list ast.literal_eval failed: {e}")
                 pass
     return []
 
@@ -1364,7 +1401,7 @@ def get_patient_list(request):
         }, status=status.HTTP_200_OK)
 
     except Exception as e:
-        print(f"Error in get_patient_list: {str(e)}")
+        logger.error(f"Error in get_patient_list: {str(e)}")
         return Response({
             "success": False,
             "error": "Internal server error",
@@ -1393,7 +1430,7 @@ def get_patient_full_record(request, patient_id):
         }, status=status.HTTP_200_OK)
     
     except Exception as e:
-        print(f"Error in get_patient_full_record: {str(e)}")
+        logger.error(f"Error in get_patient_full_record: {str(e)}")
         return Response({
             "success": False,
             "error": "Internal server error",
@@ -1422,7 +1459,7 @@ def get_prescription_image(request, file_id):
         return response
 
     except Exception as e:
-        print(f"Error in get_prescription_image: {str(e)}")
+        logger.error(f"Error in get_prescription_image: {str(e)}")
         return HttpResponse(status=500, content="Internal server error")
 
 @api_view(["GET"])
@@ -1483,7 +1520,8 @@ def patient_record_dashboard(request):
             try:
                 amt = float(bill.totalAmount) if bill.totalAmount else 0
                 total_revenue += amt
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse bill totalAmount for revenue calculation: {e}")
                 pass
                 
         # Handle export
@@ -1558,7 +1596,7 @@ def patient_record_dashboard(request):
         })
 
     except Exception as e:
-        print(f"Error in patient_record_dashboard: {str(e)}")
+        logger.error(f"Error in patient_record_dashboard: {str(e)}")
         return Response({
             "success": False,
             "error": "Internal server error",

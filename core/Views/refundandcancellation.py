@@ -1,10 +1,12 @@
 from rest_framework.response import Response
 from django.http import JsonResponse
 import json
+import logging
 from urllib.parse import quote_plus
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import certifi
 from ..models import Billing, Patient
+from core.pagination import paginate_queryset
 from datetime import datetime
 from django.utils.timezone import make_aware
 import random
@@ -27,6 +29,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -48,12 +52,15 @@ def search_refund(request):
                 date__lt=end_of_day
             )
 
+            # Paginate before serializing so enrichment below only runs on the current page
+            page_obj, page_meta = paginate_queryset(patients, request)
+
             # Use serializer so patientname is included
-            serializer = BillingSerializer(patients, many=True)
+            serializer = BillingSerializer(page_obj, many=True)
             result = serializer.data
 
             # MongoDB connection to get test details
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             tests_collection = db["core_testdetails"]
 
@@ -82,14 +89,14 @@ def search_refund(request):
                             test for test in patient['testdetails'] if not test.get('refund', False)
                         ]
 
-            return JsonResponse({"patients": result}, safe=False)
+            return JsonResponse({"patients": result, **page_meta}, safe=False)
 
         except Exception as e:
             import traceback
             traceback.print_exc()
             return JsonResponse({"error": str(e)}, status=500)
 
-       
+
 
 # Temporary dictionary to hold OTPs (non-persistent)
 otp_storage_refund = {}
@@ -199,7 +206,7 @@ def verify_and_process_refund(request):
             return JsonResponse({"error": "Invalid OTP"}, status=400)
 
         # MongoDB
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         patients_collection = db["core_billing"]
         tests_collection = db["core_test"]
@@ -276,12 +283,15 @@ def search_cancellation(request):
                 bill_date__lte=end_of_day
             )
 
+            # Paginate before serializing so enrichment below only runs on the current page
+            page_obj, page_meta = paginate_queryset(billings, request)
+
             # Serialize to include patientname
-            serializer = BillingSerializer(billings, many=True)
+            serializer = BillingSerializer(page_obj, many=True)
             result = serializer.data
 
             # MongoDB connection
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             tests_collection = db["core_testdetails"]
 
@@ -298,7 +308,7 @@ def search_cancellation(request):
                                 if not isinstance(test, dict):
                                     continue
                             except json.JSONDecodeError:
-                                print("❌ Invalid test JSON:", test)
+                                logger.error(f"❌ Invalid test JSON: {test}")
                                 continue
 
                         # Enrich test from MongoDB
@@ -322,8 +332,8 @@ def search_cancellation(request):
                             test for test in cleaned_tests if not test.get('cancellation', False)
                         ]
 
-            client.close()
-            return JsonResponse({"patients": result}, safe=False)
+            # Note: `client` is the shared, pooled MongoClient — do not close it here.
+            return JsonResponse({"patients": result, **page_meta}, safe=False)
 
         except Exception as e:
             import traceback
@@ -439,7 +449,7 @@ def verify_and_process_cancellation(request):
             return JsonResponse({"error": "Invalid OTP"}, status=400)
 
         # MongoDB
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         patients_collection = db["core_billing"]
         tests_collection = db["core_test"]
@@ -538,7 +548,7 @@ def verify_and_process_cancellation(request):
 def logs_api(request):
     """Combined API endpoint for both refund and cancellation logs"""
     try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         patient_collection = db['core_billing']
         
@@ -546,6 +556,7 @@ def logs_api(request):
         log_type = request.GET.get('type', 'refund')  # Default to refund if not specified
         start_date = request.GET.get('start_date')
         end_date = request.GET.get('end_date')
+        search = request.GET.get('search', '').strip().lower()
         
         # Base query - default to current date if no dates provided
         query = {}
@@ -604,12 +615,23 @@ def logs_api(request):
                     })
             
             except (json.JSONDecodeError, AttributeError, KeyError) as e:
-                print(f"Error processing patient {patient.get('_id')}: {str(e)}")
+                logger.error(f"Error processing patient {patient.get('_id')}: {str(e)}")
                 continue
-        
-        return JsonResponse(results, safe=False)
+
+        if search:
+            results = [
+                r for r in results
+                if search in (r.get('patientname') or '').lower()
+                or search in str(r.get('bill_no') or '').lower()
+                or search in (r.get('testname') or '').lower()
+            ]
+
+        page_obj, page_meta = paginate_queryset(results, request)
+        # Response shape changed for pagination: previously returned a bare JSON array,
+        # now returns {"data": [...], "total_pages":.., "current_page":.., "total_count":..}.
+        return JsonResponse({"data": list(page_obj), **page_meta}, safe=False)
     
     except Exception as e:
-        print(f"Error in logs_api: {str(e)}")
+        logger.error(f"Error in logs_api: {str(e)}")
         return JsonResponse({"error": str(e)}, status=500)
 

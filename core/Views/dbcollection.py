@@ -1,11 +1,11 @@
 # dbcollection.py  
 
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import os
 
 # Create Mongo client (single place)
 mongo_url = os.getenv("GLOBAL_DB_HOST")
-client = MongoClient(mongo_url)
+client = get_client()
 
 # Databases
 

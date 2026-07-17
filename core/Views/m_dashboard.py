@@ -4,7 +4,7 @@ from pyauth.auth import HasRoleAndDataPermission
 from django.views.decorators.csrf import csrf_exempt
 from ..models import Billing
 from django.db.models import Sum
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import os
 import json
 from datetime import datetime, timedelta
@@ -151,16 +151,17 @@ def m_dashboard_stats(request):
                         td = json.loads(td)
                     if isinstance(td, list):
                         stats["tests"]["total"] += len(td)
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing core bill testdetails: {e}")
                     pass
-            
+
             # Financials
             stats["financials"]["credit_amount"] += to_float(bill.credit_amount)
             stats["financials"]["net_amount"] += to_float(bill.netAmount)
 
 
         # --- MongoDB Connection ---
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         
         # --- 2. Franchise (MongoDB) ---
         try:
@@ -204,7 +205,8 @@ def m_dashboard_stats(request):
                         td = json.loads(td)
                     if isinstance(td, list):
                         stats["tests"]["total"] += len(td)
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing franchise bill testdetails: {e}")
                     pass
 
         except Exception as e:
@@ -251,8 +253,9 @@ def m_dashboard_stats(request):
                             credit_val = net_amt
                             
                     stats["financials"]["credit_amount"] += credit_val
-                    
-                except:
+
+                except Exception as e:
+                    logger.error(f"Error processing corporate bill financial: {e}")
                     pass
 
                 # Tests
@@ -262,7 +265,8 @@ def m_dashboard_stats(request):
                         td = json.loads(td)
                     if isinstance(td, list):
                         stats["tests"]["total"] += len(td)
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing corporate bill testdetails: {e}")
                     pass
 
         except Exception as e:
@@ -270,7 +274,9 @@ def m_dashboard_stats(request):
             logger.error(traceback.format_exc())
 
         finally:
-            client.close()
+            # Note: `client` is the shared, pooled MongoClient (see core/mongo_client.py);
+            # it must not be closed here since it is reused across the whole process.
+            pass
 
         return Response({"success": True, "data": stats})
 

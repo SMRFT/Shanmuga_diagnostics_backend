@@ -11,7 +11,7 @@ from pyauth.auth import HasRoleAndDataPermission
 from datetime import datetime, timedelta
 import json
 import os
-from pymongo import MongoClient
+from core.mongo_client import get_client
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.dateparse import parse_datetime
 from django.forms.models import model_to_dict
@@ -22,7 +22,7 @@ from django.forms.models import model_to_dict
 @permission_classes([HasRoleAndDataPermission])
 def hms_get_test_details(request):
     try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_testdetails
 
@@ -71,7 +71,7 @@ def hms_patient_billing(request):
 @permission_classes([HasRoleAndDataPermission])
 def hms_get_doctor_list(request):
     mongo_url = os.getenv("GLOBAL_DB_HOST")
-    client = MongoClient(mongo_url)
+    client = get_client()
     db = client["Diagnostics"]
     collection = db["core_doctorlist"]
 

@@ -4,7 +4,7 @@ from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view
 from rest_framework import  status
 from django.views.decorators.csrf import csrf_exempt
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import os
 
 #models and serializers
@@ -25,7 +25,7 @@ def sample_collector(request):
     try:
         # Connect to global DB
         mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
+        client = get_client()
         db = client["Global"]
         collection = db["backend_diagnostics_profile"]
         # Query: employees with primaryRole == "SD-R-SMC" OR additionalRoles contains "SD-R-SMC"

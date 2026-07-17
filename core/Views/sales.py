@@ -1,6 +1,7 @@
 from django.http import JsonResponse, HttpResponse
 from bson.objectid import ObjectId
 import gridfs
+import logging
 from rest_framework.response import Response
 from rest_framework import status
 from ..models import SalesVisitLog,Billing,Patient,ClinicalName
@@ -13,6 +14,9 @@ from pyauth.auth import HasRoleAndDataPermission
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime
 import os
+from core.pagination import paginate_queryset
+
+logger = logging.getLogger(__name__)
 
 @api_view(['POST'])
 @permission_classes([HasRoleAndDataPermission])
@@ -77,7 +81,8 @@ def salesvisitlog(request):
                 # Try to load a font, fallback to default
                 try:
                     font = ImageFont.truetype("arial.ttf", font_size)
-                except:
+                except Exception as e:
+                    logger.debug(f"Falling back to default font: {e}")
                     font = ImageFont.load_default()
 
                 # Calculate text position (bottom right or bottom left)
@@ -134,9 +139,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
 from django.conf import settings
-from pymongo import MongoClient
+from core.mongo_client import get_client
 # Connect to MongoDB
-client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+client = get_client()
 db = client["Diagnostics"]
 @api_view(['GET'])
 # @permission_classes([HasRoleAndDataPermission])
@@ -181,8 +186,9 @@ def get_all_clinicalnames(request):
             item["address"] = item.get("address", "")
         # --- Merge both ---
         combined = clinical_list + hospital_list
+        page_obj, page_meta = paginate_queryset(combined, request)
         return Response(
-            {"success": True, "data": combined},
+            {"success": True, "data": list(page_obj), **page_meta},
             status=status.HTTP_200_OK
         )
     except Exception as e:
@@ -193,14 +199,13 @@ def get_all_clinicalnames(request):
 
 
 from django.http import JsonResponse
-from pymongo import MongoClient
 import os
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def get_sales_executives(request):
     mongo_url = os.getenv("GLOBAL_DB_HOST")
-    client = MongoClient(mongo_url)
-    db = client["Global"]  
+    client = get_client()
+    db = client["Global"]
 
     collection = db["backend_diagnostics_profile"]
 
@@ -215,7 +220,12 @@ def get_sales_executives(request):
 
     employees = list(collection.find(query, {"employeeName": 1, "employeeId": 1, "_id": 0}))
 
-    return JsonResponse(employees, safe=False)
+    # NOTE: response shape changed from a bare JSON array to a paginated
+    # object ({"data": [...], total_count, total_pages, current_page}) to
+    # bound the payload as sales executives accumulate; update any frontend
+    # caller that expected a raw array here.
+    page_obj, page_meta = paginate_queryset(employees, request)
+    return JsonResponse({"data": list(page_obj), **page_meta}, safe=False)
 
 
 from datetime import datetime, date
@@ -246,8 +256,13 @@ def get_sales_individual_report(request):
         except ValueError:
             return JsonResponse({"error": "Invalid date format"}, status=400)
 
-        serializer = SalesVisitLogSerializer(sales_logs, many=True)
-        return JsonResponse(serializer.data, safe=False)
+        page_obj, page_meta = paginate_queryset(sales_logs, request)
+        serializer = SalesVisitLogSerializer(page_obj, many=True)
+        # NOTE: response shape changed from a bare JSON array to a paginated
+        # object ({"data": [...], total_count, total_pages, current_page}) to
+        # bound the payload as sales visit logs accumulate; update any
+        # frontend caller that expected a raw array here.
+        return JsonResponse({"data": serializer.data, **page_meta}, safe=False)
 
 
 
@@ -275,8 +290,13 @@ def Adminview_salesexecutive_report(request):
         query['salesMapping__icontains'] = sales_executive
 
     logs = SalesVisitLog.objects.filter(**query)
-    serializer = SalesVisitLogSerializer(logs, many=True)
-    return Response(serializer.data, status=status.HTTP_200_OK)
+    page_obj, page_meta = paginate_queryset(logs, request)
+    serializer = SalesVisitLogSerializer(page_obj, many=True)
+    # NOTE: response shape changed from a bare JSON array to a paginated
+    # object ({"data": [...], total_count, total_pages, current_page}) to
+    # bound the payload as sales visit logs accumulate; update any frontend
+    # caller that expected a raw array here.
+    return Response({"data": serializer.data, **page_meta}, status=status.HTTP_200_OK)
 
 
 

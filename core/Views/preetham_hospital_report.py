@@ -1,13 +1,14 @@
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from pymongo import MongoClient
+from core.mongo_client import get_client
 from datetime import datetime, timedelta
 from bson.errors import InvalidId
 from core.utils import get_employee_name
 import json
 import os
 import traceback
+import logging
 
 from ..models import Billing
 
@@ -18,6 +19,8 @@ from pyauth.auth import HasRoleAndDataPermission, HasRolePermission
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @csrf_exempt
@@ -30,7 +33,7 @@ def preetham_hospital_report(request):
     """
 
     try:
-        client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+        client = get_client()
         db = client.Diagnostics
 
         billing_col = db.core_billing
@@ -106,7 +109,8 @@ def preetham_hospital_report(request):
             raw_testdetails = doc.get("testdetails", "[]")
             try:
                 testdetails = json.loads(raw_testdetails)
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse testdetails for bill_no {bill_no}: {e}")
                 testdetails = []
 
             # Deduplicate tests (parameter-based tests appear once)
@@ -159,9 +163,10 @@ def preetham_hospital_report(request):
                          if t.get("approve") is True or t.get("approve_by"):
                              is_approved = True
                              break
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse testvalue testdetails for barcode {bc}: {e}")
                 pass
-            
+
             test_status_map[bc] = "Approved" if is_approved else "Tested"
 
         # 2. Check core_samplestatus (Sample flow)
@@ -198,9 +203,10 @@ def preetham_hospital_report(request):
                         current_status = "Collected"
                     elif "Captured" in statuses: # Handling potential synonyms
                         current_status = "Collected"
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse samplestatus testdetails for barcode {bc}: {e}")
                 pass
-            
+
             if current_status:
                 sample_status_map[bc] = current_status
 
@@ -261,8 +267,8 @@ def preetham_hospital_report(request):
         return JsonResponse(result, safe=False)
 
     except Exception as e:
-        print("ERROR in preetham_hospital_report:", str(e))
-        print(traceback.format_exc())
+        logger.error(f"ERROR in preetham_hospital_report: {str(e)}")
+        logger.error(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
 
 
@@ -275,7 +281,7 @@ def get_preethampatient_test_details(request):
     Used for generating PDF reports
     """
     try:
-        client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+        client = get_client()
         db = client.Diagnostics
 
         barcode = request.GET.get("barcode")
@@ -317,13 +323,13 @@ def get_preethampatient_test_details(request):
                 elif isinstance(raw_details, list):
                     test_details.extend(raw_details)
             except Exception as e:
-                print(f"JSON extract error for barcode {barcode}: {e}")
-                
-        # 2. If no test details found in testvalue, return 404? 
+                logger.error(f"JSON extract error for barcode {barcode}: {e}")
+
+        # 2. If no test details found in testvalue, return 404?
         # Or should we check core_billing/barcode_col for pending tests?
-        # For a report, we typically only show results. 
+        # For a report, we typically only show results.
         if not test_details:
-             print(f"No test details found in core_testvalue for {barcode}")
+             logger.debug(f"No test details found in core_testvalue for {barcode}")
              # Optional: Check if we have pending tests in barcode_col
              
         # 3. Resolve Patient ID and Bill No
@@ -383,8 +389,8 @@ def get_preethampatient_test_details(request):
         return JsonResponse(result, safe=False)
 
     except Exception as e:
-        print("ERROR in get_preethampatient_test_details:", str(e))
-        print(traceback.format_exc())
+        logger.error(f"ERROR in get_preethampatient_test_details: {str(e)}")
+        logger.error(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
 
 
@@ -401,7 +407,7 @@ def preetham_billing_dashboard(request):
     """
 
     try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         billing_collection = db["core_billing"]
 
@@ -459,17 +465,20 @@ def preetham_billing_dashboard(request):
             # ---------- Amounts ----------
             try:
                 total_amount += float(record.get("totalAmount", 0) or 0)
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse totalAmount: {e}")
                 pass
 
             try:
                 total_credit += float(record.get("credit_amount", 0) or 0)
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse credit_amount: {e}")
                 pass
 
             try:
                 total_discount += float(record.get("discount", 0) or 0)
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse discount: {e}")
                 pass
 
             # ---------- Payment Method ----------
@@ -480,7 +489,8 @@ def preetham_billing_dashboard(request):
                     payment_data = json.loads(payment_data.strip('"'))
                 if isinstance(payment_data, dict):
                     payment_method = payment_data.get("paymentmethod", "N/A")
-            except:
+            except Exception as e:
+                logger.error(f"Failed to parse payment_method: {e}")
                 pass
 
             payment_status_map[payment_method] = payment_status_map.get(payment_method, 0) + 1
@@ -500,7 +510,7 @@ def preetham_billing_dashboard(request):
                     # count based on test_id
                     tests_count += len([t for t in testdetails if t.get("test_id")])
             except Exception as e:
-                print("Test parsing error:", e)
+                logger.error(f"Test parsing error: {e}")
 
             # ---------- Status Breakdown ----------
             status = record.get("status", "Unknown")
@@ -519,8 +529,8 @@ def preetham_billing_dashboard(request):
         }, safe=False)
 
     except Exception as e:
-        print("Error in preetham_billing_dashboard:", str(e))
-        print(traceback.format_exc())
+        logger.error(f"Error in preetham_billing_dashboard: {str(e)}")
+        logger.error(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
     
 
@@ -532,7 +542,7 @@ def preetham_hospital_ledger(request):
         from_date = request.GET.get('from_date')
         to_date = request.GET.get('to_date')
 
-        print(f"preetham_hospital_ledger: from={from_date}, to={to_date}")
+        logger.debug(f"preetham_hospital_ledger: from={from_date}, to={to_date}")
 
         query = {
             'B2B': 'PREETHAM HOSPITAL'
@@ -571,8 +581,8 @@ def preetham_hospital_ledger(request):
         return JsonResponse({"success": True, "data": data})
 
     except Exception as e:
-        print(f"Error in preetham_hospital_ledger: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Error in preetham_hospital_ledger: {str(e)}")
+        logger.error(traceback.format_exc())
         return JsonResponse(
             {"success": False, "error": f"{str(e)} | {traceback.format_exc()}"},
             status=500

@@ -9,6 +9,7 @@ import math
 
 from ..models import SampleCollectorLocation
 from core.utils import get_employee_name
+from core.pagination import paginate_queryset
 
 
 def calculate_distance(lat1, lon1, lat2, lon2):
@@ -400,8 +401,19 @@ def sample_collector_location_history(request):
 
         qs = qs.order_by('-date', '-startTime')
 
-        response = [format_location_response(item) for item in qs]
-        return JsonResponse(response, safe=False)
+        page_obj, page_meta = paginate_queryset(qs, request)
+
+        response = [format_location_response(item) for item in page_obj]
+
+        # NOTE: response shape changed from a bare JSON array to a paginated
+        # object ({"data": [...], total_count, total_pages, current_page}) to
+        # bound the payload as this admin history query can span an
+        # arbitrary caller-supplied date range; update any frontend caller
+        # that expected a raw array here.
+        return JsonResponse({
+            "data": response,
+            **page_meta
+        })
 
     except Exception as e:
         return JsonResponse({"success": False, "message": str(e)}, status=500)

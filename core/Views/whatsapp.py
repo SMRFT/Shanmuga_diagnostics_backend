@@ -1,7 +1,9 @@
 import gridfs
+import logging
 from django.http import JsonResponse
 from django.core.files.storage import default_storage
-from pymongo import MongoClient
+from django.db.models import Q
+from core.mongo_client import get_client
 from bson.objectid import ObjectId
 from django.views.decorators.csrf import csrf_exempt
 import json
@@ -16,15 +18,19 @@ from rest_framework.response import Response
 from pyauth.auth import HasRoleAndDataPermission
 
 from ..models import CommunicationLog
+from core.pagination import paginate_queryset
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse
 from django.core.mail import EmailMessage
 from django.conf import settings
 import os
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 # MongoDB Connection
-client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+client = get_client()
 db = client["Diagnostics"]
 fs = gridfs.GridFS(db)
 
@@ -69,7 +75,8 @@ def get_pdf_from_gridfs(request, file_id):
         response = HttpResponse(file.read(), content_type="application/pdf")
         response["Content-Disposition"] = f'attachment; filename="{file.filename}"'  # ← forces download
         return response
-    except:
+    except Exception as e:
+        logger.exception(f"Error fetching file from GridFS: {e}")
         return JsonResponse({"error": "File not found"}, status=404)
 
 
@@ -327,7 +334,7 @@ import datetime
 @csrf_exempt
 # @permission_classes([HasRoleAndDataPermission])
 def get_communication_logs(request):
-    print(f"DEBUG: get_communication_logs called with method {request.method}")
+    logger.debug(f"DEBUG: get_communication_logs called with method {request.method}")
     try:
         if request.method == 'POST':
             from_date_str = request.data.get('from_date')
@@ -347,7 +354,18 @@ def get_communication_logs(request):
                 filter_kwargs['created_date__lte'] = datetime.datetime.combine(d, datetime.time.max)
             
         logs = CommunicationLog.objects.filter(**filter_kwargs).order_by('-created_date')
-            
+
+        search = request.GET.get('search')
+        if search and search.strip():
+            search = search.strip()
+            logs = logs.filter(Q(patient_name__icontains=search) | Q(patient_id__icontains=search) | Q(recipient__icontains=search))
+
+        # NOTE: response shape changed - "data" is now a paginated page of
+        # results (with total_pages/current_page/total_count merged in)
+        # instead of the entire, unbounded communication-log table; update
+        # any frontend caller that expected every matching row in one go.
+        page_obj, page_meta = paginate_queryset(logs, request)
+
         data = [
             {
                 "id": log.id,
@@ -358,9 +376,9 @@ def get_communication_logs(request):
                 "recipient": log.recipient,
                 "status": log.status,
                 "details": log.details
-            } for log in logs
+            } for log in page_obj
         ]
-            
-        return JsonResponse({"success": True, "data": data})
+
+        return JsonResponse({"success": True, "data": data, **page_meta})
     except Exception as e:
         return JsonResponse({"success": False, "error": str(e)}, status=500)

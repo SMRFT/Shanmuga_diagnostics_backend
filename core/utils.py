@@ -1,5 +1,5 @@
 import os
-from pymongo import MongoClient
+from core.mongo_client import get_client
 
 # Simple in-memory cache to prevent excessive DB calls
 _EMPLOYEE_NAME_CACHE = {}
@@ -14,7 +14,7 @@ def get_employee_map():
     try:
         mongo_url = os.getenv("GLOBAL_DB_HOST")
         if mongo_url:
-            client = MongoClient(mongo_url)
+            client = get_client()
             db = client["Global"]
             collection = db["backend_diagnostics_profile"]
             

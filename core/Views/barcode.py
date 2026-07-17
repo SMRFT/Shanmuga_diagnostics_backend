@@ -8,13 +8,14 @@ import re
 from datetime import datetime
 from core.utils import get_employee_name
 from django.forms.models import model_to_dict
-from django.db.models import Max
+from django.db.models import Max, Q
 from ..models import BarcodeTestDetails,Patient,Billing
 import logging
 import json
 #auth
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
+from core.pagination import paginate_queryset
 
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
@@ -159,7 +160,9 @@ def save_barcodes(request):
 def get_barcode_by_date(request):
     from_date = request.GET.get('from_date')
     to_date = request.GET.get('to_date')
-    
+    search = request.GET.get('search', '').strip()
+    status_filter = request.GET.get('status', '').strip()
+
     # Maintain backward compatibility with single 'date' parameter
     single_date = request.GET.get('date')
     
@@ -185,15 +188,36 @@ def get_barcode_by_date(request):
        
         # Query Billing records for the date range using bill_date
         billing_records = Billing.objects.filter(
-            bill_date__gte=start_of_range, 
+            bill_date__gte=start_of_range,
             bill_date__lte=end_of_range
         ).order_by('-bill_date')  # Order by most recent first
-       
+
+        # Apply full-dataset search (patient name/gender resolved via Patient,
+        # bill_no matched directly on Billing) before pagination so results
+        # from any page are found, not just the currently-fetched page.
+        if search:
+            name_patient_ids = Patient.objects.filter(
+                Q(patientname__icontains=search) | Q(gender__icontains=search)
+            ).values_list('patient_id', flat=True)
+            billing_records = billing_records.filter(
+                Q(bill_no__icontains=search) | Q(patient_id__in=name_patient_ids)
+            )
+
+        if status_filter and status_filter.lower() != 'all':
+            if status_filter.lower() == 'emergency':
+                billing_records = billing_records.filter(is_emergency=True)
+            elif status_filter.lower() == 'normal':
+                billing_records = billing_records.filter(is_emergency=False)
+
+        # Paginate the Billing queryset before the per-row processing loop below,
+        # so only the current page's records get built into patient_data.
+        page_obj, page_meta = paginate_queryset(billing_records, request)
+
         # Process each billing record and get corresponding patient details
         patient_data = []
         processed_patients = set()  # To avoid duplicate patients with multiple bills
-        
-        for billing in billing_records:
+
+        for billing in page_obj:
             try:
                 # Create a unique key for patient to avoid duplicates
                 patient_key = (billing.patient_id, billing.bill_no)
@@ -272,7 +296,7 @@ def get_barcode_by_date(request):
                 continue
             except Exception as e:
                 # Log the error and continue with next record
-                print(f"Error processing billing record {billing.bill_no}: {str(e)}")
+                logger.error(f"Error processing billing record {billing.bill_no}: {str(e)}")
                 continue
         
         # Add summary information to the response
@@ -284,10 +308,11 @@ def get_barcode_by_date(request):
                     'from': from_date,
                     'to': to_date
                 },
-                'total_records_processed': len(billing_records)
-            }
+                'total_records_processed': page_meta['total_count']
+            },
+            **page_meta
         }
-        
+
         # Return the filtered patient data with summary
         return JsonResponse(response_data, safe=False)
         

@@ -7,12 +7,13 @@ from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 import json
 from ..models import Patient,SampleStatus,TestValue,MBTestValue,Billing,BarcodeTestDetails,HmspatientBilling,Hmsbarcode,Hmssamplestatus
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import os
 from dotenv import load_dotenv
 load_dotenv()
 import logging
 import re
+from core.pagination import paginate_queryset
 
 logger = logging.getLogger(__name__)
 @permission_classes([HasRoleAndDataPermission])
@@ -35,7 +36,8 @@ class ConsolidatedDataView(APIView):
                 total_seconds += int(minutes.group(1)) * 60
 
             return total_seconds if total_seconds > 0 else None
-        except:
+        except Exception as e:
+            logger.error(f"Error parsing TAT format '{tat_str}' in ConsolidatedDataView.parse_tat_format: {e}")
             return None
 
     def get(self, request):
@@ -132,7 +134,7 @@ class ConsolidatedDataView(APIView):
         patient_dict = {p.patient_id: p for p in patients}
 
         # ---------------- TEST MASTER (Mongo) ----------------
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         test_collection = db.core_testdetails
 
@@ -143,7 +145,8 @@ class ConsolidatedDataView(APIView):
                 for t in tests:
                     if t.get("test_id"):
                         test_ids.add(t.get("test_id"))
-            except:
+            except Exception as e:
+                logger.error(f"Error parsing testdetails for barcode {getattr(b, 'barcode', None)} in ConsolidatedDataView.get: {e}")
                 continue
 
         test_master_dict = {}
@@ -166,7 +169,8 @@ class ConsolidatedDataView(APIView):
                 dt_ist_aware = ist.localize(dt_ist)
                 dt_utc = dt_ist_aware.astimezone(pytz.UTC)
                 return dt_utc.isoformat()
-            except:
+            except Exception as e:
+                logger.error(f"Error converting time '{time_str}' to ISO format in ConsolidatedDataView.convert_to_iso_if_needed: {e}")
                 return time_str
 
         for billing in billing_records:
@@ -182,7 +186,8 @@ class ConsolidatedDataView(APIView):
 
             try:
                 barcode_tests = barcode_obj.testdetails if isinstance(barcode_obj.testdetails, list) else json.loads(barcode_obj.testdetails)
-            except:
+            except Exception as e:
+                logger.error(f"Error parsing barcode_obj.testdetails for barcode {barcode} in ConsolidatedDataView.get: {e}")
                 barcode_tests = []
 
             sample_obj = sample_dict.get(barcode)
@@ -190,7 +195,8 @@ class ConsolidatedDataView(APIView):
             if sample_obj:
                 try:
                     sample_tests = sample_obj.testdetails if isinstance(sample_obj.testdetails, list) else json.loads(sample_obj.testdetails)
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing sample_obj.testdetails for barcode {barcode} in ConsolidatedDataView.get: {e}")
                     pass
 
             sample_by_id = {t.get("test_id"): t for t in sample_tests if t.get("test_id")}
@@ -208,7 +214,8 @@ class ConsolidatedDataView(APIView):
                     for t in tv_list:
                         if t.get("test_id") and t.get("test_id") not in testvalue_by_id:
                             testvalue_by_id[t.get("test_id")] = t
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing TestValue testdetails for barcode {barcode} in ConsolidatedDataView.get: {e}")
                     continue
 
             # Then, process MBTestValue records (will override if same test_id exists)
@@ -235,7 +242,8 @@ class ConsolidatedDataView(APIView):
                                 if t.get("dispatch_time") and t.get("dispatch_time") not in ["pending", "null", None]:
                                     if not existing.get("dispatch_time") or existing.get("dispatch_time") in ["pending", "null"]:
                                         existing["dispatch_time"] = t.get("dispatch_time")
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing MBTestValue testdetails for barcode {barcode} in ConsolidatedDataView.get: {e}")
                     continue
 
             # REGISTERED TIME (same format as your original)
@@ -292,7 +300,8 @@ class ConsolidatedDataView(APIView):
                         diff = app_dt - col_dt
                         tat_seconds = int(diff.total_seconds())
                         tat_time = str(timedelta(seconds=tat_seconds))
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error calculating actual TAT for barcode {barcode}, test_id {test_id} in ConsolidatedDataView.get: {e}")
                         tat_time = "pending"
 
                 # -------- TOTAL PROCESSING TIME --------
@@ -306,7 +315,8 @@ class ConsolidatedDataView(APIView):
                         diff = dis_dt - reg_dt
                         total_seconds = int(diff.total_seconds())
                         total_processing_time = str(timedelta(seconds=total_seconds))
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error calculating total processing time for barcode {barcode}, test_id {test_id} in ConsolidatedDataView.get: {e}")
                         total_processing_time = "pending"
 
                 # -------- TAT Overage --------
@@ -342,14 +352,17 @@ class ConsolidatedDataView(APIView):
                     "total_processing_time": total_processing_time
                 })
 
+        total_count = len(response_data)
+        page_obj, page_meta = paginate_queryset(response_data, request)
         return Response({
-            "data": response_data,
-            "count": len(response_data)
-        }, status=200)     
+            "data": list(page_obj),
+            "count": total_count,
+            **page_meta
+        }, status=200)
 
 @permission_classes([HasRoleAndDataPermission])
 class HMSConsolidatedDataView(APIView):
-    
+
     def parse_tat_format(self, tat_str):
         """Parse TAT format like '2D 3H 45M' and return total seconds"""
         if not tat_str or tat_str == 'N/A':
@@ -368,7 +381,8 @@ class HMSConsolidatedDataView(APIView):
                 total_seconds += int(minutes.group(1)) * 60
 
             return total_seconds if total_seconds > 0 else None
-        except:
+        except Exception as e:
+            logger.error(f"Error parsing TAT format '{tat_str}' in HMSConsolidatedDataView.parse_tat_format: {e}")
             return None
 
     def get(self, request):
@@ -402,7 +416,7 @@ class HMSConsolidatedDataView(APIView):
         
         try:
             # Connect to MongoDB to get test details from core_testdetails
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             test_details_collection = db.core_testdetails
             
@@ -461,7 +475,8 @@ class HMSConsolidatedDataView(APIView):
                     for t in tests:
                         if t.get("test_id"):
                             test_ids.add(t.get("test_id"))
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing testdetails for barcode {getattr(barcode_record, 'barcode', None)} in HMSConsolidatedDataView.get: {e}")
                     continue
             
             test_master_dict = {}
@@ -483,7 +498,8 @@ class HMSConsolidatedDataView(APIView):
                     dt_ist_aware = ist.localize(dt_ist)
                     dt_utc = dt_ist_aware.astimezone(pytz.UTC)
                     return dt_utc.isoformat()
-                except:
+                except Exception as e:
+                    logger.error(f"Error converting time '{time_str}' to ISO format in HMSConsolidatedDataView.convert_to_iso_if_needed: {e}")
                     return time_str
             
             # ---------------- RESPONSE BUILD ----------------
@@ -527,7 +543,8 @@ class HMSConsolidatedDataView(APIView):
                         for t in tv_list:
                             if t.get("test_id") and t.get("test_id") not in testvalue_by_id:
                                 testvalue_by_id[t.get("test_id")] = t
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error parsing TestValue testdetails for barcode {barcode} in HMSConsolidatedDataView.get: {e}")
                         continue
                 
                 # Then, process MBTestValue records (will override if same test_id exists)
@@ -554,9 +571,10 @@ class HMSConsolidatedDataView(APIView):
                                     if t.get("dispatch_time") and t.get("dispatch_time") not in ["pending", "null", None]:
                                         if not existing.get("dispatch_time") or existing.get("dispatch_time") in ["pending", "null"]:
                                             existing["dispatch_time"] = t.get("dispatch_time")
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error parsing MBTestValue testdetails for barcode {barcode} in HMSConsolidatedDataView.get: {e}")
                         continue
-                
+
                 # Format registration time from barcode record's created_date and convert to IST
                 registered_time = None
                 if barcode_record.created_date:
@@ -619,11 +637,11 @@ class HMSConsolidatedDataView(APIView):
                     received_time = convert_to_iso_if_needed(
                         sample_data.get("received_time")
                     )
-                    
+
                     # -------- ACTUAL TAT (approval_time - registered_time) --------
                     tat_time = "pending"
                     tat_seconds = None
-                    
+
                     if collected_time and approval_time not in ["pending", "null", None]:
                         try:
                             col_dt = datetime.fromisoformat(collected_time.replace('Z', '+00:00'))
@@ -631,13 +649,14 @@ class HMSConsolidatedDataView(APIView):
                             diff = app_dt - col_dt
                             tat_seconds = int(diff.total_seconds())
                             tat_time = str(timedelta(seconds=tat_seconds))
-                        except:
+                        except Exception as e:
+                            logger.error(f"Error calculating actual TAT for barcode {barcode}, test_id {test_id} in HMSConsolidatedDataView.get: {e}")
                             tat_time = "pending"
-                    
+
                     # -------- TOTAL PROCESSING TIME (dispatch_time - collected_time) --------
                     total_processing_time = "pending"
                     total_seconds = None
-                    
+
                     if registered_time not in ["pending", "null", None] and dispatch_time not in ["pending", "null", None]:
                         try:
                             reg_dt = datetime.fromisoformat(registered_time.replace('Z', '+00:00'))
@@ -645,7 +664,8 @@ class HMSConsolidatedDataView(APIView):
                             diff = dis_dt - reg_dt
                             total_seconds = int(diff.total_seconds())
                             total_processing_time = str(timedelta(seconds=total_seconds))
-                        except:
+                        except Exception as e:
+                            logger.error(f"Error calculating total processing time for barcode {barcode}, test_id {test_id} in HMSConsolidatedDataView.get: {e}")
                             total_processing_time = "pending"
                     
                     # -------- TAT Overage (using total_processing_time) --------
@@ -686,10 +706,13 @@ class HMSConsolidatedDataView(APIView):
                 
                 # Mark this barcode as processed
                 processed_barcodes.add(barcode)
-            
+
+            total_count = len(response_data)
+            page_obj, page_meta = paginate_queryset(response_data, request)
             return Response({
-                "data": response_data,
-                "count": len(response_data)
+                "data": list(page_obj),
+                "count": total_count,
+                **page_meta
             }, status=200)
             
         except Exception as e:
@@ -700,7 +723,7 @@ class HMSConsolidatedDataView(APIView):
 
 @permission_classes([HasRoleAndDataPermission])
 class FranchiseConsolidatedDataView(APIView):
-    
+
     def parse_tat_format(self, tat_str):
         """Parse TAT format like '2D 3H 45M' and return total seconds"""
         if not tat_str or tat_str == 'N/A':
@@ -719,7 +742,8 @@ class FranchiseConsolidatedDataView(APIView):
                 total_seconds += int(minutes.group(1)) * 60
 
             return total_seconds if total_seconds > 0 else None
-        except:
+        except Exception as e:
+            logger.error(f"Error parsing TAT format '{tat_str}' in FranchiseConsolidatedDataView.parse_tat_format: {e}")
             return None
     
     def get(self, request):
@@ -749,7 +773,7 @@ class FranchiseConsolidatedDataView(APIView):
         
         try:
             # ---------------- MONGODB CONNECTION ----------------
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.franchise
             franchise_billing_collection = db.franchise_billing
             franchise_sample_collection = db.franchise_sample
@@ -763,7 +787,7 @@ class FranchiseConsolidatedDataView(APIView):
             billing_records = list(franchise_billing_collection.find({}))
             
             if not billing_records:
-                client.close()
+                # Note: `client` is the shared, pooled MongoClient — do not close it here.
                 return Response({
                     "data": [],
                     "count": 0
@@ -785,7 +809,8 @@ class FranchiseConsolidatedDataView(APIView):
                     dt_ist_aware = ist.localize(dt_ist)
                     dt_utc = dt_ist_aware.astimezone(pytz.UTC)
                     return dt_utc.isoformat()
-                except:
+                except Exception as e:
+                    logger.error(f"Error converting time '{time_str}' to ISO format in FranchiseConsolidatedDataView.convert_to_iso_if_needed: {e}")
                     return time_str
             
             # ---------------- RESPONSE BUILD ----------------
@@ -834,7 +859,7 @@ class FranchiseConsolidatedDataView(APIView):
             barcodes = list(barcode_to_billing.keys())
             
             if not barcodes:
-                client.close()
+                # Note: `client` is the shared, pooled MongoClient — do not close it here.
                 return Response({
                     "data": [],
                     "count": 0
@@ -884,7 +909,8 @@ class FranchiseConsolidatedDataView(APIView):
                     for test in tests:
                         if test.get('test_id'):
                             all_test_ids.add(test.get('test_id'))
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing testdetails for sample in FranchiseConsolidatedDataView.get: {e}")
                     continue
             
             # ---------------- GET TEST MASTER DATA ----------------
@@ -936,7 +962,8 @@ class FranchiseConsolidatedDataView(APIView):
                             test_id = t.get('test_id')
                             if test_id and test_id not in testvalue_by_id:
                                 testvalue_by_id[test_id] = t
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error parsing TestValue testdetails for barcode {barcode} in FranchiseConsolidatedDataView.get: {e}")
                         continue
                 
                 # Then, process MBTestValue records (will override if same test_id exists)
@@ -963,9 +990,10 @@ class FranchiseConsolidatedDataView(APIView):
                                     if t.get("dispatch_time") and t.get("dispatch_time") not in ["pending", "null", None]:
                                         if not existing.get("dispatch_time") or existing.get("dispatch_time") in ["pending", "null"]:
                                             existing["dispatch_time"] = t.get("dispatch_time")
-                    except:
+                    except Exception as e:
+                        logger.error(f"Error parsing MBTestValue testdetails for barcode {barcode} in FranchiseConsolidatedDataView.get: {e}")
                         continue
-                
+
                 # Format registration time and convert to ISO
                 registered_time = None
                 if billing.get('registrationDate'):
@@ -1040,13 +1068,14 @@ class FranchiseConsolidatedDataView(APIView):
                             diff = app_dt - col_dt
                             tat_seconds = int(diff.total_seconds())
                             tat_time = str(timedelta(seconds=tat_seconds))
-                        except:
+                        except Exception as e:
+                            logger.error(f"Error calculating actual TAT for barcode {barcode}, test_id {test_id} in FranchiseConsolidatedDataView.get: {e}")
                             tat_time = "pending"
-                    
+
                     # -------- PROCESSING TIME (approval_time - collected_time) --------
                     total_processing_time = "pending"
                     total_seconds = None
-                    
+
                     if registered_time not in ["pending", "null", None] and approval_time not in ["pending", "null", None]:
                         try:
                             reg_dt = datetime.fromisoformat(registered_time.replace('Z', '+00:00'))
@@ -1054,7 +1083,8 @@ class FranchiseConsolidatedDataView(APIView):
                             diff = app_dt - reg_dt
                             total_seconds = int(diff.total_seconds())
                             total_processing_time = str(timedelta(seconds=total_seconds))
-                        except:
+                        except Exception as e:
+                            logger.error(f"Error calculating total processing time for barcode {barcode}, test_id {test_id} in FranchiseConsolidatedDataView.get: {e}")
                             total_processing_time = "pending"
                     
                     # -------- TAT Overage (using total_processing_time) --------
@@ -1092,17 +1122,18 @@ class FranchiseConsolidatedDataView(APIView):
                 # Mark this barcode as processed
                 processed_barcodes.add(barcode)
             
-            # Close MongoDB connection
-            client.close()
-            
+            # Note: `client` is the shared, pooled MongoClient — do not close it here.
+
+            total_count = len(response_data)
+            page_obj, page_meta = paginate_queryset(response_data, request)
             return Response({
-                "data": response_data,
-                "count": len(response_data)
+                "data": list(page_obj),
+                "count": total_count,
+                **page_meta
             }, status=200)
-            
+
         except Exception as e:
-            if 'client' in locals():
-                client.close()
+            # Note: `client` is the shared, pooled MongoClient — do not close it here.
             return Response({
                 "error": str(e)
             }, status=500)
@@ -1138,7 +1169,8 @@ class HMSTestCountView(APIView):
             if isinstance(td, str):
                 try:
                     td = json.loads(td)
-                except:
+                except Exception as e:
+                    logger.error(f"Error parsing testdetails JSON for record {getattr(record, 'barcode', None)} in HMSTestCountView.post: {e}")
                     continue
             
             if not isinstance(td, list):

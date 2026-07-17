@@ -2,7 +2,7 @@ from rest_framework.response import Response
 from django.http import JsonResponse
 import json
 from urllib.parse import quote_plus
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import certifi
 from ..models import Patient, ClinicalName, Billing
 from ..serializers import BillingSerializer, ClinicalNameSerializer
@@ -14,6 +14,8 @@ from datetime import datetime
 from django.views.decorators.csrf import csrf_exempt
 import pytz
 import os
+import logging
+from core.pagination import paginate_queryset
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -29,8 +31,12 @@ from django.utils.dateparse import parse_date
 from django.views.decorators.csrf import csrf_exempt
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+
 def get_mongo_collection():
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    client = get_client()
     db = client["Diagnostics"]
     return db["core_invoice"]
 
@@ -108,13 +114,20 @@ def get_all_patients(request):
         except ValueError:
             pass
 
+    # Paginate the eligible (uninvoiced) patients before doing name lookups
+    # and serialization, so we don't build lookups for records that never
+    # make it into the response either.
+    total_count = len(patients)
+    page_obj, page_meta = paginate_queryset(patients, request)
+    patients = list(page_obj)
+
     # ENHANCED DEBUGGING: Print actual patient IDs
     patient_ids = [p.patient_id for p in patients]
     # print(f"Billing patient IDs found: {patient_ids}")
     
     # Print each ID with quotes to see whitespace
     for i, pid in enumerate(patient_ids):
-        print(f"Billing ID {i}: '{pid}' (length: {len(pid) if pid else 0})")
+        logger.debug(f"Billing ID {i}: '{pid}' (length: {len(pid) if pid else 0})")
 
     # IMPROVED PATIENT MATCHING with normalization
     # Clean patient IDs by stripping whitespace and converting to uppercase
@@ -142,11 +155,11 @@ def get_all_patients(request):
         }
         
     except Exception as e:
-        print(f"Database function approach failed: {e}")
+        logger.error(f"Database function approach failed: {e}")
         # Fallback method: Manual filtering
         all_patients = Patient.objects.all()
         patients_dict = {}
-        
+
         for patient in all_patients:
             if patient.patient_id:
                 normalized_patient_id = str(patient.patient_id).strip().upper()
@@ -160,7 +173,7 @@ def get_all_patients(request):
     matched_ids = set(patients_dict.keys())
     unmatched_ids = set(cleaned_patient_ids) - matched_ids
     if unmatched_ids:
-        print(f"Unmatched patient IDs: {unmatched_ids}")
+        logger.warning(f"Unmatched patient IDs: {unmatched_ids}")
         
         # Additional debugging: Check if these IDs exist in Patient table at all
         for unmatched_id in unmatched_ids:
@@ -168,7 +181,7 @@ def get_all_patients(request):
                 patient_id__icontains=unmatched_id.lower()
             )[:5]  # Limit to 5 results
             if similar_patients:
-                print(f"Similar patient IDs for '{unmatched_id}': {[p.patient_id for p in similar_patients]}")
+                logger.debug(f"Similar patient IDs for '{unmatched_id}': {[p.patient_id for p in similar_patients]}")
 
     # Serialize and add patient names
     serializer = BillingSerializer(patients, many=True)
@@ -184,7 +197,15 @@ def get_all_patients(request):
         else:
             billing_data['patientname'] = 'No Patient ID'
 
-    return Response(response_data, status=status.HTTP_200_OK)
+    # NOTE: response shape changed from a bare JSON array to a paginated
+    # object ({"data": [...], total_count, total_pages, current_page}) to
+    # bound the payload as uninvoiced billing records grow; update any
+    # frontend caller that expected a raw array here.
+    return Response({
+        "data": response_data,
+        "total_count": total_count,
+        **page_meta
+    }, status=status.HTTP_200_OK)
 
 
 
@@ -198,8 +219,18 @@ def get_clinicalname_invoice(request):
     if request.method == 'GET':
         # Filter clinical names with b2bType "Carry Credit"
         clinicalname = ClinicalName.objects.filter(b2bType="Credit")
-        serializer = ClinicalNameSerializer(clinicalname, many=True)
-        return Response(serializer.data)
+        total_count = clinicalname.count()
+        page_obj, page_meta = paginate_queryset(clinicalname, request)
+        serializer = ClinicalNameSerializer(page_obj, many=True)
+        # NOTE: response shape changed from a bare JSON array to a paginated
+        # object ({"data": [...], total_count, total_pages, current_page}) to
+        # bound the payload as clinical name records grow; update any
+        # frontend caller that expected a raw array here.
+        return Response({
+            "data": serializer.data,
+            "total_count": total_count,
+            **page_meta
+        })
 
 # Function to get MongoDB collection
 
@@ -255,7 +286,7 @@ def generate_invoice(request):
             }
             
         except Exception as e:
-            print(f"Database function approach failed: {e}")
+            logger.error(f"Database function approach failed: {e}")
             # Fallback method: Manual filtering
             all_patients = Patient.objects.all()
             patients_dict = {}
@@ -388,7 +419,18 @@ def get_invoices(request):
 
     # Sort by generation date descending to show latest invoices first
     invoices = list(collection.find(query, {"_id": 0}).sort("generatedAt", -1))
-    return JsonResponse(invoices, safe=False)
+
+    # NOTE: response shape changed from a bare JSON array to a paginated
+    # object ({"data": [...], total_count, total_pages, current_page}) to
+    # bound the payload as invoices accumulate; update any frontend caller
+    # that expected a raw array here.
+    total_count = len(invoices)
+    page_obj, page_meta = paginate_queryset(invoices, request)
+    return JsonResponse({
+        "data": list(page_obj),
+        "total_count": total_count,
+        **page_meta
+    }, safe=False)
     
 
 @api_view(['PUT', 'POST'])
@@ -502,7 +544,7 @@ def update_invoice(request):
                     )
 
             except Exception as e:
-                print(f"Error updating patient credits: {e}")
+                logger.error(f"Error updating patient credits: {e}")
 
             return JsonResponse(
                 {
@@ -627,7 +669,6 @@ from collections import defaultdict
 from django.http import JsonResponse
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
-from pymongo import MongoClient
 import os
 
 def convert_to_float(value):
@@ -648,7 +689,6 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 import os, json
-from pymongo import MongoClient
 
 def convert_to_float(val):
     from bson.decimal128 import Decimal128
@@ -678,13 +718,13 @@ def patient_report(request):
         return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
     # MongoDB Connection
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    client = get_client()
     db = client.Diagnostics
     patients_collection = db["core_billing"]
     invoice_collection = db["core_invoice"]
 
     # Corporate Database Connection
-    corporate_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    corporate_client = get_client()
     corporate_db = corporate_client.Corporatehealthcheckup
 
     report_by_date = defaultdict(lambda: {
@@ -716,7 +756,8 @@ def patient_report(request):
         elif isinstance(patient_date, str):
             try:
                 patient_date = datetime.fromisoformat(patient_date.replace("Z", "+00:00"))
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to parse patient_date '{patient_date}' in patient_report: {e}")
                 continue
 
         if not isinstance(patient_date, datetime):
@@ -739,7 +780,8 @@ def patient_report(request):
         if isinstance(payment_method, str) and payment_method.strip():
             try:
                 payment_method_dict = json.loads(payment_method)
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to parse payment_method JSON in patient_report: {e}")
                 payment_method_dict = {}
         elif isinstance(payment_method, dict):
             payment_method_dict = payment_method
@@ -748,7 +790,8 @@ def patient_report(request):
             multiple = patient.get("MultiplePayment", "[]")
             try:
                 multiple = json.loads(multiple) if isinstance(multiple, str) else multiple
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to parse MultiplePayment JSON in patient_report: {e}")
                 multiple = []
 
             for m in multiple:
@@ -773,7 +816,8 @@ def patient_report(request):
         if isinstance(testdetails, str) and testdetails.strip():
             try:
                 test_list = json.loads(testdetails)
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to parse testdetails JSON in patient_report: {e}")
                 test_list = []
         elif isinstance(testdetails, list):
             test_list = testdetails
@@ -796,7 +840,8 @@ def patient_report(request):
                             refund_date_key = refund_date.strftime("%Y-%m-%d")
                             test_amount = convert_to_float(test.get('amount', 0))
                             report_by_date[refund_date_key]['refund_amount'] += test_amount
-                    except:
+                    except Exception as e:
+                        logger.exception(f"Failed to parse refunded_date in patient_report: {e}")
                         continue
 
     # ✅ NEW: Process direct payments from Corporatehealthcheckup.core_billing
@@ -813,8 +858,11 @@ def patient_report(request):
         if isinstance(p_date, dict) and "$date" in p_date:
             p_date = datetime.fromisoformat(p_date["$date"].replace("Z", "+00:00"))
         elif isinstance(p_date, str):
-            try: p_date = datetime.fromisoformat(p_date.replace("Z", "+00:00"))
-            except: p_date = None
+            try:
+                p_date = datetime.fromisoformat(p_date.replace("Z", "+00:00"))
+            except Exception as e:
+                logger.exception(f"Failed to parse corporate patient date '{p_date}': {e}")
+                p_date = None
             
         date_key = p_date.strftime("%Y-%m-%d") if isinstance(p_date, datetime) else None
         
@@ -823,8 +871,11 @@ def patient_report(request):
         if isinstance(paid_at, dict) and "$date" in paid_at:
             paid_at = datetime.fromisoformat(paid_at["$date"].replace("Z", "+00:00"))
         elif isinstance(paid_at, str):
-            try: paid_at = datetime.fromisoformat(paid_at.replace("Z", "+00:00"))
-            except: paid_at = p_date # fallback to date if parse fails
+            try:
+                paid_at = datetime.fromisoformat(paid_at.replace("Z", "+00:00"))
+            except Exception as e:
+                logger.exception(f"Failed to parse corporate paid_at '{paid_at}': {e}")
+                paid_at = p_date # fallback to date if parse fails
         else:
             paid_at = p_date # fallback to date if missing
             
@@ -855,7 +906,8 @@ def patient_report(request):
                 try:
                     pm_json = json.loads(payment_method_raw)
                     method = pm_json.get("paymentmethod")
-                except:
+                except Exception as e:
+                    logger.exception(f"Failed to parse payment_method_raw JSON in patient_report: {e}")
                     method = payment_method_raw
             elif isinstance(payment_method_raw, str):
                 method = payment_method_raw
@@ -882,8 +934,11 @@ def patient_report(request):
             elif method == "Multiple Payment":
                 multiple = corp_patient.get("MultiplePayment", [])
                 if isinstance(multiple, str):
-                    try: multiple = json.loads(multiple)
-                    except: multiple = []
+                    try:
+                        multiple = json.loads(multiple)
+                    except Exception as e:
+                        logger.exception(f"Failed to parse corporate MultiplePayment JSON: {e}")
+                        multiple = []
                 for m in multiple:
                     m_method = m.get("paymentMethod")
                     m_amt = convert_to_float(m.get("amount", 0))
@@ -932,12 +987,13 @@ def patient_report(request):
                     # Invoice payments are NOT in net_amount, so we track them for total_collection
                     report_by_date[date_key]['invoice_payments'] += amt
                     report_by_date[date_key]['corporate_collection'] += amt
-                    
+
                     if method in report_by_date[date_key]['payment_totals']:
                         report_by_date[date_key]['payment_totals'][method] += amt
                     else:
                         report_by_date[date_key]['payment_totals'][method] = amt
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to process corporate invoice payment history in patient_report: {e}")
                 continue
 
     # ✅ NEW: Process Credit Payments from credit_details (Billing Collection)
@@ -951,7 +1007,8 @@ def patient_report(request):
         if isinstance(credit_details, str):
             try:
                 credit_details = json.loads(credit_details)
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to parse credit_details JSON in patient_report: {e}")
                 credit_details = []
 
         for credit in credit_details:
@@ -961,7 +1018,8 @@ def patient_report(request):
 
             try:
                 paid_date = datetime.strptime(paid_date_str, "%Y-%m-%d").date()
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to parse credit paid_date '{paid_date_str}' in patient_report: {e}")
                 continue
 
             if start_date.date() <= paid_date < end_date.date():
@@ -990,7 +1048,8 @@ def patient_report(request):
         if isinstance(payment_details, str):
             try:
                 payment_details = json.loads(payment_details)
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to parse invoice paymentDetails JSON in patient_report: {e}")
                 payment_details = []
 
         for payment in payment_details:
@@ -1012,7 +1071,8 @@ def patient_report(request):
                         report_by_date[payment_date_key]['payment_totals'][method] += amount_paid
                     else:
                         report_by_date[payment_date_key]['payment_totals'][method] = amount_paid
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to process invoice payment date in patient_report: {e}")
                 continue
 
     # ✅ Process Corporate Invoices (Corporatehealthcheckup Database)
@@ -1042,14 +1102,15 @@ def patient_report(request):
                     method = payment.get('method', 'Cash')
                     
                     report_by_date[date_key]['corporate_collection'] += amt
-                    
+
                     if method in report_by_date[date_key]['payment_totals']:
                         report_by_date[date_key]['payment_totals'][method] += amt
                     else:
                         report_by_date[date_key]['payment_totals'][method] = amt
-            except:
+            except Exception as e:
+                logger.exception(f"Failed to process corporate invoice payment history in patient_report: {e}")
                 continue
-    corporate_client.close()
+    # Note: corporate_client/client are the shared, pooled MongoClient — do not close them here.
 
     # 📊 Final Report
     report_list = []
@@ -1080,5 +1141,4 @@ def patient_report(request):
             },
         })
 
-    client.close()
     return Response({'report': report_list})

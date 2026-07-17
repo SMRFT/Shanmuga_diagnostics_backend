@@ -2,10 +2,11 @@ from django.http import JsonResponse
 from rest_framework.decorators import api_view
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime
+import logging
 from ...models import Hmsbarcode, HmspatientBilling
 from datetime import datetime, timedelta
 from django.utils import timezone 
-from pymongo import MongoClient
+from core.mongo_client import get_client
 import json
 import os
 from rest_framework.decorators import api_view, permission_classes
@@ -17,6 +18,9 @@ from pyauth.auth import HasRoleAndDataPermission
 
 
 from ...models import Hmsbarcode,Hmssamplestatus
+
+logger = logging.getLogger(__name__)
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def hms_get_samplepatients_by_date(request):
@@ -73,7 +77,7 @@ def hms_get_samplepatients_by_date(request):
         ).order_by('-date', 'barcode')
         
         # Connect to MongoDB to get test details from core_testdetails
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         test_details_collection = db.core_testdetails
         
@@ -175,7 +179,7 @@ def hms_sample_status(request):
                 data = request.data
             else:
                 data = json.loads(request.body)
-            print(f"Request Data: {data}")  # For debugging
+            logger.debug(f"Request Data: {data}")  # For debugging
             # Extract patient data
             employee_id = data.get('auth-user-id')
             date = data.get('date')
@@ -264,7 +268,7 @@ def hms_sample_status(request):
         except KeyError as e:
             return JsonResponse({'error': f'Missing key: {str(e)}'}, status=400)
         except Exception as e:
-            print(f"Error saving sample status: {str(e)}")  # For debugging
+            logger.error(f"Error saving sample status: {str(e)}")  # For debugging
             import traceback
             traceback.print_exc()  # Print full stack trace for debugging
             return JsonResponse({'error': str(e)}, status=400)
@@ -277,7 +281,7 @@ def hms_sample_status(request):
 def hms_patch_sample_status(request, barcode):
     from django.utils import timezone
     
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    client = get_client()
     db = client.Diagnostics
     collection = db.core_hmssamplestatus
     
@@ -382,6 +386,8 @@ def hms_patch_sample_status(request, barcode):
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
 from django.utils.timezone import make_aware
+from core.pagination import paginate_queryset
+from django.db.models import Q
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -395,10 +401,11 @@ def hms_get_sample_collected(request):
             # Get date parameters from query string
             from_date = request.GET.get('from_date')
             to_date = request.GET.get('to_date')
-            
+            search = request.GET.get('search', '').strip()
+
             # Start with all samples
             samples_query = Hmssamplestatus.objects.all()
-            
+
             # Apply date filtering if parameters are provided
             if from_date:
                 try:
@@ -415,12 +422,20 @@ def hms_get_sample_collected(request):
                     samples_query = samples_query.filter(date__lte=end_of_day)
                 except ValueError:
                     return JsonResponse({"error": "Invalid to_date format. Use YYYY-MM-DD"}, status=400)
-            
-            # Fetch filtered samples
-            samples = samples_query
-            
+
+            # Apply search filtering by resolving matching barcodes from Hmsbarcode
+            # (Hmssamplestatus has no patientname/patient_id fields; those live on Hmsbarcode)
+            if search:
+                matching_barcodes = Hmsbarcode.objects.filter(
+                    Q(patientname__icontains=search) | Q(patient_id__icontains=search) | Q(barcode__icontains=search)
+                ).values_list('barcode', flat=True)
+                samples_query = samples_query.filter(barcode__in=matching_barcodes)
+
+            # Paginate the filtered samples before processing (page/limit read from request.GET)
+            samples, page_meta = paginate_queryset(samples_query, request)
+
             # Connect to MongoDB to get test details from core_testdetails
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            client = get_client()
             db = client.Diagnostics
             test_details_collection = db.core_testdetails
             
@@ -518,13 +533,15 @@ def hms_get_sample_collected(request):
             data = list(patient_data.values())
             
             # Return the filtered data as a response
+            # NOTE: response shape now includes total_pages/current_page/total_count for pagination
             return JsonResponse({
                 "data": data,
                 "filters_applied": {
                     "from_date": from_date,
                     "to_date": to_date,
                     "total_records": len(data)
-                }
+                },
+                **page_meta
             }, safe=False)
             
         except Exception as e:
@@ -542,7 +559,7 @@ def hms_update_sample_collected(request, barcode):
     """
     try:
         # MongoDB connection
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_hmssamplestatus
         

@@ -25,8 +25,8 @@ SECRET_KEY = 'django-insecure-4vrkav1_!gyd3g)8bw6+a=4#&4y9ake$s08601jt3=5q+fh%ns
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost',"192.168.3.169",'192.168.1.152']
-X_FRAME_OPTIONS = 'ALLOWALL'
+ALLOWED_HOSTS = ['*']
+
 
 # Application definition
 
@@ -38,12 +38,10 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'corsheaders',
-    'rest_framework',
     'core'
 ]
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -51,8 +49,8 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
 ]
-
 
 ROOT_URLCONF = 'shanmuga_backend.urls'
 
@@ -111,11 +109,12 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
-CORS_ALLOW_HEADERS = [
-    "Authorization",
-    "Content-Type",
-    "Branch-Code",
-]
+
+REST_FRAMEWORK = {
+    'DEFAULT_RENDERER_CLASSES': (
+        'rest_framework.renderers.JSONRenderer',
+    )
+}
 
 # Internationalization
 # https://docs.djangoproject.com/en/3.2/topics/i18n/
@@ -125,27 +124,34 @@ TIME_ZONE = 'Asia/Kolkata'  # Set to IST
 USE_I18N = True
 USE_L10N = True
 USE_TZ = True
-
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",   # Local React app
+    "http://localhost:5173",   # Local Vite/Vue app
+    "https://example.com",     # Live frontend domain
+]
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/3.2/howto/static-files/
-
+CORS_ALLOW_HEADERS = [
+    "content-type",
+    "authorization",
+    "x-csrftoken",
+    "x-requested-with",
+    'branch-code'
+]
 STATIC_URL = '/static/'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/3.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-
-CORS_ALLOW_ALL_ORIGINS = True  
-
-
-
-
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = 'resultssmrft@gmail.com'
+EMAIL_HOST_USER = 'shanmugainnovations@gmail.com'
 EMAIL_HOST_PASSWORD = 'nfkk krtt htoq asge'  # Consider using env vars for security
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+
+
+
+

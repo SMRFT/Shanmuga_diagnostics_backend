@@ -86,7 +86,7 @@ import json
 import os
 import pytz
 
-from pymongo import MongoClient
+from core.mongo_client import get_client
 from django.http import JsonResponse
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
@@ -138,7 +138,7 @@ def get_hms_barcode_by_date(request):
         # --------------------------------------------
         # MongoDB Connection
         # --------------------------------------------
-        client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+        client = get_client()
 
         db = client.Diagnostics
 

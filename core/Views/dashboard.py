@@ -1,11 +1,14 @@
 import json
 import os
-from pymongo import MongoClient
+import logging
+from core.mongo_client import get_client
 from django.db.models import Sum
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from ..models import Billing
 import ast
+
+logger = logging.getLogger(__name__)
 
 
 import ast
@@ -65,7 +68,7 @@ def test_summary(request):
 
     # Fetch valid test mappings from MongoDB
     try:
-        mongo_client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+        mongo_client = get_client()
         core_collection = mongo_client.Diagnostics.core_testdetails
         valid_tests = {}
         for t in core_collection.find({}, {"test_id": 1, "test_name": 1, "is_servicecharge": 1}):
@@ -76,7 +79,7 @@ def test_summary(request):
             if tid:
                 valid_tests[str(tid)] = t.get("test_name")
     except Exception as e:
-        print(f"Error fetching core_testdetails: {e}")
+        logger.error(f"Error fetching core_testdetails: {e}")
         valid_tests = {}
 
     # --- Process each bill ---

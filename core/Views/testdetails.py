@@ -3,7 +3,8 @@ from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
 from rest_framework import status
 from urllib.parse import quote_plus
-from pymongo import MongoClient
+from core.mongo_client import get_client
+from core.pagination import paginate_queryset
 from django.views.decorators.csrf import csrf_exempt
 import logging
 from datetime import datetime, timedelta
@@ -26,6 +27,8 @@ from pyauth.auth import HasRoleAndDataPermission
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 def normalize_parameters(value):
     if value is None:
@@ -121,7 +124,7 @@ def shape_parameters_for_storage(parameters, device_ids):
 @csrf_exempt
 def get_devices(request):
     try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_devicedata
         devices = list(collection.find({}, {"_id": 0, "device_id": 1, "department": 1}))
@@ -139,7 +142,7 @@ def get_devices(request):
 @csrf_exempt
 def get_test_details(request):
     try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_testdetails
 
@@ -165,11 +168,17 @@ def get_test_details(request):
                 doc['parameters'] = normalize_parameters(doc.get('parameters'))
                 doc['device_id'] = normalize_device_ids(doc.get('device_id'))
 
+            # NOTE: response now paginates 'data' (page/limit query params)
+            # instead of always returning the full docs list; 'count' still
+            # reflects the total number of matching docs (see total_count).
+            total_count = len(docs)
+            page_obj, page_meta = paginate_queryset(docs, request)
             return JsonResponse({
                 'success': bool(docs),
-                'data': docs,
-                'count': len(docs),
-                'message': 'Success' if docs else 'No test details found'
+                'data': list(page_obj),
+                'count': total_count,
+                'message': 'Success' if docs else 'No test details found',
+                **page_meta
             }, status=200)
 
         # -------------------- POST (CREATE) --------------------
@@ -231,7 +240,7 @@ def get_test_details(request):
                 }, status=201)
 
             except Exception as e:
-                print("POST Error:", e)
+                logger.error(f"POST Error: {e}")
                 return JsonResponse(
                     {'success': False, 'error': 'Error while saving data'},
                     status=500
@@ -290,11 +299,11 @@ def get_test_details(request):
             except json.JSONDecodeError:
                 return JsonResponse({'success': False, 'error': 'Invalid JSON'}, status=400)
             except Exception as e:
-                print("PATCH Error:", e)
+                logger.error(f"PATCH Error: {e}")
                 return JsonResponse({'success': False, 'error': 'Update failed'}, status=500)
 
     except Exception as e:
-        print("Main Error:", e)
+        logger.error(f"Main Error: {e}")
         return JsonResponse({'success': False, 'error': 'Server error'}, status=500)
 
 # --------------------------
@@ -329,7 +338,7 @@ def send_approval_email(request):
             )
 
         # ✅ MongoDB Connection
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_testdetails
 
@@ -446,7 +455,7 @@ This is an automated email from the Diagnostics LIS system.
         }, status=200)
 
     except Exception as e:
-        print(f"❌ Error in send_approval_email: {str(e)}")
+        logger.error(f"❌ Error in send_approval_email: {str(e)}")
         import traceback
         traceback.print_exc()
         return JsonResponse({'success': False, 'error': str(e)}, status=500)
@@ -470,7 +479,7 @@ def approve_test(request):
             return HttpResponse("❌ Error: test_id must be a valid integer", status=400)
 
         # MongoDB connection
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_testdetails
 
@@ -566,7 +575,7 @@ def approve_test(request):
         """.format(test_id), content_type="text/html")
 
     except Exception as e:
-        print(f"❌ Error in approve_test: {str(e)}")
+        logger.error(f"❌ Error in approve_test: {str(e)}")
         import traceback
         traceback.print_exc()
         return HttpResponse(f"❌ Error: {str(e)}", status=500)
@@ -579,31 +588,31 @@ def approve_test(request):
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def handle_patch_request(request):
-    print("DEBUG: Entered handle_patch_request")
+    logger.debug("DEBUG: Entered handle_patch_request")
     try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_testdetails
 
         data = {}
         try:
-            print("DEBUG: Accessing request.data")
+            logger.debug("DEBUG: Accessing request.data")
             data = request.data
-            print("DEBUG: Accessed request.data success")
+            logger.debug("DEBUG: Accessed request.data success")
         except Exception as e:
-            print(f"DEBUG: Failed to access request.data: {e}")
+            logger.error(f"DEBUG: Failed to access request.data: {e}")
             # Fallback to body if possible?
             try:
-                print("DEBUG: Trying fallback to json.loads(request.body)")
+                logger.debug("DEBUG: Trying fallback to json.loads(request.body)")
                 data = json.loads(request.body.decode('utf-8'))
             except Exception as e2:
-                print(f"DEBUG: Fallback failed: {e2}")
+                logger.error(f"DEBUG: Fallback failed: {e2}")
                 return JsonResponse({'success': False, 'error': f'Body read error: {e}'}, status=500)
 
         test_id = data.get('test_id')
         test_name = data.get('test_name')
 
-        print(f"DEBUG: test_id={test_id}, test_name={test_name}")
+        logger.debug(f"DEBUG: test_id={test_id}, test_name={test_name}")
 
         # Build filter by test_id or test_name
         query = {}
@@ -662,7 +671,7 @@ def handle_patch_request(request):
     except json.JSONDecodeError:
         return JsonResponse({'success': False, 'error': 'Invalid JSON data'}, status=400)
     except Exception as e:
-        print("Error:", e)
+        logger.error(f"Error: {e}")
         return JsonResponse({'success': False, 'error': 'An error occurred while updating data'}, status=500)
 
 # -------------------------
@@ -674,7 +683,7 @@ def handle_patch_request(request):
 @permission_classes([HasRoleAndDataPermission])
 def get_test_parameters(request, test_name):
     try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         collection = db.core_testdetails
 
@@ -684,7 +693,7 @@ def get_test_parameters(request, test_name):
         else:
             return JsonResponse({"error": "Test not found"}, status=404)
     except Exception as e:
-        print("Error fetching parameters:", e)
+        logger.error(f"Error fetching parameters: {e}")
         return JsonResponse({"error": "Failed to fetch parameters"}, status=500)
 
 

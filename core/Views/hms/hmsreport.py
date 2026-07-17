@@ -5,7 +5,7 @@ from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view
 from rest_framework import  status
 from urllib.parse import quote_plus
-from pymongo import MongoClient
+from core.mongo_client import get_client
 from rest_framework import status
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime, timedelta
@@ -19,13 +19,13 @@ from datetime import datetime, date
 from rest_framework.views import APIView
 import traceback
 import json
+import logging
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from ...models import Hmssamplestatus,HmspatientBilling
 from ...models import TestValue, MBTestValue
 from ...models import Hmsbarcode
 from django.http import JsonResponse
-from pymongo import MongoClient
 from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
@@ -37,6 +37,8 @@ from dotenv import load_dotenv
 import pytz
 import gridfs
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 def get_department_status(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map):
     """
@@ -148,7 +150,7 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
 def hms_overall_report(request):
     try:
         # MongoDB setup for test details
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        client = get_client()
         db = client.Diagnostics
         test_details_collection = db.core_testdetails
 
@@ -177,7 +179,8 @@ def hms_overall_report(request):
                     total_seconds += int(minutes.group(1)) * 60
 
                 return total_seconds if total_seconds > 0 else None
-            except:
+            except Exception as e:
+                logger.error(f"Error parsing TAT format '{tat_str}': {e}")
                 return None
 
         # Validate and parse dates
@@ -205,7 +208,7 @@ def hms_overall_report(request):
             'IPOPType', 'ref_doctor', 'ipnumber', 'location_id', 'phone', 'created_date'
         ))
         if barcode_records:
-            print("Sample HMS barcode record:", barcode_records[0])
+            logger.debug(f"Sample HMS barcode record: {barcode_records[0]}")
 
         if not barcode_records:
             return JsonResponse([], safe=False)
@@ -459,7 +462,7 @@ def hms_overall_report(request):
                             elif isinstance(sample_info['samplecollected_time'], datetime):
                                 sample_collected_time = sample_info['samplecollected_time']
                         except Exception as e:
-                            print(f"Error parsing sample_collected_time for test_id {test_id}: {e}")
+                            logger.error(f"Error parsing sample_collected_time for test_id {test_id}: {e}")
                     
                     if test_value_info and test_value_info.get('approve_time'):
                         try:
@@ -470,7 +473,7 @@ def hms_overall_report(request):
                                     "%Y-%m-%d %H:%M:%S"
                                 )
                         except Exception as e:
-                            print(f"Error parsing approve_time for test_id {test_id}: {e}")
+                            logger.error(f"Error parsing approve_time for test_id {test_id}: {e}")
                     
                     # **NEW: Calculate TAT status**
                     tat_status = None
@@ -696,8 +699,8 @@ def hms_overall_report(request):
         return JsonResponse(formatted_data, safe=False)
 
     except Exception as e:
-        print(f"Critical Error: {str(e)}")
-        print(traceback.format_exc())
+        logger.error(f"Critical Error: {str(e)}")
+        logger.error(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
 
 
@@ -720,7 +723,7 @@ def get_hms_patient_test_details(request):
 
         sample_status = Hmssamplestatus.objects.filter(barcode=barcode)
 
-        mongo_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        mongo_client = get_client()
         mongo_db = mongo_client.Diagnostics
         core_testdetails_collection = mongo_db.core_testdetails
 
@@ -801,7 +804,7 @@ def get_hms_patient_test_details(request):
                         signature_bytes  = signature_file.read()
                         signature_base64 = base64.b64encode(signature_bytes).decode('utf-8')
                     except Exception as e:
-                        print(f"Error fetching signature for employee {employee_id}: {str(e)}")
+                        logger.error(f"Error fetching signature for employee {employee_id}: {str(e)}")
 
                 return {
                     "employeeName":    employee_name,
@@ -809,7 +812,7 @@ def get_hms_patient_test_details(request):
                     "signatureBase64": signature_base64,
                 }
             except Exception as e:
-                print(f"Error fetching employee data for {employee_id}: {str(e)}")
+                logger.error(f"Error fetching employee data for {employee_id}: {str(e)}")
                 return None
 
         # ── Process each TestValue record ─────────────────────────────────────
@@ -1003,5 +1006,5 @@ def get_hms_patient_test_details(request):
 
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        logger.error(traceback.format_exc())
         return JsonResponse({'error': str(e)}, status=500)
