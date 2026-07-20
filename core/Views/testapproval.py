@@ -1134,6 +1134,7 @@ def get_approved_values(request):
 
 
 @api_view(['PATCH'])
+@permission_classes([HasRoleAndDataPermission])
 def edit_test_value(request, barcode):
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
     collection = client.Diagnostics.core_testvalue
@@ -1146,11 +1147,20 @@ def edit_test_value(request, barcode):
         new_value = data.get("new_value")
         new_status  = data.get("new_status")
         new_comment = data.get("new_comment")
-        history_entry = data.get("history_entry")  # {old_value, edited_by, reason, edited_at}
+        history_entry = data.get("history_entry")  # {old_value, reason}
         param_index = data.get("param_index")       # None for test-level, int for parameter
 
         if not (barcode and created_date_str and test_id and (new_value or new_status or new_comment) and history_entry):
             return JsonResponse({"error": "barcode, created_date, test_id, and at least one of new_value, new_status, or new_comment are required"}, status=400)
+
+        auth_user_id = data.get("auth-user-id")
+        from pytz import timezone
+        ist = timezone('Asia/Kolkata')
+        edited_at = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S")
+
+        if isinstance(history_entry, dict):
+            history_entry["edited_by"] = auth_user_id
+            history_entry["edited_at"] = edited_at
 
         created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
@@ -1203,7 +1213,7 @@ def edit_test_value(request, barcode):
         query,
         {"$set": {
             "testdetails": json.dumps(test_details),
-            "lastmodified_by": history_entry.get("edited_by"),
+            "lastmodified_by": auth_user_id,
             "lastmodified_date": datetime.utcnow(),
         }}
     )
