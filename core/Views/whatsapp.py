@@ -110,7 +110,7 @@ def send_whatsapp(request):
         template_name = request.data.get("template_name", "diagnostics_report_main")
 
         params = {
-            "apikey": "ccbb8c923474d5b9d605b391f545a5688fbd54e0cad69d17",
+            "apikey": "btfy_2651177b8407c88a34361edde0af90887eaa7b72a925e22cf787c2f810a169b8",
             "contact": phone,
             "template": template_name,
             "params": template_params,
