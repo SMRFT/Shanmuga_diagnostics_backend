@@ -116,17 +116,20 @@ def send_whatsapp(request):
             "params": template_params,
         }
 
-        # print("Sending params:", params)
+        headers = {
+            "Authorization": "Bearer btfy_aa1b818c6473403a74cce7c913007df4af197c22ee4ae0c12019e5f408d93b70",
+            "Content-Type": "application/json"
+        }
 
-        botify_url = "https://dashboard.botify.in/api/v1/external/sendtemplatemessage"
-        r = requests.get(botify_url, params=params, timeout=20)
+        botify_url = "https://login.botify.in/api/whatsapp/external"
+        r = requests.post(botify_url, headers=headers, json=payload, timeout=20)
 
         try:
             response_json = r.json()
-            is_success = r.status_code == 200 and response_json.get("success") is True
+            is_success = r.status_code in [200, 201]
         except ValueError:
             response_json = {}
-            is_success = False
+            is_success = r.status_code in [200, 201]
 
         status = "Success" if is_success else "Failed"
         

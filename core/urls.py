@@ -6,7 +6,7 @@ from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,loc
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
-from .Views import preetham_hospital_report
+from .Views import clinical_hospital_report
 
 urlpatterns = [
     #Registration and Billing:
@@ -267,14 +267,17 @@ urlpatterns = [
     path('patient_report/', patient_report, name='patient_report'),
 
     path('get_devices/', testdetails.get_devices, name='get_devices'),
-    path('preetham_hospital_report/', preetham_hospital_report.preetham_hospital_report, name='preetham_hospital_report'),
-    path('preetham_billing_dashboard/', preetham_hospital_report.preetham_billing_dashboard, name='preetham_billing_dashboard'),
-    path('get_preethampatient_test_details/', preetham_hospital_report.get_preethampatient_test_details, name='get_preethampatient_test_details'),
-    path('preetham_hospital_ledger/', preetham_hospital_report.preetham_hospital_ledger, name='preetham_hospital_ledger'),
+
+
+    path('clinical_hospital_report/', clinical_hospital_report.clinical_hospital_report, name='clinical_hospital_report'),
+    path('clinical_billing_dashboard/', clinical_hospital_report.clinical_billing_dashboard, name='clinical_billing_dashboard'),
+    path('get_clinicalpatient_test_details/', clinical_hospital_report.get_clinicalpatient_test_details, name='get_clinicalpatient_test_details'),
+    path('clinical_hospital_ledger/', clinical_hospital_report.clinical_hospital_ledger, name='clinical_hospital_ledger'),
     
     path("test-summary/", dashboard.test_summary, name="test-summary"),
 
    
 
 ]
+
 
