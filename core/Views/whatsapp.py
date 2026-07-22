@@ -109,13 +109,13 @@ def send_whatsapp(request):
 
         template_name = request.data.get("template_name", "diagnostics_report_main")
 
-        params = {
-            "apikey": "btfy_2651177b8407c88a34361edde0af90887eaa7b72a925e22cf787c2f810a169b8",
-            "contact": phone,
-            "template": template_name,
-            "params": template_params,
+        payload = {
+            "to": phone,
+            "type": "template",
+            "templateName": template_name,
+            "templateData": template_params_list,
+            "category": "UTILITY"
         }
-
         headers = {
             "Authorization": "Bearer btfy_aa1b818c6473403a74cce7c913007df4af197c22ee4ae0c12019e5f408d93b70",
             "Content-Type": "application/json"
