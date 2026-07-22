@@ -158,12 +158,20 @@ def get_appointments_by_date(request):
 def create_patient(request):
     try:
         data = request.data.copy()
-        patient_id = data.get("patient_id")
-        if not patient_id:
-            return Response({"error": "patient_id is required"}, status=400)
+        
+        # Concurrency fix: Calculate the next patient_id right before insertion
+        with transaction.atomic():
+            max_patient = Patient.objects.aggregate(max_pid=Max('patient_id'))['max_pid']
+            max_num = 0
+            if max_patient:
+                match = re.match(r'^SD0*(\d+)$', max_patient, re.IGNORECASE)
+                if match:
+                    max_num = int(match.group(1))
+            
+            patient_id = f"SD{max_num + 1:04d}"
 
-        if Patient.objects.filter(patient_id=patient_id).exists():
-            return Response({"error": "Patient already exists"}, status=400)
+            if Patient.objects.filter(patient_id=patient_id).exists():
+                return Response({"error": "Patient ID generation collision, please retry"}, status=400)
 
         # Extract employee ID
         employee_id = (
@@ -546,8 +554,7 @@ def update_bill(request):
             next_id = (int(last_bill_list[0]['bill_no'][-4:]) + 1) if last_bill_list else 1
             bill_no = f"{today}{next_id:04d}"
         
-        if not bill_date:
-            bill_date = datetime.now()
+        bill_date = datetime.now()
         
         # Process testdetails
         testdetails = request.data.get("testdetails", [])

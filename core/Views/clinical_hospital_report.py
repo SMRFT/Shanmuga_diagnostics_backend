@@ -22,9 +22,9 @@ load_dotenv()
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def preetham_hospital_report(request):
+def clinical_hospital_report(request):
     """
-    Preetham Hospital Report API
+    Clinical Hospital Report API
     - Barcode fetched ONLY from top-level barcode field
     - Unified search across patient_id, patient_name, barcode
     """
@@ -44,8 +44,9 @@ def preetham_hospital_report(request):
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
         search = request.GET.get("search", "").strip()
+        lab_id = request.GET.get("lab_id")
 
-        if not from_date or not to_date:
+        if not from_date or not to_date or not lab_id:
             return JsonResponse(
                 {"error": "from_date and to_date are required"},
                 status=400
@@ -60,7 +61,7 @@ def preetham_hospital_report(request):
         billing_records = list(
             billing_col.find({
                 "date": {"$gte": from_dt, "$lt": to_dt},
-                "B2B": "PREETHAM HOSPITAL"
+                "lab_id": lab_id
             })
         )
 
@@ -261,7 +262,7 @@ def preetham_hospital_report(request):
         return JsonResponse(result, safe=False)
 
     except Exception as e:
-        print("ERROR in preetham_hospital_report:", str(e))
+        print("ERROR in clinical_hospital_report:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -269,7 +270,7 @@ def preetham_hospital_report(request):
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def get_preethampatient_test_details(request):
+def get_clinicalpatient_test_details(request):
     """
     Get detailed test information for a patient by barcode
     Used for generating PDF reports
@@ -383,7 +384,7 @@ def get_preethampatient_test_details(request):
         return JsonResponse(result, safe=False)
 
     except Exception as e:
-        print("ERROR in get_preethampatient_test_details:", str(e))
+        print("ERROR in get_clinicalpatient_test_details:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -391,9 +392,9 @@ def get_preethampatient_test_details(request):
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def preetham_billing_dashboard(request):
+def clinical_billing_dashboard(request):
     """
-    Dashboard API for Preetham Hospital Billing
+    Dashboard API for Clinical Hospital Billing
     - Total billing amount and counts
     - Payment status overview
     - Patient statistics
@@ -408,8 +409,9 @@ def preetham_billing_dashboard(request):
         # -------------------- Date Range --------------------
         from_date = request.GET.get("from_date")
         to_date = request.GET.get("to_date")
+        lab_id = request.GET.get("lab_id")
 
-        if not from_date or not to_date:
+        if not from_date or not to_date or not lab_id:
             return JsonResponse(
                 {"error": "Both 'from_date' and 'to_date' are required"},
                 status=400
@@ -427,7 +429,7 @@ def preetham_billing_dashboard(request):
         # -------------------- Query --------------------
         query = {
             "date": {"$gte": from_date_parsed, "$lt": to_date_parsed},
-            "B2B": "PREETHAM HOSPITAL"
+            "lab_id": lab_id
         }
 
         records = list(billing_collection.find(query))
@@ -519,7 +521,7 @@ def preetham_billing_dashboard(request):
         }, safe=False)
 
     except Exception as e:
-        print("Error in preetham_billing_dashboard:", str(e))
+        print("Error in clinical_billing_dashboard:", str(e))
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)
     
@@ -527,16 +529,19 @@ def preetham_billing_dashboard(request):
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
-def preetham_hospital_ledger(request):
+def clinical_hospital_ledger(request):
     try:
         from_date = request.GET.get('from_date')
         to_date = request.GET.get('to_date')
+        lab_id = request.GET.get('lab_id')
 
-        print(f"preetham_hospital_ledger: from={from_date}, to={to_date}")
+        print(f"clinical_hospital_ledger: from={from_date}, to={to_date}, lab_id={lab_id}")
 
-        query = {
-            'B2B': 'PREETHAM HOSPITAL'
-        }
+        query = {}
+        if lab_id:
+            query['lab_id'] = lab_id
+        else:
+            return JsonResponse({"error": "lab_id is required."}, status=400)
 
         if from_date and to_date:
             try:
@@ -571,9 +576,10 @@ def preetham_hospital_ledger(request):
         return JsonResponse({"success": True, "data": data})
 
     except Exception as e:
-        print(f"Error in preetham_hospital_ledger: {str(e)}")
+        print(f"Error in clinical_hospital_ledger: {str(e)}")
         print(traceback.format_exc())
         return JsonResponse(
             {"success": False, "error": f"{str(e)} | {traceback.format_exc()}"},
             status=500
         )
+

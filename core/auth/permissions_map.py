@@ -243,10 +243,10 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/hms-test-count/?(\?.*)?$':'SD-P-MIS',
 
 
-    r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_report/?(\?.*)?$':'SD-P-PHR',
-    r'^/_b_a_c_k_e_n_d/LIS/preetham_billing_dashboard/?(\?.*)?$':'SD-P-PHD',
-    r'^/_b_a_c_k_e_n_d/LIS/get_preethampatient_test_details/?(\?.*)?$':'SD-P-GPT',
-    r'^/_b_a_c_k_e_n_d/LIS/preetham_hospital_ledger/?(\?.*)?$':'SD-P-PHR',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical_hospital_report/?(\?.*)?$':'SD-P-CR',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical_billing_dashboard/?(\?.*)?$':'SD-P-CD',
+    r'^/_b_a_c_k_e_n_d/LIS/get_clinicalpatient_test_details/?(\?.*)?$':'SD-P-CPT',
+    r'^/_b_a_c_k_e_n_d/LIS/clinical_hospital_ledger/?(\?.*)?$':'SD-P-CHL',
 
 }
 

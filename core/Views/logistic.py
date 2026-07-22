@@ -114,36 +114,14 @@ def logistics_by_collector(request):
         date=today
     ).order_by('-sampleordertime')
 
-    # Pending tasks from previous dates (only 'Assigned' status)
-    pending_tasks = Logistics.objects.filter(
-        sample_collector__iexact=collector,
-        date__lt=today,
-        status='Assigned'
-    ).order_by('-date', '-sampleordertime')
-
-    # Group pending tasks by date
-    pending_by_date = defaultdict(list)
-    for task in pending_tasks:
-        task_data = LogisticsSerializer(task).data
-        pending_by_date[str(task.date)].append(task_data)
-
-    # Convert to list format for easier frontend handling
-    pending_grouped = [
-        {
-            'date': date,
-            'tasks': tasks
-        }
-        for date, tasks in sorted(pending_by_date.items(), reverse=True)
-    ]
-
     today_serializer = LogisticsSerializer(today_tasks, many=True)
 
     return Response(
         {
             'today_count': today_tasks.count(),
             'today_tasks': today_serializer.data,
-            'pending_count': pending_tasks.count(),
-            'pending_tasks': pending_grouped
+            'pending_count': 0,
+            'pending_tasks': []
         },
         status=status.HTTP_200_OK
     )

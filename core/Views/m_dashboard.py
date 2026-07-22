@@ -94,6 +94,7 @@ def m_dashboard_stats(request):
                 "segments": {
                     "home_collection": 0,
                     "b2b": 0,
+                    "hospital": 0,
                     "franchise": 0,
                     "company_health_check": 0,
                     "other": 0
@@ -108,6 +109,7 @@ def m_dashboard_stats(request):
             "financials": {
                 "gross": {
                     "b2b": 0,
+                    "hospital": 0,
                     "home_collection": 0,
                     "company_health_check": 0,
                     "franchise_share": 0
@@ -131,6 +133,9 @@ def m_dashboard_stats(request):
             if "Home" in segment and "Collection" in segment:
                 stats["samples"]["segments"]["home_collection"] += 1
                 stats["financials"]["gross"]["home_collection"] += to_float(bill.totalAmount)
+            elif "Hospital" in segment:
+                stats["samples"]["segments"]["hospital"] += 1
+                stats["financials"]["gross"]["hospital"] += to_float(bill.totalAmount)
             elif "B2B" in segment or (bill.B2B and bill.B2B.strip()): 
                 stats["samples"]["segments"]["b2b"] += 1
                 stats["financials"]["gross"]["b2b"] += to_float(bill.totalAmount)
