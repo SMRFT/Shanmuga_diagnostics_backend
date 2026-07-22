@@ -156,7 +156,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/test-approved-values/?(\?.*)?$':'SD-API-TV',       
     r'^/_b_a_c_k_e_n_d/LIS/test-approval(?:/[^/]+)+/$':'SD-P-DF',
     r'^/_b_a_c_k_e_n_d/LIS/test-rerun(?:/[^/]+)+/$':'SD-P-DF',
-    r'^/_b_a_c_k_e_n_d/LIS/edit-value(?:/[^/]+)+/$':'SD-P-DF',
+    r'^/_b_a_c_k_e_n_d/LIS/test-edit(?:/[^/]+)+/$':'SD-P-DF',
 
     #Reports:
     r'^/_b_a_c_k_e_n_d/LIS/overall_report/?(\?.*)?$':'SD-P-POV',
