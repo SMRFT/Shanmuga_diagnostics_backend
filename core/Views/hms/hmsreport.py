@@ -541,11 +541,13 @@ def hms_overall_report(request):
                         if test_value_info.get('dispatch'):
                             test_status = "Dispatched"
                     
-                    # **NEW: Add TAT information to individual test status**
+                    # **NEW: Add TAT & Printed information to individual test status**
                     individual_test_statuses.append({
                         'test_id': test_id,
                         'test_name': test_name,
                         'status': test_status,
+                        'printed': bool(test_value_info.get('printed', False)),
+                        'printed_status': "Printed" if test_value_info.get('printed', False) else "Not Printed",
                         'tat_time': tat_time,
                         'seconds_left': int(seconds_left) if seconds_left is not None else None,
                         'tat_status': tat_status,
@@ -555,6 +557,7 @@ def hms_overall_report(request):
                     })
 
             # Test value status logic (using test_id for comparison)
+            printed_status = "Not Printed"
             if valid_test_values:
                 # Check testing status
                 def has_test_values(test):
@@ -582,9 +585,10 @@ def hms_overall_report(request):
                 # Get test_ids from billing record
                 all_ordered_test_ids = {test.get("test_id") for test in test_list if test.get("test_id")}
                
-                # Get approved and dispatch test_ids from test value records
+                # Get approved, dispatch, and printed test_ids from test value records
                 approved_test_ids = {t.get("test_id") for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
                 dispatch_test_ids = {t.get("test_id") for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")}
+                printed_test_ids = {t.get("test_id") for t in valid_test_values if t.get("printed", False) and t.get("test_id")}
                
                 # Check approval status
                 all_approved = False
@@ -629,6 +633,30 @@ def hms_overall_report(request):
                             partially_dispatched = False
                         elif dispatch_count > 0:
                             partially_dispatched = True
+
+                # Check printed status
+                all_printed = False
+                partially_printed = False
+                if len(all_ordered_test_ids) > 0:
+                    if all_ordered_test_ids.issubset(printed_test_ids) and len(printed_test_ids) == len(all_ordered_test_ids):
+                        all_printed = True
+                    elif len(printed_test_ids) > 0:
+                        partially_printed = True
+                    if not all_printed and valid_test_values:
+                        printed_count = sum(1 for t in valid_test_values if t.get("printed", False))
+                        total_expected = no_of_tests
+                        if printed_count == total_expected and printed_count > 0:
+                            all_printed = True
+                            partially_printed = False
+                        elif printed_count > 0:
+                            partially_printed = True
+                
+                if all_printed:
+                    printed_status = "Printed"
+                elif partially_printed:
+                    printed_status = "Partially Printed"
+                else:
+                    printed_status = "Not Printed"
 
                 # Set status based on testing progress
                 if all_tested:
@@ -685,11 +713,12 @@ def hms_overall_report(request):
                 "test_names": testnames,
                 "department": department,
                 "department_statuses": department_statuses,
-                "test_statuses": individual_test_statuses,  # NOW INCLUDES TAT INFO
+                "test_statuses": individual_test_statuses,  # NOW INCLUDES TAT & PRINTED INFO
                 "no_of_tests": no_of_tests,
                 "billnumber": billnumber,
                 "barcode": barcode,
                 "status": status,
+                "printed_status": printed_status,
                 "test_created_date": test_created_date_formatted,
             })
 

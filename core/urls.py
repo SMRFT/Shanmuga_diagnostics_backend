@@ -149,6 +149,7 @@ urlpatterns = [
     path('patient_test_sorting/', report.patient_test_sorting, name='patient_test_sorting'),
     path('get_patient_test_details/', report.get_patient_test_details, name='get_patient_test_details'),    
     path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
+    path('update_printed_status/<str:barcode>/', report.update_printed_status, name='update_printed_status'),
 
     #Invoice URLs
     path("generate-invoice/", generate_invoice, name="generate-invoice"),
