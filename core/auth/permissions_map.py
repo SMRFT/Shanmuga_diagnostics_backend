@@ -168,6 +168,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/franchise_mb_get_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/mb_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/update_printed_status(?:/[^/]+)+/$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/upload-pdf/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/credit_amount/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update-credit/?(\?.*)?$':'SD-P-POV',
