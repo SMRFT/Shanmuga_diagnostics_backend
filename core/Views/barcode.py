@@ -4,14 +4,14 @@ from django.views.decorators.http import require_http_methods
 from rest_framework.decorators import api_view
 from rest_framework import  status
 from django.views.decorators.csrf import csrf_exempt
+import os
 import re
-from datetime import datetime
-from core.utils import get_employee_name
-from django.forms.models import model_to_dict
-from django.db.models import Max
-from ..models import BarcodeTestDetails,Patient,Billing
 import logging
 import json
+from datetime import datetime
+from pymongo import MongoClient
+from core.utils import get_employee_name
+from ..models import BarcodeTestDetails, Patient, Billing
 #auth
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
@@ -189,6 +189,27 @@ def get_barcode_by_date(request):
             bill_date__lte=end_of_range
         ).order_by('-bill_date')  # Order by most recent first
        
+        # Mongo Test Master Lookup for shortcut, collection_container, etc.
+        test_master_by_id = {}
+        test_master_by_name = {}
+        try:
+            client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+            db = client.Diagnostics
+            for doc in db.core_testdetails.find({}, {"test_id": 1, "test_name": 1, "shortcut": 1, "collection_container": 1, "suffix": 1}):
+                if doc.get("test_id") is not None:
+                    test_master_by_id[str(doc.get("test_id"))] = doc
+                if doc.get("test_name"):
+                    test_master_by_name[str(doc.get("test_name")).strip().lower()] = doc
+        except Exception as e:
+            logger.error(f"Error fetching test master for shortcuts: {e}")
+
+        # Existing Barcode status check
+        existing_bill_numbers = set(
+            BarcodeTestDetails.objects.filter(
+                bill_no__isnull=False
+            ).values_list("bill_no", flat=True)
+        )
+
         # Process each billing record and get corresponding patient details
         patient_data = []
         processed_patients = set()  # To avoid duplicate patients with multiple bills
@@ -226,12 +247,27 @@ def get_barcode_by_date(request):
                 for test in tests:
                     # Check if refund or cancellation keys exist and are True
                     if not test.get('refund', False) and not test.get('cancellation', False):
-                        valid_tests.append(test)
+                        # Ensure dictionary object
+                        test_item = dict(test) if isinstance(test, dict) else {'test_name': str(test)}
+                        tid = str(test_item.get('test_id', ''))
+                        tname = str(test_item.get('test_name') or test_item.get('testname') or '').strip().lower()
+                        master_info = test_master_by_id.get(tid) or test_master_by_name.get(tname) or {}
+
+                        if not test_item.get('shortcut'):
+                            test_item['shortcut'] = master_info.get('shortcut', '')
+                        if not test_item.get('collection_container'):
+                            test_item['collection_container'] = master_info.get('collection_container', '')
+                        if not test_item.get('suffix'):
+                            test_item['suffix'] = master_info.get('suffix', '')
+
+                        valid_tests.append(test_item)
                 
                 # If no valid tests remain after filtering, skip this billing record entirely
                 if not valid_tests:
                     continue
                 
+                barcode_status = "Generated" if billing.bill_no in existing_bill_numbers else "Pending"
+
                 # Create a combined data structure with patient and billing info
                 patient_dict = {
                     'patient_id': patient.patient_id,
@@ -252,6 +288,7 @@ def get_barcode_by_date(request):
                     'refby': billing.refby,
                     'branch': billing.branch,
                     'status': billing.status,
+                    'barcode_status': barcode_status,
                     'totalAmount': billing.totalAmount,
                     'discount': billing.discount,
                     'payment_method': billing.payment_method,
