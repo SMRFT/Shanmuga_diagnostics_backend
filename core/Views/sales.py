@@ -15,10 +15,16 @@ from datetime import datetime
 import os
 from datetime import date as date_cls
 
-@api_view(['POST'])
+from ..models import HospitalLab
+
+@api_view(['POST', 'GET'])
 @permission_classes([HasRoleAndDataPermission])
 def hospitallabform(request):
-    if request.method == 'POST':
+    if request.method == 'GET':
+        labs = HospitalLab.objects.all()
+        serializer = HospitalLabSerializer(labs, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    elif request.method == 'POST':
         serializer = HospitalLabSerializer(data=request.data)
         if serializer.is_valid():
             serializer.save()
