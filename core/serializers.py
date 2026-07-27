@@ -146,7 +146,7 @@ class RouteSetupSerializer(serializers.ModelSerializer):
         if not codes:
             return []
         name_map = get_clinical_name_map(codes)
-        return [{"referrerCode": c, "clinicalname": name_map.get(c)} for c in codes]
+        return [{"referrerCode": c, "clinicalname": name_map.get(c, c)} for c in codes]
 
 
 class RouteAnalysisSerializer(serializers.ModelSerializer):

@@ -633,15 +633,20 @@ def _gridfs():
 
 def get_clinical_name_map(referrer_codes):
     """
-    Looks up ClinicalName records via Django ORM (same DB the app uses).
+    Looks up ClinicalName records via Django ORM.
     Returns dict: { referrerCode -> clinicalname }
-    Handles the case where referrer_codes may be a JSON string instead of a list.
+    Handles referrerCodes from core_clinicalname (mapped to their clinicalname)
+    and direct clinicalnames from core_hospitallab (mapped to themselves).
     """
     codes = _as_list(referrer_codes) if not isinstance(referrer_codes, list) else referrer_codes
     if not codes:
         return {}
     records = ClinicalName.objects.filter(referrerCode__in=codes).values("referrerCode", "clinicalname")
-    return {r["referrerCode"]: r["clinicalname"] for r in records}
+    res = {r["referrerCode"]: r["clinicalname"] for r in records}
+    for c in codes:
+        if c not in res:
+            res[c] = c
+    return res
 
 
 # ---------- Route Setup ----------
