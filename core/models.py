@@ -441,7 +441,7 @@ class CustomerComplaint(AuditModel):
     labcode  = models.CharField(max_length=255)
     issuetype = models.CharField(max_length=255)
     comments = models.TextField()
-    assignedby = models.CharField(max_length=255)
+    assignedby = models.CharField(max_length=255,blank=True, null=True)
     completion_comments = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, default="pending") 
    
@@ -486,7 +486,7 @@ class SalesPlan(AuditModel):
     category = models.CharField(max_length=100)
     month = models.IntegerField()
     year = models.IntegerField()
-    date = models.DateField()
+    date = models.DateTimeField(auto_now=True)
     entries = RawJSONField(default=list, blank=True)
    
  
