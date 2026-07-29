@@ -617,4 +617,266 @@ def salesplan(request):
  
         updated = SalesPlan.objects.get(sales_plan_id=plan.sales_plan_id)
         return Response(SalesPlanSerializer(updated).data, status=status.HTTP_200_OK)
- 
+    
+
+
+
+def _month_bounds(year, month):
+    """
+    Returns (start_dt, end_dt) as tz-aware datetimes spanning the whole
+    calendar month: start_dt = day 1 00:00, end_dt = day 1 00:00 of the
+    FOLLOWING month (exclusive upper bound).
+
+    Built as explicit datetime bounds so filtering only ever needs
+    __gte/__lt on the raw DateTimeField — same Mongo-safe pattern used in
+    customer_complaints for created_date, avoiding djongo's missing
+    datetime_cast_date_sql()/date-extract support that __date / __year /
+    __month lookups would trigger.
+    """
+    start_dt = timezone.make_aware(datetime(year, month, 1))
+    if month == 12:
+        end_dt = timezone.make_aware(datetime(year + 1, 1, 1))
+    else:
+        end_dt = timezone.make_aware(datetime(year, month + 1, 1))
+    return start_dt, end_dt
+
+
+def _to_float(value):
+    try:
+        if value in (None, ""):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+import calendar
+@api_view(['GET', 'POST'])
+@csrf_exempt
+# @permission_classes([HasRoleAndDataPermission])
+def salesplanreport(request):
+    """
+    Actual vs Plan report, one row per sales executive, for a given
+    month/year (+ optional category filter).
+
+    POST /salesplanreport/
+        body: {
+          "month": 6,
+          "year": 2026,
+          "category": "all" | "B2B" | ...,
+          "employees": [ { "employeeId": "50886", "employeeName": "Chandra" }, ... ],
+          "day": 15   // optional — see "day" below
+        }
+    GET  /salesplanreport/?month=6&year=2026&category=all&employees=<json-encoded list>
+        (same shape as POST, for convenience/testing — employees must be a
+        JSON-encoded string of the same array when passed as a query param)
+
+    `day` (optional, 1-31): when supplied, the frontend's "Date wise"
+    picker asks for a specific calendar date (year/month/day) rather than
+    "today". Unlike week/month-to-date, this works for ANY month — past,
+    current, or future — since the user explicitly picked the date. When
+    omitted, day-level figures fall back to the old behaviour (today's
+    date, only if month/year is the current calendar month).
+
+    `employees` is required and is supplied by the caller (rather than
+    looked up here) because Billing has no employee_id — it only stores
+    the executive's display name in `salesMapping` — so matching Billing
+    rows to a sales executive has to go through employeeName. The frontend
+    already has the employeeId/employeeName list from get_sales_executives/,
+    so it's passed straight through instead of duplicating that lookup here.
+
+    Numbers returned per executive:
+      plan_day / actual_day / diff_day   — Day to Date (today only; null
+                                            if the requested month/year
+                                            isn't the current calendar
+                                            month — "today" only means
+                                            something for the month
+                                            currently in progress)
+      plan_wtd / actual_wtd / diff_wtd   — Week to Date (same
+                                            current-month-only restriction)
+      plan_mtd / actual_mtd / diff_mtd   — Month To Date
+
+    diff = plan - actual (positive = behind target / shortfall,
+    negative = ahead of target / surplus), e.g. plan 1000 vs actual 880
+    -> diff 120.
+
+    Also returns `categories`: the distinct SalesPlan.category values
+    currently in use, for populating a filter dropdown.
+    """
+    try:
+        params = request.data if request.method == 'POST' else request.query_params
+
+        month = int(params.get('month'))
+        year = int(params.get('year'))
+    except (TypeError, ValueError):
+        return Response(
+            {'error': 'month and year are required and must be integers'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    category = params.get('category') or 'all'
+
+    day_param = params.get('day')
+    if day_param not in (None, ""):
+        try:
+            day_param = int(day_param)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'day must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    else:
+        day_param = None
+
+    employees = params.get('employees')
+    if isinstance(employees, str):
+        try:
+            employees = json.loads(employees)
+        except (TypeError, ValueError):
+            return Response(
+                {'error': 'employees must be valid JSON when passed as a string'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+    if not employees:
+        return Response(
+            {'error': 'employees is required — pass the list from get_sales_executives/'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        today = timezone.localdate()
+        is_current_month = (year == today.year and month == today.month)
+        days_in_month = calendar.monthrange(year, month)[1]
+
+        # MTD day range: 1..today if this is the current month in progress,
+        # otherwise 1..end-of-month (nothing left to compare "to date").
+        mtd_end_day = today.day if is_current_month else days_in_month
+
+        # WTD day range: only meaningful for the current month. Monday of
+        # the current week, clipped to day 1 if that Monday actually falls
+        # in the previous calendar month.
+        wtd_start_day = None
+        wtd_end_day = None
+        if is_current_month:
+            monday = today - timezone.timedelta(days=today.weekday())
+            wtd_start_day = monday.day if monday.month == today.month else 1
+            wtd_end_day = today.day
+
+        # Day-wise target. If the caller passed an explicit "day" (the
+        # frontend's Date wise picker always does), use it directly and
+        # allow it for any month/year the picker resolved to. Otherwise
+        # fall back to the old behaviour: today's day-of-month, but only
+        # if the requested month/year is the current calendar month.
+        if day_param is not None:
+            if not (1 <= day_param <= days_in_month):
+                return Response(
+                    {'error': f'day must be between 1 and {days_in_month} for {month}/{year}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            day_target = day_param
+        else:
+            day_target = today.day if is_current_month else None
+
+        month_start_dt, month_end_dt = _month_bounds(year, month)
+
+        # Distinct categories currently used in SalesPlan, for the filter
+        # dropdown on the frontend.
+        categories = list(
+            SalesPlan.objects.exclude(category__isnull=True)
+            .exclude(category="")
+            .values_list('category', flat=True)
+            .distinct()
+        )
+
+        results = []
+
+        for emp in employees:
+            employee_id = emp.get('employeeId')
+            employee_name = emp.get('employeeName')
+            if not employee_id or not employee_name:
+                continue
+
+            # ── Plan side (SalesPlan.entries) ──────────────────────────
+            plan_qs = SalesPlan.objects.filter(
+                employee_id=employee_id, month=month, year=year
+            )
+            if category != 'all':
+                plan_qs = plan_qs.filter(category=category)
+
+            plan_mtd = 0.0
+            plan_wtd = 0.0
+            plan_day = 0.0
+            for plan in plan_qs:
+                for entry in (plan.entries or []):
+                    try:
+                        entry_day = int(entry.get('date'))
+                        entry_amount = _to_float(entry.get('amount'))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if entry_day <= mtd_end_day:
+                        plan_mtd += entry_amount
+                    if (
+                        wtd_start_day is not None
+                        and wtd_start_day <= entry_day <= wtd_end_day
+                    ):
+                        plan_wtd += entry_amount
+                    if day_target is not None and entry_day == day_target:
+                        plan_day += entry_amount
+
+            # ── Actual side (Billing.netAmount) ────────────────────────
+            billing_qs = Billing.objects.filter(
+                salesMapping=employee_name,
+                bill_date__gte=month_start_dt,
+                bill_date__lt=month_end_dt,
+            )
+            if category != 'all':
+                billing_qs = billing_qs.filter(segment=category)
+
+            actual_mtd = 0.0
+            actual_wtd = 0.0
+            actual_day = 0.0
+            for bill in billing_qs.only('bill_date', 'netAmount'):
+                if not bill.bill_date:
+                    continue
+                bill_day = timezone.localtime(bill.bill_date).day
+                amount = _to_float(bill.netAmount)
+                if bill_day <= mtd_end_day:
+                    actual_mtd += amount
+                if (
+                    wtd_start_day is not None
+                    and wtd_start_day <= bill_day <= wtd_end_day
+                ):
+                    actual_wtd += amount
+                if day_target is not None and bill_day == day_target:
+                    actual_day += amount
+
+            results.append({
+                'employee_id': employee_id,
+                'employee_name': employee_name,
+                'plan_mtd': round(plan_mtd, 2),
+                'actual_mtd': round(actual_mtd, 2),
+                'diff_mtd': round(plan_mtd - actual_mtd, 2),
+                'plan_wtd': round(plan_wtd, 2) if wtd_start_day is not None else None,
+                'actual_wtd': round(actual_wtd, 2) if wtd_start_day is not None else None,
+                'diff_wtd': (
+                    round(plan_wtd - actual_wtd, 2) if wtd_start_day is not None else None
+                ),
+                'plan_day': round(plan_day, 2) if day_target is not None else None,
+                'actual_day': round(actual_day, 2) if day_target is not None else None,
+                'diff_day': (
+                    round(plan_day - actual_day, 2) if day_target is not None else None
+                ),
+            })
+
+        return Response({
+            'month': month,
+            'year': year,
+            'category': category,
+            'is_current_month': is_current_month,
+            'week_to_date_applicable': is_current_month,
+            'day_to_date_applicable': day_target is not None,
+            'categories': categories,
+            'results': results,
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

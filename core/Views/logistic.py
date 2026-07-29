@@ -1506,8 +1506,24 @@ def get_b2b_lab_employees(request):
 
 
 from datetime import datetime, time, timedelta
- 
+
 from django.utils import timezone
+
+from .dbcollection import profile_collection
+
+FULL_ACCESS_ROLES = {"SD-R-GM", "SD-R-MAVP"}
+
+
+def _has_full_access(employee_id):
+    """True if employee_id's primaryRole or additionalRoles (in
+    profile_collection) include SD-R-GM or SD-R-MAVP."""
+    profile = profile_collection.find_one({"employeeId": str(employee_id)})
+    if not profile:
+        return False
+    employee_roles = set(profile.get("additionalRoles") or [])
+    if profile.get("primaryRole"):
+        employee_roles.add(profile.get("primaryRole"))
+    return bool(FULL_ACCESS_ROLES.intersection(employee_roles))
 
 
 @api_view(['GET', 'POST', 'PATCH'])
@@ -1515,127 +1531,181 @@ from django.utils import timezone
 @permission_classes([HasRoleAndDataPermission])
 def customer_complaints(request):
     """
-    GET   /customer_complaints/                                -> list all complaints, ordered by complaint_id (ascending)
-    GET   /customer_complaints/?status=pending                 -> filter by status (optional)
-    GET   /customer_complaints/?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD
-                                                                 -> filter by created_date range (optional)
-                                                                    (from_date alone = created_date >= start of from_date,
-                                                                     to_date alone   = created_date <  start of the day AFTER to_date)
-                                                                    NOTE: uses plain __gte/__lt on created_date rather than
-                                                                    the __date lookup, because djongo/Mongo's DB backend
-                                                                    doesn't implement datetime_cast_date_sql() (that's a
-                                                                    SQL-only cast) — so __date__gte/__date__lte raise
-                                                                    "subclasses of BaseDatabaseOperations may require a
-                                                                    datetime_cast_date_sql() method." on Mongo.
-    POST  /customer_complaints/                                 -> create a new complaint
-                                                                    body: { labcode, issuetype, comments, assignedby }
-                                                                    status is always forced to 'pending' on create;
-                                                                    completion_comments starts out null.
-    PATCH /customer_complaints/                                 -> mark a complaint completed
-                                                                    body: { complaint_id, completion_comments }
-                                                                    sets status -> 'completed'
+    GET
+        - Returns complaints created by the logged-in employee.
+        - SD-R-GM / SD-R-MAVP (primary or additional role) see every
+          complaint instead.
+        - Optional filters:
+            ?status=pending
+            ?from_date=YYYY-MM-DD
+            ?to_date=YYYY-MM-DD
+
+    POST
+        - Creates a new complaint.
+
+    PATCH
+        - Marks complaint as completed. SD-R-GM / SD-R-MAVP can complete
+          any complaint; everyone else only their own.
     """
     try:
-        if request.method == 'GET':
-            # Ascending by complaint_id so the table reads ID 1, 2, 3... in order.
-            queryset = CustomerComplaint.objects.all().order_by('complaint_id')
+        # Get logged-in employee id from header (fallback to request.data)
+        employee_id = (
+            request.headers.get("auth-user-id")
+            or request.data.get("auth-user-id")
+        )
 
-            status_filter = request.query_params.get('status')
+        if not employee_id:
+            return Response(
+                {"error": "auth-user-id is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # ===================== GET =====================
+        if request.method == "GET":
+
+            if _has_full_access(employee_id):
+                queryset = CustomerComplaint.objects.all().order_by("complaint_id")
+            else:
+                queryset = CustomerComplaint.objects.filter(
+                    created_by=str(employee_id)
+                ).order_by("complaint_id")
+
+            # Optional status filter
+            status_filter = request.query_params.get("status")
             if status_filter:
                 queryset = queryset.filter(status=status_filter)
 
-            # Date range filter — used by the table's From/To date picker.
-            # Built as explicit datetime bounds (start of from_date, start
-            # of the day AFTER to_date) so we only ever need __gte/__lt on
-            # the raw created_date field — Mongo-safe, no SQL date casting.
-            from_date = request.query_params.get('from_date')
-            to_date = request.query_params.get('to_date')
+            # Date filters
+            from_date = request.query_params.get("from_date")
+            to_date = request.query_params.get("to_date")
 
             if from_date:
                 try:
-                    from_day = datetime.strptime(from_date, '%Y-%m-%d').date()
-                    start_dt = timezone.make_aware(datetime.combine(from_day, time.min))
+                    from_day = datetime.strptime(from_date, "%Y-%m-%d").date()
+                    start_dt = timezone.make_aware(
+                        datetime.combine(from_day, time.min)
+                    )
                     queryset = queryset.filter(created_date__gte=start_dt)
                 except ValueError:
                     return Response(
-                        {'error': 'from_date must be in YYYY-MM-DD format'},
-                        status=status.HTTP_400_BAD_REQUEST
+                        {"error": "from_date must be in YYYY-MM-DD format"},
+                        status=status.HTTP_400_BAD_REQUEST,
                     )
 
             if to_date:
                 try:
-                    to_day = datetime.strptime(to_date, '%Y-%m-%d').date()
-                    end_dt = timezone.make_aware(datetime.combine(to_day + timedelta(days=1), time.min))
+                    to_day = datetime.strptime(to_date, "%Y-%m-%d").date()
+                    end_dt = timezone.make_aware(
+                        datetime.combine(
+                            to_day + timedelta(days=1),
+                            time.min,
+                        )
+                    )
                     queryset = queryset.filter(created_date__lt=end_dt)
                 except ValueError:
                     return Response(
-                        {'error': 'to_date must be in YYYY-MM-DD format'},
-                        status=status.HTTP_400_BAD_REQUEST
+                        {"error": "to_date must be in YYYY-MM-DD format"},
+                        status=status.HTTP_400_BAD_REQUEST,
                     )
 
             serializer = CustomerComplaintSerializer(queryset, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
-        if request.method == 'POST':
+        # ===================== POST =====================
+        elif request.method == "POST":
+
             data = request.data.copy()
 
-            employee_id = request.data.get("auth-user-id")
+            required_fields = [
+                "labcode",
+                "issuetype",
+                "comments",
 
-            required_fields = ['labcode', 'issuetype', 'comments', 'assignedby']
-            missing = [f for f in required_fields if not data.get(f)]
+            ]
+
+            missing = [field for field in required_fields if not data.get(field)]
+
             if missing:
                 return Response(
-                    {'error': f"Missing required field(s): {', '.join(missing)}"},
-                    status=status.HTTP_400_BAD_REQUEST
+                    {
+                        "error": f"Missing required field(s): {', '.join(missing)}"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            # Every new complaint starts pending with no completion comments,
-            # regardless of what (if anything) the client sent for these.
-            data['status'] = 'pending'
-            data['completion_comments'] = None
-            data['created_by'] = employee_id
+            data["status"] = "pending"
+            data["completion_comments"] = None
+            data["created_by"] = str(employee_id)
+            data["lastmodified_by"] = str(employee_id)
 
             serializer = CustomerComplaintSerializer(data=data)
+
             if serializer.is_valid():
                 serializer.save()
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                return Response(
+                    serializer.data,
+                    status=status.HTTP_201_CREATED,
+                )
 
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-        # PATCH - mark a complaint as completed, with mandatory comments
-        complaint_id = request.data.get('complaint_id')
-        completion_comments = request.data.get('completion_comments')
-
-        if not complaint_id:
             return Response(
-                {'error': 'complaint_id is required'},
-                status=status.HTTP_400_BAD_REQUEST
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if not completion_comments:
-            return Response(
-                {'error': 'completion_comments is required to mark a complaint as completed'},
-                status=status.HTTP_400_BAD_REQUEST
+        # ===================== PATCH =====================
+        elif request.method == "PATCH":
+
+            complaint_id = request.data.get("complaint_id")
+            completion_comments = request.data.get("completion_comments")
+
+            if not complaint_id:
+                return Response(
+                    {"error": "complaint_id is required"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if not completion_comments:
+                return Response(
+                    {
+                        "error": "completion_comments is required to mark a complaint as completed"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # SD-R-GM / SD-R-MAVP can complete any complaint; everyone else
+            # only the ones they created.
+            update_filter = {"complaint_id": complaint_id}
+            if not _has_full_access(employee_id):
+                update_filter["created_by"] = str(employee_id)
+
+            updated_count = CustomerComplaint.objects.filter(
+                **update_filter
+            ).update(
+                completion_comments=completion_comments,
+                status="completed",
+                lastmodified_by=str(employee_id),
+                lastmodified_date=timezone.now(),
             )
 
-        employee_id = request.data.get("auth-user-id")
+            if not updated_count:
+                return Response(
+                    {
+                        "error": "Complaint not found or you are not authorized to update it."
+                    },
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
-        updated_count = CustomerComplaint.objects.filter(complaint_id=complaint_id).update(
-            completion_comments=completion_comments,
-            status='completed',
-            lastmodified_by=employee_id,
-            lastmodified_date=timezone.now(),
-        )
+            complaint = CustomerComplaint.objects.get(complaint_id=complaint_id)
 
-        if not updated_count:
+            serializer = CustomerComplaintSerializer(complaint)
+
             return Response(
-                {'error': f'Complaint {complaint_id} not found'},
-                status=status.HTTP_404_NOT_FOUND
+                serializer.data,
+                status=status.HTTP_200_OK,
             )
-
-        complaint = CustomerComplaint.objects.get(complaint_id=complaint_id)
-        serializer = CustomerComplaintSerializer(complaint)
-        return Response(serializer.data, status=status.HTTP_200_OK)
 
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
