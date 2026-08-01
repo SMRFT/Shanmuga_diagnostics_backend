@@ -459,6 +459,57 @@ class CustomerComplaint(AuditModel):
     
 
 
+
+# ---------------- shared rollup helpers ----------------
+
+def get_week_of_year(d):
+    """Simple sequential 7-day blocks from Jan 1 (Week 1 = Jan 1-7, ...) —
+    matches the frontend's week grouping, not ISO weeks."""
+    start = date_cls(d.year, 1, 1)
+    day_of_year = (d - start).days + 1
+    return math.ceil(day_of_year / 7)
+
+
+def recompute_entries_and_rollups(entries, avg_revenue_per_prescription, year, month):
+    """
+    entries: [{'date': day, 'volume': v}, ...]
+    Recomputes revenue on every entry, buckets into weekly totals, and
+    returns (normalized_entries, weekly_totals, total_revenue).
+    """
+    normalized_entries = []
+    weekly_map = {}
+    total_revenue = 0.0
+
+    for entry in entries:
+        day = int(entry.get('date'))
+        volume = float(entry.get('volume') or 0)
+        revenue = volume * avg_revenue_per_prescription
+
+        normalized_entries.append({'date': day, 'volume': volume, 'revenue': revenue})
+        total_revenue += revenue
+
+        week = get_week_of_year(date_cls(year, month, day))
+        weekly_map[week] = weekly_map.get(week, 0) + revenue
+
+    weekly_totals = [{'week': w, 'total': weekly_map[w]} for w in sorted(weekly_map)]
+    return normalized_entries, weekly_totals, total_revenue
+
+
+def recompute_total_row(category, month, year, actor_employee_id):
+    """
+    Remove any legacy aggregate row with employee_id='ALL' if it exists.
+    Only real employee rows are now stored for sales plans; totals are
+    computed from those employee rows when needed.
+    """
+    SalesPlan.objects.filter(
+        employee_id=TOTAL_ROW_EMPLOYEE_ID,
+        category=category,
+        month=month,
+        year=year,
+    ).delete()
+    return
+
+
 class RawJSONField(models.JSONField):
     """
     Django's JSONField always runs json.dumps() in get_prep_value(),
@@ -479,26 +530,52 @@ class RawJSONField(models.JSONField):
         return value
  
  
+import math
+from datetime import date as date_cls
+from django.db import models
+from django.db.models import Max
+
+# Sentinel employee_id used for the one aggregate row per category/month/year
+# that holds the overall (all-sales-executives) total and its weekly
+# breakdown — lives in the same table as every executive's own row instead
+# of a separate model.
+TOTAL_ROW_EMPLOYEE_ID = "ALL"
+
+
 class SalesPlan(AuditModel):
- 
+
     sales_plan_id = models.IntegerField(primary_key=True)
     employee_id = models.CharField(max_length=100)
     category = models.CharField(max_length=100)
     month = models.IntegerField()
     year = models.IntegerField()
     date = models.DateTimeField(auto_now=True)
+
+    # One-time-per-month values — entered once per employee/category/month/year,
+    # not per day. Blank/0 on the aggregate row.
+    working_days = models.IntegerField(default=0, blank=True, null=True)
+    avg_revenue_per_prescription = models.FloatField(default=0, blank=True, null=True)
+
+    # Each entry: {'date': <day int>, 'volume': <float>,
+    #              'revenue': <float, volume * avg_revenue_per_prescription>}
+    # On the aggregate row, entries stays empty — only weekly_totals/total_revenue
+    # are populated there.
     entries = RawJSONField(default=list, blank=True)
-   
- 
+
+    # Stored rollups, recomputed server-side on every POST/PATCH.
+    # weekly_totals: [{'week': <int>, 'total': <float>}, ...]
+    weekly_totals = RawJSONField(default=list, blank=True)
+    total_revenue = models.FloatField(default=0, blank=True, null=True)
+
     def save(self, *args, **kwargs):
         if not self.sales_plan_id:
             last_id = SalesPlan.objects.aggregate(
                 Max('sales_plan_id')
             )['sales_plan_id__max']
- 
-            if last_id:
-                self.sales_plan_id = last_id + 1
-            else:
-                self.sales_plan_id = 1
- 
+            self.sales_plan_id = (last_id + 1) if last_id else 1
         super().save(*args, **kwargs)
+
+
+
+
+

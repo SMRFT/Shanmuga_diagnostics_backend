@@ -3,7 +3,7 @@ from bson.objectid import ObjectId
 import gridfs
 from rest_framework.response import Response
 from rest_framework import status
-from ..models import SalesVisitLog,Billing,Patient,ClinicalName,SalesPlan
+from ..models import SalesVisitLog,Billing,Patient,ClinicalName,SalesPlan,TOTAL_ROW_EMPLOYEE_ID
 from ..serializers import SalesVisitLogSerializer, HospitalLabSerializer,PatientSerializer,BillingSerializer,ClinicalNameSerializer,SalesPlanSerializer
 from django.db.models import Max
 import re
@@ -12,6 +12,9 @@ from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from django.views.decorators.csrf import csrf_exempt
 from datetime import datetime
+import calendar
+
+from django.utils.timezone import now
 import os
 from datetime import date as date_cls
 
@@ -202,26 +205,29 @@ def get_all_clinicalnames(request):
 from django.http import JsonResponse
 from pymongo import MongoClient
 import os
-@api_view(['GET'])
-@permission_classes([HasRoleAndDataPermission])
-def get_sales_executives(request):
+
+
+def _get_sales_executive_rows():
     mongo_url = os.getenv("GLOBAL_DB_HOST")
     client = MongoClient(mongo_url)
-    db = client["Global"]  
-
+    db = client["Global"]
     collection = db["backend_diagnostics_profile"]
 
-    # Query: Match either primaryRole == "SD-R-SP" or "SD-R-SP" in additionalRoles array
     query = {
         "$or": [
             {"primaryRole": "SD-R-SE"},
             {"additionalRoles": "SD-R-SE"},
-             {"designation": "SD-R-SE"}
+            {"designation": "SD-R-SE"}
         ]
     }
 
-    employees = list(collection.find(query, {"employeeName": 1, "employeeId": 1, "_id": 0}))
+    return list(collection.find(query, {"employeeName": 1, "employeeId": 1, "_id": 0}))
 
+
+@api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
+def get_sales_executives(request):
+    employees = _get_sales_executive_rows()
     return JsonResponse(employees, safe=False)
 
 
@@ -311,6 +317,15 @@ def _make_aware_if_needed(dt):
     return dt
  
  
+def _month_bounds(year, month):
+    month_start = timezone.make_aware(datetime(year, month, 1, 0, 0, 0))
+    if month == 12:
+        month_end = timezone.make_aware(datetime(year + 1, 1, 1, 0, 0, 0))
+    else:
+        month_end = timezone.make_aware(datetime(year, month + 1, 1, 0, 0, 0))
+    return month_start, month_end
+
+
 def _summarize(bills):
     """Aggregate a list of Billing instances into the stat block the
     frontend renders. Cancelled/refunded line items are excluded from
@@ -475,16 +490,19 @@ def serve_sales_image(request, file_id):
 
 
 
+
+from ..models import (SalesPlan,recompute_entries_and_rollups,recompute_total_row,)
+
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 def salesplan(request):
- 
+
     # ---------------- GET ----------------
     if request.method == 'GET':
         month = request.query_params.get('month')
         year = request.query_params.get('year')
         category = request.query_params.get('category')
- 
+
         filters = {}
         if month is not None:
             filters['month'] = int(month)
@@ -492,52 +510,72 @@ def salesplan(request):
             filters['year'] = int(year)
         if category:
             filters['category'] = category
- 
-        queryset = SalesPlan.objects.filter(**filters)
+
+        queryset = SalesPlan.objects.filter(**filters).exclude(employee_id=TOTAL_ROW_EMPLOYEE_ID)
         serializer = SalesPlanSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
- 
+
     # ---------------- POST (bulk save whole grid for a category) ----------------
     if request.method == 'POST':
         data = request.data.copy()
         employee_id = data.get('auth-user-id')
- 
+
         plans = data.get('plans', [])
         if not isinstance(plans, list):
-            return Response(
-                {"error": "plans must be a list"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
- 
+            return Response({"error": "plans must be a list"}, status=status.HTTP_400_BAD_REQUEST)
+
         results = []
+        touched_combos = set()
         now = timezone.now()
- 
+
         for plan_item in plans:
             plan_employee_id = plan_item.get('employee_id')
             plan_category = plan_item.get('category')
             plan_month = int(plan_item.get('month'))
             plan_year = int(plan_item.get('year'))
             plan_entries = plan_item.get('entries', [])
- 
+            plan_working_days = plan_item.get('working_days')
+            plan_avg_revenue = plan_item.get('avg_revenue_per_prescription')
+
             existing = SalesPlan.objects.filter(
                 employee_id=plan_employee_id,
                 category=plan_category,
                 month=plan_month,
                 year=plan_year
             ).first()
- 
+
+            effective_avg_revenue = (
+                float(plan_avg_revenue) if plan_avg_revenue is not None
+                else float(existing.avg_revenue_per_prescription or 0) if existing else 0.0
+            )
+
             if existing:
                 existing_entries = existing.entries or []
                 entry_map = {e['date']: e for e in existing_entries}
                 for entry in plan_entries:
-                    entry_map[entry['date']] = entry
+                    entry_map[entry['date']] = {'date': entry['date'], 'volume': entry.get('volume', 0)}
                 merged_entries = list(entry_map.values())
- 
-                SalesPlan.objects.filter(sales_plan_id=existing.sales_plan_id).update(
-                    entries=merged_entries,
-                    lastmodified_by=employee_id,
-                    lastmodified_date=now
-                )
+            else:
+                merged_entries = [{'date': e['date'], 'volume': e.get('volume', 0)} for e in plan_entries]
+
+            normalized_entries, weekly_totals, total_revenue = recompute_entries_and_rollups(
+                merged_entries, effective_avg_revenue, plan_year, plan_month
+            )
+
+            if existing:
+                update_fields = {
+                    'entries': normalized_entries,
+                    'weekly_totals': weekly_totals,
+                    'total_revenue': total_revenue,
+                    'lastmodified_by': employee_id,
+                    'lastmodified_date': now
+                }
+                if plan_working_days is not None:
+                    update_fields['working_days'] = int(plan_working_days)
+                if plan_avg_revenue is not None:
+                    update_fields['avg_revenue_per_prescription'] = effective_avg_revenue
+
+                SalesPlan.objects.filter(sales_plan_id=existing.sales_plan_id).update(**update_fields)
                 updated = SalesPlan.objects.get(sales_plan_id=existing.sales_plan_id)
                 results.append(SalesPlanSerializer(updated).data)
             else:
@@ -547,7 +585,11 @@ def salesplan(request):
                     'month': plan_month,
                     'year': plan_year,
                     'date': date_cls(plan_year, plan_month, 1),
-                    'entries': plan_entries,
+                    'entries': normalized_entries,
+                    'weekly_totals': weekly_totals,
+                    'total_revenue': total_revenue,
+                    'working_days': int(plan_working_days) if plan_working_days is not None else 0,
+                    'avg_revenue_per_prescription': effective_avg_revenue,
                     'created_by': employee_id,
                     'lastmodified_by': employee_id,
                 })
@@ -556,98 +598,261 @@ def salesplan(request):
                     results.append(serializer.data)
                 else:
                     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
+
+            touched_combos.add((plan_category, plan_month, plan_year))
+
+        for cat, mon, yr in touched_combos:
+            recompute_total_row(cat, mon, yr, employee_id)
+
         return Response(results, status=status.HTTP_201_CREATED)
- 
-    # ---------------- PATCH (single cell edit, upsert) ----------------
+
+    # ---------------- PATCH (single cell edit, working-days edit, or avg-revenue edit, upsert) ----------------
     if request.method == 'PATCH':
         data = request.data.copy()
         employee_id = data.get('auth-user-id')
- 
+
         sales_plan_id = data.get('sales_plan_id')
         emp_id = data.get('employee_id')
         category = data.get('category')
         month = int(data.get('month'))
         year = int(data.get('year'))
-        day = int(data.get('day'))
-        amount = data.get('amount')
- 
+
+        day = data.get('day')
+        working_days = data.get('working_days')
+        avg_revenue = data.get('avg_revenue_per_prescription')
+
         if sales_plan_id:
-            # Known record — go straight to it, skip the compound lookup.
             plan = SalesPlan.objects.filter(sales_plan_id=int(sales_plan_id)).first()
         else:
             plan = SalesPlan.objects.filter(
-                employee_id=emp_id,
-                category=category,
-                month=month,
-                year=year
+                employee_id=emp_id, category=category, month=month, year=year
             ).first()
- 
+
         if not plan:
+            raw_entries = []
+            if day is not None:
+                raw_entries = [{'date': int(day), 'volume': float(data.get('volume') or 0)}]
+
+            effective_avg_revenue = float(avg_revenue) if avg_revenue is not None else 0.0
+            normalized_entries, weekly_totals, total_revenue = recompute_entries_and_rollups(
+                raw_entries, effective_avg_revenue, year, month
+            )
+
             serializer = SalesPlanSerializer(data={
                 'employee_id': emp_id,
                 'category': category,
                 'month': month,
                 'year': year,
                 'date': date_cls(year, month, 1),
-                'entries': [{'date': day, 'amount': amount}],
+                'entries': normalized_entries,
+                'weekly_totals': weekly_totals,
+                'total_revenue': total_revenue,
+                'working_days': int(working_days) if working_days is not None else 0,
+                'avg_revenue_per_prescription': effective_avg_revenue,
                 'created_by': employee_id,
                 'lastmodified_by': employee_id,
             })
             if serializer.is_valid():
                 serializer.save()
+                recompute_total_row(category, month, year, employee_id)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
- 
+
+        update_fields = {
+            'lastmodified_by': employee_id,
+            'lastmodified_date': timezone.now()
+        }
+
         entries = plan.entries or []
-        found = False
-        for entry in entries:
-            if entry.get('date') == day:
-                entry['amount'] = amount
-                found = True
-                break
-        if not found:
-            entries.append({'date': day, 'amount': amount})
- 
-        SalesPlan.objects.filter(sales_plan_id=plan.sales_plan_id).update(
-            entries=entries,
-            lastmodified_by=employee_id,
-            lastmodified_date=timezone.now()
+        if day is not None:
+            day = int(day)
+            volume = float(data.get('volume') or 0)
+            found = False
+            for entry in entries:
+                if entry.get('date') == day:
+                    entry['volume'] = volume
+                    found = True
+                    break
+            if not found:
+                entries.append({'date': day, 'volume': volume})
+
+        effective_avg_revenue = (
+            float(avg_revenue) if avg_revenue is not None
+            else float(plan.avg_revenue_per_prescription or 0)
         )
- 
+        if avg_revenue is not None:
+            update_fields['avg_revenue_per_prescription'] = effective_avg_revenue
+
+        if working_days is not None:
+            update_fields['working_days'] = int(working_days)
+
+        if day is not None or avg_revenue is not None:
+            normalized_entries, weekly_totals, total_revenue = recompute_entries_and_rollups(
+                entries, effective_avg_revenue, year, month
+            )
+            update_fields['entries'] = normalized_entries
+            update_fields['weekly_totals'] = weekly_totals
+            update_fields['total_revenue'] = total_revenue
+
+        SalesPlan.objects.filter(sales_plan_id=plan.sales_plan_id).update(**update_fields)
+        recompute_total_row(category, month, year, employee_id)
+
         updated = SalesPlan.objects.get(sales_plan_id=plan.sales_plan_id)
         return Response(SalesPlanSerializer(updated).data, status=status.HTTP_200_OK)
-    
 
 
 
-def _month_bounds(year, month):
+
+# ─────────────────────────────────────────────
+# Adjusted-days helper
+# ─────────────────────────────────────────────
+def get_adjusted_days(year, month, upto_day):
     """
-    Returns (start_dt, end_dt) as tz-aware datetimes spanning the whole
-    calendar month: start_dt = day 1 00:00, end_dt = day 1 00:00 of the
-    FOLLOWING month (exclusive upper bound).
-
-    Built as explicit datetime bounds so filtering only ever needs
-    __gte/__lt on the raw DateTimeField — same Mongo-safe pattern used in
-    customer_complaints for created_date, avoiding djongo's missing
-    datetime_cast_date_sql()/date-extract support that __date / __year /
-    __month lookups would trigger.
+    total_days         -> total calendar days in the month
+    total_sundays      -> total Sundays in the month
+    adjusted_days      -> elapsed days up to upto_day, with each Sunday counted as half a working day
+    month_adjusted_days-> full month working days, with each Sunday counted as half a working day
     """
-    start_dt = timezone.make_aware(datetime(year, month, 1))
-    if month == 12:
-        end_dt = timezone.make_aware(datetime(year + 1, 1, 1))
+    total_days = calendar.monthrange(year, month)[1]
+    cal = calendar.monthcalendar(year, month)
+
+    total_sundays = 0
+    upto_sundays = 0
+    for week in cal:
+        sunday = week[calendar.SUNDAY]
+        if sunday != 0:
+            total_sundays += 1
+            if sunday <= upto_day:
+                upto_sundays += 1
+
+    adjusted_days = max(0.5, upto_day - (upto_sundays / 2.0))
+    month_adjusted_days = total_days - (total_sundays / 2.0)
+
+    return total_days, total_sundays, adjusted_days, month_adjusted_days
+ 
+ 
+# ─────────────────────────────────────────────
+# Calling your existing get_sales_executives/ view directly
+# instead of duplicating its query.
+#
+# That view is wrapped in @api_view, which internally asserts
+# its `request` arg is a raw django.http.HttpRequest — not the
+# rest_framework.request.Request that salesplan_summary already
+# has (that's what threw the earlier AssertionError). A DRF
+# Request keeps the original Django request on `._request`, so
+# passing THAT through satisfies the assertion and still carries
+# the authenticated user/session along with it.
+#
+# The view itself returns a JsonResponse, not a Python list, so
+# its .content needs to be parsed back into JSON here.
+# ─────────────────────────────────────────────
+
+ 
+ 
+def fetch_sales_executives(request):
+    employees = _get_sales_executive_rows()
+    if isinstance(employees, str):
+        try:
+            employees = json.loads(employees)
+        except (TypeError, ValueError):
+            employees = []
+    if isinstance(employees, dict):
+        employees = employees.get("data") or employees.get("employees") or []
+    if not isinstance(employees, list):
+        employees = []
+    return employees
+ 
+ 
+@api_view(['GET'])
+def salesplan_summary(request):
+    date_str = request.GET.get("date")  # expects YYYY-MM-DD from the date picker
+
+    if date_str:
+        try:
+            selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response(
+                {"error": "Invalid date format, expected YYYY-MM-DD"},
+                status=400
+            )
     else:
-        end_dt = timezone.make_aware(datetime(year, month + 1, 1))
-    return start_dt, end_dt
+        selected_date = timezone.localdate() - timedelta(days=1)
+
+    year = selected_date.year
+    month = selected_date.month
+    report_day = max(1, selected_date.day - 1)
+
+    start_date = timezone.make_aware(datetime(year, month, 1, 0, 0, 0))
+    end_date = timezone.make_aware(datetime(year, month, report_day, 23, 59, 59))
+
+    total_days, sundays, adjusted_days, month_adjusted_days = get_adjusted_days(
+        year, month, report_day
+    )
+
+    employees = fetch_sales_executives(request)
+
+    result = []
+    for emp in employees:
+        if not isinstance(emp, dict):
+            continue
+
+        emp_id = emp.get("employeeId") or emp.get("employee_id")
+        emp_name = emp.get("employeeName") or emp.get("employee_name")
+        if not emp_id or not emp_name:
+            continue
+
+        billing_qs = Billing.objects.filter(
+            salesMapping=emp_name,
+            bill_date__gte=start_date,
+            bill_date__lte=end_date
+        )
+
+        billed_amount = 0.0
+        for bill in billing_qs:
+            try:
+                billed_amount += float(bill.netAmount or 0)
+            except (TypeError, ValueError):
+                pass
+
+        sales_plan = SalesPlan.objects.filter(
+            employee_id=emp_id, month=month, year=year
+        ).first()
+        plan_working_days = int(getattr(sales_plan, 'working_days', 0) or 0)
+        plan_total_revenue = float(getattr(sales_plan, 'total_revenue', 0) or 0)
+
+        # Trending: (billed_amount / working_days) * adjusted_working_days
+        # Where adjusted_working_days = total_days - (sundays / 2)
+        if plan_working_days > 0:
+            trending_amount = (billed_amount / plan_working_days) * month_adjusted_days
+        else:
+            trending_amount = 0
+
+        # Projected: (trending_amount / total_revenue) * 100 as percentage
+        if plan_total_revenue > 0:
+            projected_percentage = (trending_amount / plan_total_revenue) * 100
+        else:
+            projected_percentage = 0
+
+        result.append({
+            "employee_id": emp_id,
+            "employee_name": emp_name,
+            "billed_amount": round(billed_amount, 2),
+            "working_days": plan_working_days,
+            "as_of_date": selected_date.strftime("%Y-%m-%d"),
+            "total_days": total_days,
+            "sundays": sundays,
+            "adjusted_days": round(adjusted_days, 2),
+            "overall_working_days": round(month_adjusted_days, 2),
+            "total_revenue": round(plan_total_revenue, 2),
+            "trending_amount": round(trending_amount, 2),
+            "projected_percentage": round(projected_percentage, 2)
+        })
+
+    return Response(result)
 
 
-def _to_float(value):
-    try:
-        if value in (None, ""):
-            return 0.0
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
+
+
 
 import calendar
 @api_view(['GET', 'POST'])

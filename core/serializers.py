@@ -188,14 +188,20 @@ class CustomerComplaintSerializer(serializers.ModelSerializer):
 
 
 
+
+
 from rest_framework import serializers
 from .models import SalesPlan
 
 
 class SalesPlanSerializer(serializers.ModelSerializer):
     id = serializers.CharField(read_only=True)
-    sales_plan_id = serializers.IntegerField(read_only=True)  # auto-assigned in model.save()
+    sales_plan_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = SalesPlan
         fields = '__all__'
+
+
+
+
