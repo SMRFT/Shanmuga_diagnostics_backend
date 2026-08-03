@@ -89,6 +89,7 @@ urlpatterns = [
     path('sample-collector-location/', location.sample_collector_location, name='sample_collector_location'),
     path('sample-collector-location-history/', location.sample_collector_location_history, name='sample_collector_location_history'),
     path('routesetup/', logistic.routesetup, name='routesetup'),
+    path('routesetup/<int:route_id>/', logistic.routesetup, name='routesetup_detail'),
     path('route-analysis/start/', logistic.start_route_analysis, name='start-route-analysis'),
     path('route-analysis/end/', logistic.end_route_analysis, name='end-route-analysis'),
     path('route-analysis/mark/', logistic.mark_visit, name='mark-visit'),

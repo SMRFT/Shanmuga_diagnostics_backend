@@ -651,10 +651,10 @@ def get_clinical_name_map(referrer_codes):
 
 # ---------- Route Setup ----------
 
-@api_view(['GET', 'POST'])
+@api_view(['GET', 'POST', 'PUT', 'DELETE'])
 @permission_classes([HasRoleAndDataPermission])
 @csrf_exempt
-def routesetup(request):
+def routesetup(request, route_id=None):
     try:
         if request.method == 'POST':
             data = request.data.copy()
@@ -678,15 +678,55 @@ def routesetup(request):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        elif request.method == 'PUT':
+            target_id = route_id or request.data.get("id") or request.data.get("route_id")
+            if not target_id:
+                return Response({"error": "Route ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+            route_obj = RouteSetup.objects.filter(id=target_id).first()
+            if not route_obj:
+                return Response({"error": "Route not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            data = request.data.copy()
+            employee_id = request.data.get("auth-user-id")
+            data["lastmodified_by"] = employee_id
+            data["lastmodified_date"] = timezone.now()
+
+            if isinstance(data.get("clinical_name"), str):
+                data["clinical_name"] = _as_list(data["clinical_name"])
+
+            serializer = RouteSetupSerializer(route_obj, data=data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(
+                    {"message": "Route updated successfully", "data": serializer.data},
+                    status=status.HTTP_200_OK
+                )
+            return Response(
+                {"error": "Validation failed", "details": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        elif request.method == 'DELETE':
+            target_id = route_id or request.query_params.get("id") or request.data.get("id") or request.data.get("route_id")
+            if not target_id:
+                return Response({"error": "Route ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+            route_obj = RouteSetup.objects.filter(id=target_id).first()
+            if not route_obj:
+                return Response({"error": "Route not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            route_obj.delete()
+            return Response({"message": "Route deleted successfully"}, status=status.HTTP_200_OK)
+
         # GET — support optional filters
-        # ?collector_id=<employeeId>  → routes assigned to that collector
-        # ?date=YYYY-MM-DD            → routes created on that date (not yet used for filtering,
-        #                               but returned so frontend can show date-based lists)
         collector_id = request.query_params.get("collector_id")
         date_str     = request.query_params.get("date")
 
         routes = RouteSetup.objects.all().order_by('-created_date')
 
+        if route_id:
+            routes = routes.filter(id=route_id)
         if collector_id:
             routes = routes.filter(logistics_mapping=collector_id)
         if date_str:

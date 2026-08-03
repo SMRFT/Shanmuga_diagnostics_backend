@@ -84,6 +84,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/sample-collector-location-history/?(\\?.*)?$': 'SD-P-LGD',
 
     r'^/_b_a_c_k_e_n_d/LIS/routesetup/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/routesetup/[^/]+/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/start/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/end/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/mark/?(\?.*)?$': 'SD-P-LTM',
