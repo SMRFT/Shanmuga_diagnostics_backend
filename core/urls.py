@@ -67,6 +67,7 @@ urlpatterns = [
     path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
     path('salesplan/', sales.salesplan, name='salesplan'),
     path('salesplan_summary/', sales.salesplan_summary, name='salesplan_summary'),
+    path('overall_summary/', sales.overall_summary, name='overall_summary'),
     path('salesplanreport/', sales.salesplanreport, name='salesplan'),
     path('salesexecutive_report/', sales.Adminview_salesexecutive_report, name='salesexecutive_report'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),

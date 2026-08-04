@@ -746,9 +746,6 @@ def get_adjusted_days(year, month, upto_day):
 # The view itself returns a JsonResponse, not a Python list, so
 # its .content needs to be parsed back into JSON here.
 # ─────────────────────────────────────────────
-
- 
- 
 def fetch_sales_executives(request):
     employees = _get_sales_executive_rows()
     if isinstance(employees, str):
@@ -765,96 +762,373 @@ def fetch_sales_executives(request):
  
 @api_view(['GET'])
 def salesplan_summary(request):
-    date_str = request.GET.get("date")  # expects YYYY-MM-DD from the date picker
+    """
+    Returns a category-wise summary table with:
+      - Today  : the day BEFORE the selected date (yesterday relative to view date)
+      - WTD    : Monday of that week up to (selected_date - 1), inclusive
+      - MTD    : 1st of month up to (selected_date - 1), inclusive
+
+    Query params:
+      date  (YYYY-MM-DD) - the "as-of" date the user is viewing from.
+                           Defaults to today (local). Data shown is always up to date-1.
+
+    Response shape:
+      {
+        "as_of_date": "2026-08-03",
+        "report_upto": "2026-08-02",   # date - 1
+        "today_label": "2-Aug",
+        "wtd_label": "Mon 28-Jul .. 2-Aug",
+        "mtd_label": "1-Aug .. 2-Aug",
+        "rows": [
+          {
+            "category": "B2B",
+            "today_plan": 6000, "today_actual": 890, "today_pct": 14.8,
+            "wtd_plan": 8000, "wtd_actual": 2000, "wtd_pct": 25.0,
+            "mtd_plan": 8000, "mtd_actual": 2000, "mtd_pct": 25.0,
+            "trending": 12345, "projection": 56789,
+          },
+          ...
+          { "category": "Total", ... }
+        ]
+      }
+    """
+    date_str = request.GET.get("date")
 
     if date_str:
         try:
-            selected_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            as_of_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
-            return Response(
-                {"error": "Invalid date format, expected YYYY-MM-DD"},
-                status=400
-            )
+            return Response({"error": "Invalid date format, expected YYYY-MM-DD"}, status=400)
     else:
-        selected_date = timezone.localdate() - timedelta(days=1)
+        as_of_date = timezone.localdate()
 
-    year = selected_date.year
-    month = selected_date.month
-    report_day = max(1, selected_date.day - 1)
+    # All "report" data is up to the day BEFORE the as-of date (i.e. yesterday relative to view)
+    report_upto = as_of_date - timedelta(days=1)
 
-    start_date = timezone.make_aware(datetime(year, month, 1, 0, 0, 0))
-    end_date = timezone.make_aware(datetime(year, month, report_day, 23, 59, 59))
+    year = report_upto.year
+    month = report_upto.month
+    report_day = report_upto.day  # last day to include (inclusive)
 
-    total_days, sundays, adjusted_days, month_adjusted_days = get_adjusted_days(
+    # ── Date range: MTD ────────────────────────────────────────────────────────
+    mtd_start_dt = timezone.make_aware(datetime(year, month, 1, 0, 0, 0))
+    mtd_end_dt   = timezone.make_aware(datetime(year, month, report_day, 23, 59, 59))
+
+    # ── Date range: Today (yesterday) ─────────────────────────────────────────
+    today_start_dt = timezone.make_aware(datetime(year, month, report_day, 0, 0, 0))
+    today_end_dt   = mtd_end_dt  # same end
+
+    # ── Date range: WTD ────────────────────────────────────────────────────────
+    # Monday of the week containing report_upto, clipped to the 1st of the month
+    monday = report_upto - timedelta(days=report_upto.weekday())  # weekday() Mon=0
+    wtd_start_date = max(monday, report_upto.replace(day=1))
+    wtd_start_dt = timezone.make_aware(datetime(wtd_start_date.year, wtd_start_date.month, wtd_start_date.day, 0, 0, 0))
+    wtd_end_dt   = mtd_end_dt
+
+    # ── Month projection helpers ────────────────────────────────────────────────
+    total_days, sundays, adjusted_elapsed, month_adjusted_days = get_adjusted_days(
         year, month, report_day
     )
 
+    # ── Pull all sales executives ──────────────────────────────────────────────
     employees = fetch_sales_executives(request)
 
-    result = []
+    # ── Categories we care about ───────────────────────────────────────────────
+    all_categories = list(
+        SalesPlan.objects.exclude(category__isnull=True).exclude(category="")
+        .values_list('category', flat=True).distinct()
+    )
+    if not all_categories:
+        all_categories = ['B2B', 'Corporate Health Checkup', 'Home Collection', 'Franchise']
+
+    def sum_plan_for_days(emp_id, category, day_numbers):
+        """Sum SalesPlan entries[].revenue for the given calendar day numbers."""
+        plans = SalesPlan.objects.filter(
+            employee_id=emp_id, month=month, year=year, category=category
+        )
+        total = 0.0
+        for plan in plans:
+            for entry in (plan.entries or []):
+                try:
+                    d = int(entry.get('date'))
+                    r = _to_float(entry.get('revenue'))
+                except (TypeError, ValueError):
+                    continue
+                if d in day_numbers:
+                    total += r
+        return total
+
+    def sum_actual_for_range(emp_name, category, start_dt, end_dt):
+        """Sum Billing.netAmount for the given date range and category (segment)."""
+        qs = Billing.objects.filter(
+            salesMapping=emp_name,
+            bill_date__gte=start_dt,
+            bill_date__lte=end_dt,
+            segment=category,
+        )
+        total = 0.0
+        for bill in qs.only('netAmount'):
+            total += _to_float(bill.netAmount)
+        return total
+
+    def sum_plan_total_revenue(emp_id, category):
+        """Full month plan total revenue for trending/projection."""
+        plans = SalesPlan.objects.filter(
+            employee_id=emp_id, month=month, year=year, category=category
+        )
+        return sum(_to_float(p.total_revenue) for p in plans)
+
+    # Day sets for plan lookups
+    today_days = {report_day}
+    wtd_days   = set(range(wtd_start_date.day, report_day + 1))
+    mtd_days   = set(range(1, report_day + 1))
+
+    # ── Accumulate per category ───────────────────────────────────────────────
+    cat_data = {}  # { category: { today_plan, today_actual, wtd_*, mtd_*, full_plan, mtd_actual } }
+
+    for cat in all_categories:
+        cat_data[cat] = {
+            'today_plan': 0.0, 'today_actual': 0.0,
+            'wtd_plan':   0.0, 'wtd_actual':   0.0,
+            'mtd_plan':   0.0, 'mtd_actual':   0.0,
+            'full_plan':  0.0,  # total_revenue for whole month (for trending/projection)
+        }
+
     for emp in employees:
         if not isinstance(emp, dict):
             continue
-
-        emp_id = emp.get("employeeId") or emp.get("employee_id")
+        emp_id   = emp.get("employeeId") or emp.get("employee_id")
         emp_name = emp.get("employeeName") or emp.get("employee_name")
         if not emp_id or not emp_name:
             continue
 
-        billing_qs = Billing.objects.filter(
-            salesMapping=emp_name,
-            bill_date__gte=start_date,
-            bill_date__lte=end_date
-        )
+        for cat in all_categories:
+            d = cat_data[cat]
+            d['today_plan']  += sum_plan_for_days(emp_id, cat, today_days)
+            d['wtd_plan']    += sum_plan_for_days(emp_id, cat, wtd_days)
+            d['mtd_plan']    += sum_plan_for_days(emp_id, cat, mtd_days)
+            d['full_plan']   += sum_plan_total_revenue(emp_id, cat)
+            d['today_actual'] += sum_actual_for_range(emp_name, cat, today_start_dt, today_end_dt)
+            d['wtd_actual']   += sum_actual_for_range(emp_name, cat, wtd_start_dt,   wtd_end_dt)
+            d['mtd_actual']   += sum_actual_for_range(emp_name, cat, mtd_start_dt,   mtd_end_dt)
 
-        billed_amount = 0.0
-        for bill in billing_qs:
-            try:
-                billed_amount += float(bill.netAmount or 0)
-            except (TypeError, ValueError):
-                pass
+    # ── Build result rows ─────────────────────────────────────────────────────
+    def pct(actual, plan):
+        return round((actual / plan * 100), 1) if plan > 0 else 0.0
 
-        sales_plan = SalesPlan.objects.filter(
-            employee_id=emp_id, month=month, year=year
-        ).first()
-        plan_working_days = int(getattr(sales_plan, 'working_days', 0) or 0)
-        plan_total_revenue = float(getattr(sales_plan, 'total_revenue', 0) or 0)
+    def trending(mtd_actual, adjusted_elapsed, month_adjusted_days):
+        """(actual so far / elapsed adjusted days) * total adjusted days in month."""
+        if adjusted_elapsed > 0:
+            return round((mtd_actual / adjusted_elapsed) * month_adjusted_days, 2)
+        return 0.0
 
-        # Trending: (billed_amount / working_days) * adjusted_working_days
-        # Where adjusted_working_days = total_days - (sundays / 2)
-        if plan_working_days > 0:
-            trending_amount = (billed_amount / plan_working_days) * month_adjusted_days
-        else:
-            trending_amount = 0
+    def projection(trend, full_plan):
+        return round((trend / full_plan * 100), 1) if full_plan > 0 else 0.0
 
-        # Projected: (trending_amount / total_revenue) * 100 as percentage
-        if plan_total_revenue > 0:
-            projected_percentage = (trending_amount / plan_total_revenue) * 100
-        else:
-            projected_percentage = 0
+    rows = []
+    grand = {k: 0.0 for k in ['today_plan','today_actual','wtd_plan','wtd_actual',
+                                'mtd_plan','mtd_actual','full_plan']}
 
-        result.append({
-            "employee_id": emp_id,
-            "employee_name": emp_name,
-            "billed_amount": round(billed_amount, 2),
-            "working_days": plan_working_days,
-            "as_of_date": selected_date.strftime("%Y-%m-%d"),
-            "total_days": total_days,
-            "sundays": sundays,
-            "adjusted_days": round(adjusted_days, 2),
-            "overall_working_days": round(month_adjusted_days, 2),
-            "total_revenue": round(plan_total_revenue, 2),
-            "trending_amount": round(trending_amount, 2),
-            "projected_percentage": round(projected_percentage, 2)
+    for cat in all_categories:
+        d = cat_data[cat]
+        trend = trending(d['mtd_actual'], adjusted_elapsed, month_adjusted_days)
+        proj  = projection(trend, d['full_plan'])
+        rows.append({
+            'category':      cat,
+            'today_plan':    round(d['today_plan'],   2),
+            'today_actual':  round(d['today_actual'], 2),
+            'today_pct':     pct(d['today_actual'], d['today_plan']),
+            'wtd_plan':      round(d['wtd_plan'],   2),
+            'wtd_actual':    round(d['wtd_actual'], 2),
+            'wtd_pct':       pct(d['wtd_actual'], d['wtd_plan']),
+            'mtd_plan':      round(d['mtd_plan'],   2),
+            'mtd_actual':    round(d['mtd_actual'], 2),
+            'mtd_pct':       pct(d['mtd_actual'], d['mtd_plan']),
+            'trending':      trend,
+            'projection':    proj,
         })
+        for k in grand:
+            grand[k] += d[k]
 
-    return Response(result)
+    # Grand Total row
+    grand_trend = trending(grand['mtd_actual'], adjusted_elapsed, month_adjusted_days)
+    grand_proj  = projection(grand_trend, grand['full_plan'])
+    rows.append({
+        'category':      'Total',
+        'today_plan':    round(grand['today_plan'],   2),
+        'today_actual':  round(grand['today_actual'], 2),
+        'today_pct':     pct(grand['today_actual'], grand['today_plan']),
+        'wtd_plan':      round(grand['wtd_plan'],   2),
+        'wtd_actual':    round(grand['wtd_actual'], 2),
+        'wtd_pct':       pct(grand['wtd_actual'], grand['wtd_plan']),
+        'mtd_plan':      round(grand['mtd_plan'],   2),
+        'mtd_actual':    round(grand['mtd_actual'], 2),
+        'mtd_pct':       pct(grand['mtd_actual'], grand['mtd_plan']),
+        'trending':      grand_trend,
+        'projection':    grand_proj,
+    })
+
+    return Response({
+        'as_of_date':   as_of_date.strftime("%Y-%m-%d"),
+        'report_upto':  report_upto.strftime("%Y-%m-%d"),
+        'today_label':  report_upto.strftime("%d-%b").lstrip("0"),
+        'wtd_label':    f"{wtd_start_date.strftime('%d-%b').lstrip('0')} to {report_upto.strftime('%d-%b').lstrip('0')}",
+        'mtd_label':    f"1-{report_upto.strftime('%b')} to {report_upto.strftime('%d-%b').lstrip('0')}",
+        'rows': rows,
+    })
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Overall Summary — per-category, per-salesperson (Volume/Plan/Actual/Diff)
+# ─────────────────────────────────────────────────────────────────────────────
+@api_view(['GET'])
+def overall_summary(request):
+    """
+    GET /overall_summary/?month=8&year=2026
+
+    Returns per-category breakdown with each sales executive's:
+      volume  – total planned volume (SalesPlan.entries[].volume)
+      plan    – total planned revenue (SalesPlan.entries[].revenue)
+      actual  – total billed (Billing.netAmount for that segment/month)
+      diff    – plan - actual
+      pct     – (actual / plan) * 100
+
+    Response:
+    {
+      "month": 8, "year": 2026,
+      "categories": [
+        {
+          "category": "B2B",
+          "subtotal": { volume, plan, actual, diff, pct },
+          "persons": [
+            { employee_id, employee_name, volume, plan, actual, diff, pct },
+            ...
+          ]
+        }, ...
+      ],
+      "grand_total": { volume, plan, actual, diff, pct }
+    }
+    """
+    try:
+        month = int(request.GET.get('month') or timezone.localdate().month)
+        year  = int(request.GET.get('year')  or timezone.localdate().year)
+    except (TypeError, ValueError):
+        return Response({'error': 'month and year must be integers'}, status=400)
+
+    # Full-month billing window
+    month_start = timezone.make_aware(datetime(year, month, 1, 0, 0, 0))
+    if month == 12:
+        month_end = timezone.make_aware(datetime(year + 1, 1, 1, 0, 0, 0))
+    else:
+        month_end = timezone.make_aware(datetime(year, month + 1, 1, 0, 0, 0))
+
+    # All categories with plan data this month
+    all_categories = list(
+        SalesPlan.objects.filter(month=month, year=year)
+        .exclude(category__isnull=True).exclude(category='')
+        .values_list('category', flat=True).distinct()
+    )
+    if not all_categories:
+        all_categories = ['B2B', 'Corporate Health Checkup', 'Home Collection', 'Franchise']
+
+    employees = fetch_sales_executives(request)
+
+    grand_volume = 0
+    grand_plan   = 0.0
+    grand_actual = 0.0
+    categories_data = []
+
+    for cat in all_categories:
+        cat_volume = 0
+        cat_plan   = 0.0
+        cat_actual = 0.0
+        persons    = []
+
+        for emp in employees:
+            if not isinstance(emp, dict):
+                continue
+            emp_id   = emp.get('employeeId') or emp.get('employee_id')
+            emp_name = emp.get('employeeName') or emp.get('employee_name')
+            if not emp_id or not emp_name:
+                continue
+
+            # Plan from SalesPlan entries
+            plans = SalesPlan.objects.filter(
+                employee_id=emp_id, month=month, year=year, category=cat
+            )
+            volume = 0
+            plan   = 0.0
+            for p in plans:
+                for entry in (p.entries or []):
+                    try:
+                        volume += int(entry.get('volume') or 0)
+                        plan   += _to_float(entry.get('revenue'))
+                    except (TypeError, ValueError):
+                        continue
+
+            # Actual from Billing
+            actual = 0.0
+            for bill in Billing.objects.filter(
+                salesMapping=emp_name,
+                bill_date__gte=month_start,
+                bill_date__lt=month_end,
+                segment=cat,
+            ).only('netAmount'):
+                actual += _to_float(bill.netAmount)
+
+            if volume == 0 and plan == 0.0 and actual == 0.0:
+                continue
+
+            diff = plan - actual
+            pct_val = round((actual / plan * 100), 1) if plan > 0 else 0.0
+
+            persons.append({
+                'employee_id':   emp_id,
+                'employee_name': emp_name,
+                'volume':        volume,
+                'plan':          round(plan, 2),
+                'actual':        round(actual, 2),
+                'diff':          round(diff, 2),
+                'pct':           pct_val,
+            })
+            cat_volume += volume
+            cat_plan   += plan
+            cat_actual += actual
+
+        cat_diff = cat_plan - cat_actual
+        cat_pct  = round((cat_actual / cat_plan * 100), 1) if cat_plan > 0 else 0.0
+
+        categories_data.append({
+            'category': cat,
+            'subtotal': {
+                'volume': cat_volume,
+                'plan':   round(cat_plan, 2),
+                'actual': round(cat_actual, 2),
+                'diff':   round(cat_diff, 2),
+                'pct':    cat_pct,
+            },
+            'persons': persons,
+        })
+        grand_volume += cat_volume
+        grand_plan   += cat_plan
+        grand_actual += cat_actual
+
+    grand_diff = grand_plan - grand_actual
+    grand_pct  = round((grand_actual / grand_plan * 100), 1) if grand_plan > 0 else 0.0
+
+    return Response({
+        'month': month,
+        'year':  year,
+        'categories': categories_data,
+        'grand_total': {
+            'volume': grand_volume,
+            'plan':   round(grand_plan, 2),
+            'actual': round(grand_actual, 2),
+            'diff':   round(grand_diff, 2),
+            'pct':    grand_pct,
+        },
+    })
 
 
-
-import calendar
 @api_view(['GET', 'POST'])
 @csrf_exempt
 # @permission_classes([HasRoleAndDataPermission])
@@ -862,7 +1136,7 @@ def salesplanreport(request):
     """
     Actual vs Plan report, one row per sales executive, for a given
     month/year (+ optional category filter).
-
+ 
     POST /salesplanreport/
         body: {
           "month": 6,
@@ -874,42 +1148,51 @@ def salesplanreport(request):
     GET  /salesplanreport/?month=6&year=2026&category=all&employees=<json-encoded list>
         (same shape as POST, for convenience/testing — employees must be a
         JSON-encoded string of the same array when passed as a query param)
-
+ 
     `day` (optional, 1-31): when supplied, the frontend's "Date wise"
     picker asks for a specific calendar date (year/month/day) rather than
     "today". Unlike week/month-to-date, this works for ANY month — past,
     current, or future — since the user explicitly picked the date. When
     omitted, day-level figures fall back to the old behaviour (today's
     date, only if month/year is the current calendar month).
-
+ 
     `employees` is required and is supplied by the caller (rather than
     looked up here) because Billing has no employee_id — it only stores
     the executive's display name in `salesMapping` — so matching Billing
     rows to a sales executive has to go through employeeName. The frontend
     already has the employeeId/employeeName list from get_sales_executives/,
     so it's passed straight through instead of duplicating that lookup here.
-
-    Numbers returned per executive:
+ 
+    Numbers returned per executive (unchanged from before):
       plan_day / actual_day / diff_day   — Day to Date (today only; null
                                             if the requested month/year
                                             isn't the current calendar
-                                            month — "today" only means
-                                            something for the month
-                                            currently in progress)
+                                            month)
       plan_wtd / actual_wtd / diff_wtd   — Week to Date (same
                                             current-month-only restriction)
       plan_mtd / actual_mtd / diff_mtd   — Month To Date
-
+ 
     diff = plan - actual (positive = behind target / shortfall,
-    negative = ahead of target / surplus), e.g. plan 1000 vs actual 880
-    -> diff 120.
-
+    negative = ahead of target / surplus).
+ 
+    NOTE (fix): plan_* figures now sum entries[].volume, not
+    entries[].amount — the SalesPlan documents never actually had an
+    "amount" key (only "date", "volume", "revenue"), so this was
+    previously always summing to 0.
+ 
+    NEW — week-grid data, for the two stacked "Plan" / "Actual" tables
+    (Week NN header groups, one column per calendar day of the month):
+      `days`: [{ "day": 1, "week": 31, "weekday": "Sat", "label": "01-Aug" }, ...]
+      per-employee `plan_by_day`:   { "1": 20.0, "2": 10.0, ... }  — sum of volume per day
+      per-employee `actual_by_day`: { "1": 3, "2": 5, ... }        — COUNT of Billing rows per day
+                                     (a headcount, matching Plan's volume unit — NOT a sum of netAmount)
+ 
     Also returns `categories`: the distinct SalesPlan.category values
     currently in use, for populating a filter dropdown.
     """
     try:
         params = request.data if request.method == 'POST' else request.query_params
-
+ 
         month = int(params.get('month'))
         year = int(params.get('year'))
     except (TypeError, ValueError):
@@ -917,9 +1200,9 @@ def salesplanreport(request):
             {'error': 'month and year are required and must be integers'},
             status=status.HTTP_400_BAD_REQUEST
         )
-
+ 
     category = params.get('category') or 'all'
-
+ 
     day_param = params.get('day')
     if day_param not in (None, ""):
         try:
@@ -931,7 +1214,7 @@ def salesplanreport(request):
             )
     else:
         day_param = None
-
+ 
     employees = params.get('employees')
     if isinstance(employees, str):
         try:
@@ -946,16 +1229,16 @@ def salesplanreport(request):
             {'error': 'employees is required — pass the list from get_sales_executives/'},
             status=status.HTTP_400_BAD_REQUEST
         )
-
+ 
     try:
         today = timezone.localdate()
         is_current_month = (year == today.year and month == today.month)
         days_in_month = calendar.monthrange(year, month)[1]
-
+ 
         # MTD day range: 1..today if this is the current month in progress,
         # otherwise 1..end-of-month (nothing left to compare "to date").
         mtd_end_day = today.day if is_current_month else days_in_month
-
+ 
         # WTD day range: only meaningful for the current month. Monday of
         # the current week, clipped to day 1 if that Monday actually falls
         # in the previous calendar month.
@@ -965,7 +1248,7 @@ def salesplanreport(request):
             monday = today - timezone.timedelta(days=today.weekday())
             wtd_start_day = monday.day if monday.month == today.month else 1
             wtd_end_day = today.day
-
+ 
         # Day-wise target. If the caller passed an explicit "day" (the
         # frontend's Date wise picker always does), use it directly and
         # allow it for any month/year the picker resolved to. Otherwise
@@ -980,9 +1263,21 @@ def salesplanreport(request):
             day_target = day_param
         else:
             day_target = today.day if is_current_month else None
-
+ 
         month_start_dt, month_end_dt = _month_bounds(year, month)
-
+ 
+        # ── Week-grid day metadata (Week NN header groups) ─────────────
+        days = []
+        for d in range(1, days_in_month + 1):
+            dt = timezone.datetime(year, month, d).date()
+            _, iso_week, _ = dt.isocalendar()
+            days.append({
+                'day': d,
+                'week': iso_week,
+                'weekday': dt.strftime('%a'),
+                'label': dt.strftime('%d-%b'),
+            })
+ 
         # Distinct categories currently used in SalesPlan, for the filter
         # dropdown on the frontend.
         categories = list(
@@ -991,16 +1286,16 @@ def salesplanreport(request):
             .values_list('category', flat=True)
             .distinct()
         )
-
+ 
         results = []
-
+ 
         for emp in employees:
             employee_id = emp.get('employeeId')
             employee_name = emp.get('employeeName')
             if not employee_id or not employee_name:
                 continue
-
-            # ── Plan side (SalesPlan.entries) ──────────────────────────
+ 
+            # ── Plan side (SalesPlan.entries + weekly_totals) ──────────────────────────
             plan_qs = SalesPlan.objects.filter(
                 employee_id=employee_id, month=month, year=year
             )
@@ -1010,24 +1305,41 @@ def salesplanreport(request):
             plan_mtd = 0.0
             plan_wtd = 0.0
             plan_day = 0.0
+            plan_by_day = {d['day']: 0.0 for d in days}
+            # Accumulate plan weekly totals from SalesPlan.weekly_totals
+            plan_weekly_totals = {}  # { iso_week_number: revenue }
             for plan in plan_qs:
+                # Per-day revenue from entries
                 for entry in (plan.entries or []):
                     try:
                         entry_day = int(entry.get('date'))
-                        entry_amount = _to_float(entry.get('amount'))
+                        # Use revenue amount (not volume/headcount)
+                        entry_revenue = _to_float(entry.get('revenue'))
+                        entry_volume = _to_float(entry.get('volume'))
                     except (TypeError, ValueError, AttributeError):
                         continue
                     if entry_day <= mtd_end_day:
-                        plan_mtd += entry_amount
+                        plan_mtd += entry_volume
                     if (
                         wtd_start_day is not None
                         and wtd_start_day <= entry_day <= wtd_end_day
                     ):
-                        plan_wtd += entry_amount
+                        plan_wtd += entry_volume
                     if day_target is not None and entry_day == day_target:
-                        plan_day += entry_amount
+                        plan_day += entry_volume
+                    if entry_day in plan_by_day:
+                        # Store revenue amount in the daily grid
+                        plan_by_day[entry_day] += entry_revenue
+                # Accumulate weekly totals from the pre-computed weekly_totals array
+                for wt in (plan.weekly_totals or []):
+                    try:
+                        wk = int(wt.get('week'))
+                        wk_total = _to_float(wt.get('total'))
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    plan_weekly_totals[wk] = plan_weekly_totals.get(wk, 0.0) + wk_total
 
-            # ── Actual side (Billing.netAmount) ────────────────────────
+            # ── Actual side (Billing — sum netAmount per day and per ISO week) ──────
             billing_qs = Billing.objects.filter(
                 salesMapping=employee_name,
                 bill_date__gte=month_start_dt,
@@ -1039,10 +1351,13 @@ def salesplanreport(request):
             actual_mtd = 0.0
             actual_wtd = 0.0
             actual_day = 0.0
+            actual_by_day = {d['day']: 0.0 for d in days}
+            actual_weekly_totals = {}  # { iso_week_number: revenue }
             for bill in billing_qs.only('bill_date', 'netAmount'):
                 if not bill.bill_date:
                     continue
-                bill_day = timezone.localtime(bill.bill_date).day
+                bill_local_dt = timezone.localtime(bill.bill_date)
+                bill_day = bill_local_dt.day
                 amount = _to_float(bill.netAmount)
                 if bill_day <= mtd_end_day:
                     actual_mtd += amount
@@ -1053,6 +1368,14 @@ def salesplanreport(request):
                     actual_wtd += amount
                 if day_target is not None and bill_day == day_target:
                     actual_day += amount
+                if bill_day in actual_by_day:
+                    # Sum netAmount (revenue) per day instead of just counting bills
+                    actual_by_day[bill_day] += amount
+                # Aggregate into ISO week bucket
+                _, bill_iso_week, _ = bill_local_dt.date().isocalendar()
+                actual_weekly_totals[bill_iso_week] = (
+                    actual_weekly_totals.get(bill_iso_week, 0.0) + amount
+                )
 
             results.append({
                 'employee_id': employee_id,
@@ -1070,8 +1393,14 @@ def salesplanreport(request):
                 'diff_day': (
                     round(plan_day - actual_day, 2) if day_target is not None else None
                 ),
+                # Daily grids: plan uses revenue (₹), actual uses sum of netAmount (₹)
+                'plan_by_day': {str(k): round(v, 2) for k, v in plan_by_day.items()},
+                'actual_by_day': {str(k): round(v, 2) for k, v in actual_by_day.items()},
+                # Weekly totals: plan from SalesPlan.weekly_totals, actual computed from billing
+                'plan_weekly_totals': {str(k): round(v, 2) for k, v in plan_weekly_totals.items()},
+                'actual_weekly_totals': {str(k): round(v, 2) for k, v in actual_weekly_totals.items()},
             })
-
+ 
         return Response({
             'month': month,
             'year': year,
@@ -1080,8 +1409,10 @@ def salesplanreport(request):
             'week_to_date_applicable': is_current_month,
             'day_to_date_applicable': day_target is not None,
             'categories': categories,
+            'days': days,
             'results': results,
         }, status=status.HTTP_200_OK)
-
+ 
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+ 
