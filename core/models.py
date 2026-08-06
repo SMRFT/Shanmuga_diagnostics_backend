@@ -76,6 +76,7 @@ class Billing(AuditModel):
     prescription_file_id = models.CharField(max_length=255, blank=True, null=True)
     credit_amount = models.CharField(max_length=100, blank=True)
     status = models.CharField(max_length=20, default="Registered")
+    order_id = models.CharField(max_length=100, blank=True, null=True)
     def __str__(self):
         return self.bill_no if self.bill_no else f"Bill for {self.patient_id}"
     @property

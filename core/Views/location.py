@@ -36,6 +36,22 @@ def get_route(item):
         return item.location_history
     return []
 
+def calc_route_distance_km(route):
+    if not route or len(route) < 2:
+        return "0.00"
+    total_m = 0
+    for i in range(1, len(route)):
+        p1 = route[i-1]
+        p2 = route[i]
+        try:
+            lat1, lon1 = float(p1.get("lat", 0)), float(p1.get("lng", 0))
+            lat2, lon2 = float(p2.get("lat", 0)), float(p2.get("lng", 0))
+            if lat1 and lon1 and lat2 and lon2:
+                total_m += calculate_distance(lat1, lon1, lat2, lon2)
+        except (ValueError, TypeError):
+            continue
+    return f"{(total_m / 1000):.2f}"
+
 def format_location_response(item):
     route = get_route(item)
     lat_start = route[0].get("lat") if route else None
@@ -52,6 +68,10 @@ def format_location_response(item):
         duration = (item.endTime - item.startTime).total_seconds()
         total_duration = str(duration)
 
+    dist_val = item.distance_travelled
+    if (not dist_val or dist_val == "0.00" or dist_val == "0") and len(route) > 1:
+        dist_val = calc_route_distance_km(route)
+
     return {
         "id": str(item.location_id),
         "sampleCollector": get_employee_name(item.sampleCollector) if item.sampleCollector else item.sampleCollector,
@@ -62,7 +82,7 @@ def format_location_response(item):
         "longitudeEnd": lng_end,
         "currentLatitude": curr_lat,
         "currentLongitude": curr_lng,
-        "distance_travelled": item.distance_travelled or "0.00",
+        "distance_travelled": dist_val or "0.00",
         "startTime": item.startTime.isoformat() if item.startTime else None,
         "endTime": item.endTime.isoformat() if item.endTime else None,
         "totalDuration": total_duration,
@@ -248,11 +268,13 @@ def sample_collector_location(request):
                     "timestamp": timezone.now().isoformat()
                 })
 
+                live_dist = calc_route_distance_km(route)
                 SampleCollectorLocation.objects.filter(location_id=item.location_id).update(
+                    distance_travelled=live_dist,
                     location_history=json.dumps(route) if isinstance(item.location_history, str) else route
                 )
 
-                return JsonResponse({"success": True, "message": "Location updated"})
+                return JsonResponse({"success": True, "message": "Location updated", "distance": live_dist})
 
             return JsonResponse({"success": False, "message": "No valid data"}, status=400)
 
