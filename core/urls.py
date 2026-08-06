@@ -24,6 +24,7 @@ urlpatterns = [
     path('latest-bill-no/', patients.get_latest_bill_no, name='get_latest_bill_no'),
     path('patients_by_date/', patients.get_patients_by_date, name='get_patients_by_date'),
     path('testdetails/', testdetails.get_test_details, name='get_test_details'),
+    path('get_test_details_estimate/', testdetails.get_test_details_estimate, name='get_test_details_estimate'),
     path('send_approval_email/', testdetails.send_approval_email, name='send_approval_email'),
     path('approve_test/', testdetails.approve_test, name='approve_test'),
     path('test_details_test/', testdetails.handle_patch_request, name='get_test_details'),
@@ -148,6 +149,7 @@ urlpatterns = [
 
     #Diagnostics Reports:
     path('overall_report/', report.overall_report, name='overall_report'),    
+    path('shanmuga360_overall_report/', report.shanmuga360_overall_report, name='shanmuga360_overall_report'),    
     path('patient_test_sorting/', report.patient_test_sorting, name='patient_test_sorting'),
     path('get_patient_test_details/', report.get_patient_test_details, name='get_patient_test_details'),    
     path('update_dispatch_status/<str:barcode>/', report.update_dispatch_status, name='update_dispatch_status'),
@@ -257,6 +259,7 @@ urlpatterns = [
 
     #MIS:
     path('consolidated-data/', mis.ConsolidatedDataView.as_view(), name='consolidated_data'),
+    path('shanmuga360-consolidated-data/', mis.Shanmuga360ConsolidatedDataView.as_view(), name='shanmuga360_consolidated_data'),
     path('hms-consolidated-data/', mis.HMSConsolidatedDataView.as_view(), name='hms_consolidated_data'),
     path('franchise-consolidated-data/', mis.FranchiseConsolidatedDataView.as_view(), name='franchise_consolidated_data'),
     path('hms-test-count/', mis.HMSTestCountView.as_view(), name='hms_test_count'),
