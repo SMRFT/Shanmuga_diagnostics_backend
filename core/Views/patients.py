@@ -395,6 +395,7 @@ def create_bill(request):
             ),
             "credit_amount": s(data.get("credit_amount")),
             "status": data.get("status", "Registered"),
+            "order_id": data.get("order_id", ""),
             "is_emergency": emergency,
             "patient_history": patient_history,
 
@@ -1124,6 +1125,7 @@ def dashboard_data(request):
         # -------------------------
         total_patients = len(bills)
         total_revenue = 0.0
+        total_discount = 0.0
 
         payment_methods = {
             'Cash': 0,
@@ -1144,7 +1146,9 @@ def dashboard_data(request):
         segments = {
             'B2B': 0,
             'Walk-in': 0,
-            'Home Collection': 0
+            'Home Collection': 0,
+            'Hospital': 0,
+            'Shanmuga 360': 0
         }
 
         b2b_clients = {}
@@ -1158,6 +1162,19 @@ def dashboard_data(request):
         for bill in bills:
             amount = safe_float(bill.get('totalAmount'))
             total_revenue += amount
+
+            # Calculate Discount
+            disc_raw = bill.get('discount')
+            if disc_raw:
+                disc_str = str(disc_raw).strip()
+                if disc_str.endswith('%'):
+                    try:
+                        pct = float(disc_str[:-1])
+                        total_discount += (amount * pct) / 100.0
+                    except:
+                        pass
+                else:
+                    total_discount += safe_float(disc_str)
 
             # Segment
             segment = bill.get('segment')
@@ -1208,6 +1225,7 @@ def dashboard_data(request):
         response = {
             'total_patients': total_patients,
             'total_revenue': round(total_revenue, 2),
+            'total_discount': round(total_discount, 2),
             'payment_methods': payment_methods,
             'payment_method_amounts': {
                 k: round(v, 2) for k, v in payment_method_amounts.items()

@@ -700,6 +700,14 @@ def patient_report(request):
             'Cash': 0, 'UPI': 0, 'Neft': 0,
             'Cheque': 0, 'Credit': 0
         },
+        'segment_totals': {
+            'B2B': 0, 'Walk-in': 0, 'Home Collection': 0,
+            'Hospital': 0, 'Shanmuga 360': 0
+        },
+        'segment_gross': {
+            'B2B': 0.0, 'Walk-in': 0.0, 'Home Collection': 0.0,
+            'Hospital': 0.0, 'Shanmuga 360': 0.0
+        },
         'corporate_collection': 0
     })
 
@@ -731,6 +739,23 @@ def patient_report(request):
         report_by_date[date_key]['gross_amount'] += gross_amount
         report_by_date[date_key]['discount'] += discount
         report_by_date[date_key]['due_amount'] += due_amount
+
+        # ✅ Handle Segment Breakdown
+        segment_val = (patient.get('segment') or '').strip()
+        if "Shanmuga 360" in segment_val or "360" in segment_val:
+            norm_seg = "Shanmuga 360"
+        elif "Home" in segment_val and "Collection" in segment_val:
+            norm_seg = "Home Collection"
+        elif "Hospital" in segment_val:
+            norm_seg = "Hospital"
+        elif "B2B" in segment_val or (patient.get('B2B') and str(patient.get('B2B')).strip()):
+            norm_seg = "B2B"
+        else:
+            norm_seg = "Walk-in"
+
+        if norm_seg in report_by_date[date_key]['segment_totals']:
+            report_by_date[date_key]['segment_totals'][norm_seg] += 1
+            report_by_date[date_key]['segment_gross'][norm_seg] += gross_amount
 
         # ✅ Handle Payment Methods
         payment_method = patient.get('payment_method', '')
@@ -1077,6 +1102,10 @@ def patient_report(request):
             'total_collection': round(total_collection, 2),
             'payment_totals': {
                 k: round(v, 2) for k, v in data['payment_totals'].items()
+            },
+            'segment_totals': data.get('segment_totals', {}),
+            'segment_gross': {
+                k: round(v, 2) for k, v in data.get('segment_gross', {}).items()
             },
         })
 
