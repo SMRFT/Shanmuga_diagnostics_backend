@@ -1513,7 +1513,7 @@ def patient_test_sorting(request):
                         
                         core_test = core_testdetails_collection.find_one(
                             query,
-                            {"test_code": 1, "test_name": 1,"NABL": 1, "department": 1, "_id": 0}
+                            {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "parameters": 1, "_id": 0}
                         )
                         
                         if core_test:
@@ -1526,7 +1526,7 @@ def patient_test_sorting(request):
                             # If no match found, try with just test_id
                             core_test = core_testdetails_collection.find_one(
                                 {"test_id": test_id},
-                                {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "_id": 0}
+                                {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "parameters": 1, "_id": 0}
                             )
                             
                             if core_test:
@@ -1539,6 +1539,42 @@ def patient_test_sorting(request):
                                 test_item['test_name'] = test_item.get('test_name', 'N/A')
                                 test_item['NABL'] = test_item.get('NABL', 'N/A')
                                 test_item['department'] = test_item.get('department', 'N/A')
+
+                        # Enrich parameter list with test names from core_test details if available
+                        params = test_item.get('parameters', [])
+                        if params and core_test and 'parameters' in core_test:
+                            core_params = core_test.get('parameters', {})
+                            params_list = []
+                            if isinstance(core_params, dict):
+                                device_id = test_item.get('device_id')
+                                if device_id and device_id != "N/A" and device_id in core_params:
+                                    params_list = core_params[device_id]
+                                elif len(core_params) > 0:
+                                    first_device = list(core_params.keys())[0]
+                                    params_list = core_params[first_device]
+                            elif isinstance(core_params, list):
+                                params_list = core_params
+
+                            if isinstance(params_list, list):
+                                enriched_params = []
+                                for idx, p in enumerate(params):
+                                    if isinstance(p, dict):
+                                        p_code = p.get('test_code')
+                                        match = None
+                                        if p_code:
+                                            matching = [m for m in params_list if isinstance(m, dict) and m.get('test_code') == p_code]
+                                            if matching:
+                                                match = matching[0]
+                                        if not match and 0 <= idx < len(params_list):
+                                            match = params_list[idx]
+                                        
+                                        p_name = (match.get('test_name') or match.get('name')) if match else None
+                                        p_copy = dict(p)
+                                        p_copy['name'] = p_name or p_code or f"Parameter {idx + 1}"
+                                        enriched_params.append(p_copy)
+                                    else:
+                                        enriched_params.append(p)
+                                test_item['parameters'] = enriched_params
                     else:
                         test_item['test_code'] = test_item.get('test_code', 'N/A')
                         test_item['test_name'] = test_item.get('test_name', 'N/A')

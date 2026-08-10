@@ -103,7 +103,8 @@ def get_samplestatus_testvalue(request):
                         "test_id": 1,
                         "test_name": 1,
                         "department": 1,
-                        "collection_container": 1
+                        "collection_container": 1,
+                        "TAT_Time": 1,
                     }
                 )
                 test_details_cache[test_id] = test_detail
@@ -203,6 +204,7 @@ def get_samplestatus_testvalue(request):
                     test['testname'] = test_detail.get('test_name', test.get('testname', 'N/A'))
                     test['department'] = test_detail.get('department', test.get('department', 'N/A'))
                     test['container'] = test_detail.get('collection_container', test.get('container', 'N/A'))
+                    test['tat_time'] = test_detail.get('TAT_Time') or test.get('TAT_Time')
             return test
         
         def match_test_values(test, barcode, test_values_by_barcode):
