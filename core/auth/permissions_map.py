@@ -84,7 +84,10 @@ PAGE_MAPPING = {
     r'/_b_a_c_k_e_n_d/LIS/bus_fare/?(\?.*)?$': 'SD-P-LBF',
     
     #Sales
-     r'/_b_a_c_k_e_n_d/LIS/salesplan/?(\?.*)?$': 'SD-P-LSP',
+    r'^/_b_a_c_k_e_n_d/LIS/salesplan/?(\?.*)?$': 'SD-P-LSP',
+    r'^/_b_a_c_k_e_n_d/LIS/salesplan_summary/?(\?.*)?$': 'SD-P-LSP',
+    r'^/_b_a_c_k_e_n_d/LIS/overall_summary/?(\?.*)?$': 'SD-P-LSP',
+    r'^/_b_a_c_k_e_n_d/LIS/salesplanreport/?(\?.*)?$': 'SD-P-LSP',
 
 
     r'^/_b_a_c_k_e_n_d/LIS/sample-collector-location-history/?(\\?.*)?$': 'SD-P-LGD',
