@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology,expo_notifications
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
@@ -79,6 +79,7 @@ urlpatterns = [
     path('mou-preview/<str:file_id>/',clinicalname.preview_mou_file, name='preview_mou_file'),
 
     #Logistics
+    path('register-push-token/', expo_notifications.register_push_token, name='register_push_token'),
     path('logistics/',logistic.create_logistics, name='logistics'),
     path('logistics_by_collector/',logistic.logistics_by_collector, name='logistics_by_collector'),
     path('logistics/accept/<int:task_id>/', logistic.accept_task, name='accept_task'),
