@@ -761,6 +761,7 @@ def fetch_sales_executives(request):
  
  
 @api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
 def salesplan_summary(request):
     """
     Returns a category-wise summary table with:
@@ -981,6 +982,7 @@ def salesplan_summary(request):
 # Overall Summary — per-category, per-salesperson (Volume/Plan/Actual/Diff)
 # ─────────────────────────────────────────────────────────────────────────────
 @api_view(['GET'])
+@permission_classes([HasRoleAndDataPermission])
 def overall_summary(request):
     """
     GET /overall_summary/?month=8&year=2026
@@ -1131,7 +1133,7 @@ def overall_summary(request):
 
 @api_view(['GET', 'POST'])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
+@permission_classes([HasRoleAndDataPermission])
 def salesplanreport(request):
     """
     Actual vs Plan report, one row per sales executive, for a given
