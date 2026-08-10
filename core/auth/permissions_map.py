@@ -90,6 +90,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/sample-collector-location-history/?(\\?.*)?$': 'SD-P-LGD',
 
     r'^/_b_a_c_k_e_n_d/LIS/routesetup/?(\?.*)?$': 'SD-P-LTM',
+    r'^/_b_a_c_k_e_n_d/LIS/routesetup/[^/]+/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/start/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/end/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/mark/?(\?.*)?$': 'SD-P-LTM',
@@ -167,6 +168,7 @@ PAGE_MAPPING = {
 
     #Reports:
     r'^/_b_a_c_k_e_n_d/LIS/overall_report/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/shanmuga360_overall_report/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/patient_test_sorting/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/get_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/mb_patient_test_sorting/?(\?.*)?$':'SD-P-POV',
@@ -246,6 +248,7 @@ PAGE_MAPPING = {
 
     #MIS
     r'^/_b_a_c_k_e_n_d/LIS/consolidated-data/?(\?.*)?$':'SD-P-MIS',
+    r'^/_b_a_c_k_e_n_d/LIS/shanmuga360-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/hms-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/franchise-consolidated-data/?(\?.*)?$':'SD-P-MIS',
     r'^/_b_a_c_k_e_n_d/LIS/hms-test-count/?(\?.*)?$':'SD-P-MIS',

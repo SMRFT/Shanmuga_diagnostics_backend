@@ -134,6 +134,39 @@ def get_devices(request):
 # ------------------------------------------------
 
 
+@api_view(['GET'])
+@permission_classes([AllowAny])
+@csrf_exempt
+def get_test_details_estimate(request):
+    try:
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        collection = db.core_testdetails
+
+        status_val = request.GET.get('status', 'Approved')
+        query_filter = {
+            "is_active": True,
+            "status": status_val
+        }
+
+        tests = list(collection.find(query_filter, {
+            "_id": 0,
+            "test_id": 1,
+            "test_name": 1,
+            "shortcut": 1,
+            "test_code": 1,
+            "department": 1,
+            "specimen_type": 1,
+            "MRP": 1,
+            "L2L_Rate_Card": 1,
+            "is_active": 1,
+            "status": 1
+        }))
+
+        return Response({"data": tests}, status=200)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
 @api_view(['GET', 'POST', 'PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 @csrf_exempt

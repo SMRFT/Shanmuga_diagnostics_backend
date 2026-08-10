@@ -404,6 +404,12 @@ def overall_report(request):
             # Billing details
             refby = record.get("refby", "N/A")
             segment = record.get("segment", barcode_data.get("segment", "N/A"))
+
+            # Exclude Shanmuga 360 from overall_report
+            rec_segment = str(segment).strip().lower()
+            if rec_segment == "shanmuga 360" or str(record.get("segment", "")).strip().lower() == "shanmuga 360" or str(barcode_data.get("segment", "")).strip().lower() == "shanmuga 360":
+                continue
+
             b2b = record.get("B2B", "N/A")
             branch = record.get("branch", "N/A")
             sample_collector = get_employee_name(record.get("sample_collector", ""))
@@ -873,6 +879,572 @@ def overall_report(request):
         print(traceback.format_exc())
         return JsonResponse({"error": str(e)}, status=500)    
 
+@csrf_exempt
+def shanmuga360_overall_report(request):
+    try:
+        # MongoDB setup for core_billing        
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        billing_collection = db["core_billing"]
+        test_details_collection = db.core_testdetails
+        barcode_collection = db.core_barcodetestdetails
+
+        # Date filters
+        from_date = request.GET.get("from_date")
+        to_date = request.GET.get("to_date")
+        selected_date = request.GET.get("selected_date")
+        patient_id = request.GET.get("patient_id")
+
+        def parse_tat_format(tat_str):
+            if not tat_str or tat_str == 'N/A':
+                return None
+            try:
+                total_seconds = 0
+                days = re.search(r'(\d+)D', str(tat_str))
+                hours = re.search(r'(\d+)H', str(tat_str))
+                minutes = re.search(r'(\d+)M', str(tat_str))
+                if days: total_seconds += int(days.group(1)) * 86400
+                if hours: total_seconds += int(hours.group(1)) * 3600
+                if minutes: total_seconds += int(minutes.group(1)) * 60
+                return total_seconds if total_seconds > 0 else None
+            except:
+                return None
+
+        # Validate and parse dates
+        try:
+            if selected_date:
+                selected_date_parsed = datetime.strptime(selected_date, "%Y-%m-%d")
+                from_date = selected_date_parsed
+                to_date = selected_date_parsed + timedelta(days=1)
+            elif from_date and to_date:
+                from_date = datetime.strptime(from_date, "%Y-%m-%d")
+                to_date = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+            else:
+                return JsonResponse({"error": "Either 'selected_date' or both 'from_date' and 'to_date' are required"}, status=400)
+        except ValueError:
+            return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+        # Query core_billing and core_barcodetestdetails
+        billing_query = {"date": {"$gte": from_date, "$lt": to_date}}
+        if patient_id:
+            billing_query["patient_id"] = patient_id
+       
+        billing_records = list(billing_collection.find(billing_query))
+        
+        # Also query barcode_collection directly for segment = Shanmuga 360
+        s360_barcode_query = {"date": {"$gte": from_date, "$lt": to_date}, "segment": {"$regex": r"^shanmuga\s*360$", "$options": "i"}}
+        if patient_id:
+            s360_barcode_query["patient_id"] = patient_id
+        s360_barcode_docs = list(barcode_collection.find(s360_barcode_query))
+        
+        s360_bill_nos = {doc['bill_no'] for doc in s360_barcode_docs if doc.get('bill_no')}
+        existing_bill_nos = {b['bill_no'] for b in billing_records if b.get('bill_no')}
+        missing_bill_nos = list(s360_bill_nos - existing_bill_nos)
+        if missing_bill_nos:
+            extra_billing_records = list(billing_collection.find({"bill_no": {"$in": missing_bill_nos}}))
+            billing_records.extend(extra_billing_records)
+            existing_bill_nos.update({b['bill_no'] for b in extra_billing_records})
+
+        for b_doc in s360_barcode_docs:
+            b_no = b_doc.get("bill_no")
+            if b_no and b_no not in existing_bill_nos:
+                billing_records.append({
+                    "bill_no": b_no,
+                    "patient_id": b_doc.get("patient_id"),
+                    "date": b_doc.get("date"),
+                    "created_by": b_doc.get("created_by"),
+                    "segment": b_doc.get("segment", "Shanmuga 360"),
+                    "sample_collector": b_doc.get("sample_collector"),
+                    "is_emergency": b_doc.get("is_emergency", False),
+                    "testdetails": b_doc.get("testdetails", [])
+                })
+                existing_bill_nos.add(b_no)
+
+        if not billing_records:
+            return JsonResponse([], safe=False)
+
+        def fetch_in_chunks(collection, query_field, param_list, additional_query=None, projection=None, chunk_size=50):
+            results = []
+            if not param_list:
+                return results
+            for i in range(0, len(param_list), chunk_size):
+                chunk = param_list[i:i+chunk_size]
+                query = {query_field: {"$in": chunk}}
+                if additional_query:
+                    query.update(additional_query)
+                if projection:
+                    results.extend(list(collection.find(query, projection)))
+                else:
+                    results.extend(list(collection.find(query)))
+            return results
+
+        bill_nos = [record['bill_no'] for record in billing_records if record.get('bill_no')]
+        
+        barcode_records = fetch_in_chunks(
+            collection=barcode_collection,
+            query_field="bill_no",
+            param_list=bill_nos,
+            projection={'_id': 0, 'patient_id': 1, 'patientname': 1, 'age': 1, 'gender': 1, 'segment': 1, 'date': 1, 'bill_no': 1, 'barcode': 1, 'order_id': 1, 'testdetails': 1},
+            chunk_size=50
+        )
+        
+        barcode_map = {record['bill_no']: record for record in barcode_records}
+
+        patient_ids = [record['patient_id'] for record in billing_records if record.get('patient_id')]
+        patient_details_map = {}
+        try:
+            patient_collection = db.core_patient
+            patient_records = fetch_in_chunks(
+                collection=patient_collection,
+                query_field="patient_id",
+                param_list=patient_ids,
+                chunk_size=50
+            )
+            for patient_record in patient_records:
+                patient_details_map[patient_record['patient_id']] = patient_record
+        except Exception as e:
+            print(f"Error fetching patient details: {str(e)}")
+
+        barcodes = [record['barcode'] for record in barcode_records if record.get('barcode')]
+        date_query = {"$gte": from_date, "$lt": to_date}
+        
+        sample_status_collection = db.core_samplestatus
+        sample_status_records = fetch_in_chunks(
+            collection=sample_status_collection,
+            query_field="barcode",
+            param_list=barcodes,
+            additional_query={"date": date_query},
+            chunk_size=50
+        )
+
+        test_value_collection = db.core_testvalue
+        test_value_records = fetch_in_chunks(
+            collection=test_value_collection,
+            query_field="barcode",
+            param_list=barcodes,
+            additional_query={"date": date_query},
+            chunk_size=50
+        )
+
+        mb_test_value_collection = db.core_mbtestvalue
+        mb_test_value_records = fetch_in_chunks(
+            collection=mb_test_value_collection,
+            query_field="barcode",
+            param_list=barcodes,
+            additional_query={"date": date_query},
+            chunk_size=50
+        )
+
+        sample_status_map = {}
+        for record in sample_status_records:
+            td = record.get("testdetails", [])
+            if isinstance(td, str):
+                try: td = json.loads(td.strip('"'))
+                except json.JSONDecodeError: td = []
+            if isinstance(td, list):
+                sample_status_map.setdefault(record.get("barcode", ""), []).extend(td)
+
+        test_value_map = {}
+        for record in test_value_records:
+            barcode = record["barcode"]
+            created_date = record["created_date"]
+            testdetails = record["testdetails"]
+            if isinstance(testdetails, str):
+                try: testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError: testdetails = []
+            if barcode not in test_value_map:
+                test_value_map[barcode] = {"barcode": barcode, "testdetails": [], "created_date": created_date}
+            if isinstance(testdetails, list):
+                test_value_map[barcode]["testdetails"].extend(testdetails)
+            if created_date > test_value_map[barcode]["created_date"]:
+                test_value_map[barcode]["created_date"] = created_date
+
+        mb_test_value_map = {}
+        for record in mb_test_value_records:
+            barcode = record["barcode"]
+            created_date = record["created_date"]
+            testdetails = record["testdetails"]
+            if isinstance(testdetails, str):
+                try: testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError: testdetails = []
+            if barcode not in mb_test_value_map:
+                mb_test_value_map[barcode] = {"barcode": barcode, "testdetails": [], "created_date": created_date}
+            if isinstance(testdetails, list):
+                mb_test_value_map[barcode]["testdetails"].extend(testdetails)
+            if created_date and (not mb_test_value_map[barcode]["created_date"] or created_date > mb_test_value_map[barcode]["created_date"]):
+                mb_test_value_map[barcode]["created_date"] = created_date
+
+        formatted_data = []
+        for record in billing_records:
+            pid = record.get("patient_id", "N/A")
+            barcode_data = barcode_map.get(record.get("bill_no", ""), {})
+            patient_model_data = patient_details_map.get(pid, {})
+            segment = record.get("segment", barcode_data.get("segment", "N/A"))
+
+            # ONLY Include Shanmuga 360
+            rec_segment = str(segment).strip().lower()
+            rec_bill_segment = str(record.get("segment", "")).strip().lower()
+            rec_barcode_segment = str(barcode_data.get("segment", "")).strip().lower()
+
+            if not (rec_segment == "shanmuga 360" or rec_bill_segment == "shanmuga 360" or rec_barcode_segment == "shanmuga 360"):
+                continue
+
+            merged_patient_data = {
+                "patient_id": pid,
+                "patientname": patient_model_data.get("patientname") or barcode_data.get("patientname", "N/A"),
+                "age": patient_model_data.get("age") or barcode_data.get("age", "N/A"),
+                "age_type": patient_model_data.get("age_type") or "",
+                "gender": patient_model_data.get("gender") or barcode_data.get("gender", "N/A"),
+                "phone": patient_model_data.get("phone", "N/A"),
+                "email": patient_model_data.get("email", "N/A"),
+                "address": patient_model_data.get("address", "N/A"),
+            }
+
+            if isinstance(merged_patient_data["address"], str):
+                try:
+                    address_data = json.loads(merged_patient_data["address"])
+                    if isinstance(address_data, dict):
+                        area = address_data.get("area", "")
+                        pincode = address_data.get("pincode", "")
+                        formatted_address = f"{area}, {pincode}".strip(", ")
+                        merged_patient_data["address"] = formatted_address if formatted_address else "N/A"
+                except:
+                    pass
+            elif isinstance(merged_patient_data["address"], dict):
+                area = merged_patient_data["address"].get("area", "")
+                pincode = merged_patient_data["address"].get("pincode", "")
+                merged_patient_data["address"] = f"{area}, {pincode}".strip(", ") or "N/A"
+
+            refby = record.get("refby", "N/A")
+            order_id = record.get("order_id") 
+            b2b = record.get("B2B", "N/A")
+            branch = record.get("branch", "N/A")
+            sample_collector = get_employee_name(record.get("sample_collector", ""))
+            if not sample_collector:
+                sample_collector = "N/A"
+            sales_mapping = record.get("salesMapping", "N/A")
+            bill_no = record.get("bill_no", "N/A")
+            registeredby = record.get("created_by", "N/A")
+
+            payment_details = {}
+            raw = record.get("payment_method", "")
+            if raw:
+                if isinstance(raw, str):
+                    try:
+                        cleaned = raw.strip('"')
+                        payment_data = json.loads(cleaned) if cleaned else {}
+                        payment_details = payment_data if isinstance(payment_data, dict) else {"paymentmethod": str(payment_data)}
+                    except json.JSONDecodeError:
+                        payment_details = {"paymentmethod": raw}
+                elif isinstance(raw, dict):
+                    payment_details = raw
+            else:
+                payment_details = {"paymentmethod": "N/A"}
+
+            if payment_details.get("paymentmethod") == "MultiplePayment":
+                multiple_data = record.get("MultiplePayment", "")
+                try:
+                    if isinstance(multiple_data, str):
+                        multiple_data = json.loads(multiple_data.strip('"')) if multiple_data.strip('"') else []
+                    if isinstance(multiple_data, list):
+                        payment_details["multiple_payments"] = multiple_data
+                except json.JSONDecodeError:
+                    pass
+
+            test_list = []
+            test_ids = []
+            departments_set = set()
+            test_field = barcode_data.get("testdetails", []) or record.get("testdetails", [])
+
+            if isinstance(test_field, str):
+                try:
+                    test_field = json.loads(test_field.strip('"'))
+                except json.JSONDecodeError:
+                    test_field = []
+
+            if isinstance(test_field, list):
+                test_ids = [test.get("test_id") for test in test_field if test.get("test_id")]
+
+            if test_ids:
+                mongo_tests = list(test_details_collection.find(
+                    {"test_id": {"$in": test_ids}},
+                    {"_id": 0, "test_id": 1, "testname": 1, "department": 1, "shortcut": 1}
+                ))
+                mongo_test_map = {t["test_id"]: t for t in mongo_tests}
+                for item in test_field:
+                    if isinstance(item, dict):
+                        tid = item.get("test_id")
+                        mongo_info = mongo_test_map.get(tid, {})
+                        test_list.append({
+                            "test_id": tid,
+                            "testname": mongo_info.get("testname") or item.get("testname") or item.get("test_name", "N/A"),
+                            "department": mongo_info.get("department", "General"),
+                            "amount": item.get("amount", 0),
+                            "refund": item.get("refund", False),
+                            "cancellation": item.get("cancellation", False),
+                            "shortcut": item.get("shortcut") or mongo_info.get("shortcut", ""),
+                            "suffix": item.get("suffix", "")
+                        })
+                        if mongo_info.get("department"):
+                            departments_set.add(mongo_info.get("department"))
+
+            department = ", ".join(departments_set) if departments_set else "General"
+            testnames = ", ".join([t["testname"] for t in test_list]) if test_list else "N/A"
+
+            date_val = record.get("date")
+            formatted_date = "N/A"
+            if date_val:
+                if isinstance(date_val, datetime):
+                    formatted_date = date_val.strftime("%d-%m-%Y")
+                elif isinstance(date_val, str):
+                    try:
+                        dt = datetime.fromisoformat(date_val.replace('Z', '+00:00'))
+                        formatted_date = dt.strftime("%d-%m-%Y")
+                    except ValueError:
+                        formatted_date = date_val
+
+            created_date = record.get("created_date")
+            registration_date = "N/A"
+            if created_date:
+                if isinstance(created_date, datetime):
+                    registration_date = created_date.isoformat()
+                elif isinstance(created_date, str):
+                    registration_date = created_date
+
+            total_amount = record.get('total_amount', 0)
+            credit_amount = record.get('credit_amount', 0)
+            try: discount = int(float(record.get('discount', 0) or 0))
+            except (ValueError, TypeError): discount = 0
+
+            barcode = barcode_data.get("barcode", None)
+            status = record.get("status", "Registered")
+            sample_tests = sample_status_map.get(barcode, []) if barcode else []
+            latest_test_data = test_value_map.get(barcode, {}) if barcode else {}
+            all_test_values = latest_test_data.get("testdetails", []).copy()
+            test_created_date = latest_test_data.get("created_date", None)
+            mb_test_data = mb_test_value_map.get(barcode, {}) if barcode else {}
+            mb_test_values = mb_test_data.get("testdetails", [])
+            mb_created_date = mb_test_data.get("created_date", None)
+            
+            if mb_test_values:
+                all_test_values.extend(mb_test_values)
+                if mb_created_date:
+                    if not test_created_date or mb_created_date > test_created_date:
+                        test_created_date = mb_created_date
+
+            valid_test_values = []
+            unapproved_tests = []
+            if all_test_values:
+                for test_record in all_test_values:
+                    if not test_record.get("rerun", False):
+                        valid_test_values.append(test_record)
+                        if not test_record.get("approve", False):
+                            unapproved_tests.append(test_record)
+
+            all_collected = all(t.get("samplestatus") == "Sample Collected" for t in sample_tests) if sample_tests else False
+            partially_collected = any(t.get("samplestatus") == "Sample Collected" for t in sample_tests)
+            all_received = all(t.get("samplestatus") == "Received" for t in sample_tests) if sample_tests else False
+            partially_received = any(t.get("samplestatus") == "Received" for t in sample_tests)
+
+            collection_time_val = "N/A"
+            collected_date_val = "N/A"
+            if sample_tests:
+                for t in sample_tests:
+                    st = t.get("samplecollected_time")
+                    if st:
+                        try:
+                            if isinstance(st, str):
+                                dt = datetime.fromisoformat(st) if 'T' in st else datetime.strptime(st, "%Y-%m-%d %H:%M:%S")
+                                if dt:
+                                    collection_time_val = dt.strftime("%I:%M %p")
+                                    collected_date_val = dt.strftime("%d-%m-%Y")
+                                else: collection_time_val = st
+                            elif isinstance(st, datetime):
+                                collection_time_val = st.strftime("%I:%M %p")
+                                collected_date_val = st.strftime("%d-%m-%Y")
+                            if collection_time_val != "N/A": break
+                        except Exception:
+                            collection_time_val = str(st)
+                            break
+
+            if all_collected: status = "Collected"
+            elif partially_collected: status = "Partially Collected"
+            if all_received: status = "Received"
+            elif partially_received: status = "Partially Received"
+
+            individual_test_statuses = []
+            if barcode and test_list:
+                for test in test_list:
+                    test_id = test.get('test_id')
+                    test_name = test.get('testname', 'N/A')
+                    sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
+                    test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
+                    test_detail = test_details_collection.find_one({"test_id": test_id}, {"_id": 0, "TAT_Time": 1})
+                    tat_time = test_detail.get("TAT_Time") if test_detail else None
+                    
+                    sample_collected_time = None
+                    approve_time = None
+                    if sample_info and sample_info.get('samplecollected_time'):
+                        try:
+                            if isinstance(sample_info['samplecollected_time'], str):
+                                sample_collected_time = datetime.strptime(sample_info['samplecollected_time'], "%Y-%m-%d %H:%M:%S")
+                            elif isinstance(sample_info['samplecollected_time'], datetime):
+                                sample_collected_time = sample_info['samplecollected_time']
+                        except Exception: pass
+                    
+                    if test_value_info and test_value_info.get('approve_time'):
+                        try:
+                            approve_time_str = test_value_info['approve_time']
+                            if approve_time_str and approve_time_str != 'null':
+                                approve_time = datetime.strptime(approve_time_str, "%Y-%m-%d %H:%M:%S")
+                        except Exception: pass
+
+                    tat_status = None
+                    seconds_left = None
+                    tat_deadline_iso = None
+
+                    if sample_collected_time and tat_time and tat_time != 'N/A':
+                        tat_seconds = parse_tat_format(tat_time)
+                        if tat_seconds is not None:
+                            deadline = sample_collected_time + timedelta(seconds=tat_seconds)
+                            tat_deadline_iso = deadline.isoformat()
+                            if approve_time:
+                                time_taken_seconds = (approve_time - sample_collected_time).total_seconds()
+                                seconds_left = int(tat_seconds - time_taken_seconds)
+                                tat_status = "completed"
+                            else:
+                                now = datetime.now()
+                                seconds_left = int((deadline - now).total_seconds())
+                                tat_status = "pending"
+                        else: tat_status = None
+                    elif not sample_collected_time: tat_status = "Pending Collection"
+                    else: tat_status = None
+
+                    test_status = "Registered"
+                    if sample_info.get('samplestatus') == "Sample Collected": test_status = "Sample Collected"
+                    elif sample_info.get('samplestatus') == "Received": test_status = "Received"
+                    
+                    has_val = bool(test_value_info.get('test_value') or test_value_info.get('test_values'))
+                    is_appr = test_value_info.get('approve', False)
+                    is_disp = test_value_info.get('dispatch', False)
+                    
+                    if is_disp: test_status = "Dispatched"
+                    elif is_appr: test_status = "Approved"
+                    elif has_val: test_status = "Tested"
+
+                    individual_test_statuses.append({
+                        "test_id": test_id,
+                        "test_name": test_name,
+                        "status": test_status,
+                        "department": test.get('department', 'General'),
+                        "tat_time": tat_time,
+                        "tat_status": tat_status,
+                        "seconds_left": seconds_left,
+                        "tat_deadline": tat_deadline_iso,
+                        "sample_collected_time": sample_collected_time.strftime("%d-%m-%Y %I:%M %p") if sample_collected_time else None,
+                        "approve_time": approve_time.strftime("%d-%m-%Y %I:%M %p") if approve_time else None
+                    })
+
+            has_test_values = lambda t: bool(t.get("test_value") or t.get("test_values"))
+            all_tested = all(has_test_values(t) for t in valid_test_values)
+            partially_tested = any(has_test_values(t) for t in valid_test_values)
+            all_ordered_test_ids = {test.get("test_id") for test in test_list if test.get("test_id")}
+            approved_test_ids = {t.get("test_id") for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
+            dispatch_test_ids = {t.get("test_id") for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")}
+
+            all_approved = False
+            partially_approved = False
+            if len(all_ordered_test_ids) > 0:
+                if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
+                    all_approved = True
+                elif len(approved_test_ids) > 0:
+                    partially_approved = True
+                if not all_approved and valid_test_values:
+                    approved_count = sum(1 for t in valid_test_values if t.get("approve", False))
+                    if approved_count == len(valid_test_values): all_approved = True
+                    elif approved_count > 0: partially_approved = True
+
+            all_dispatched = False
+            partially_dispatched = False
+            if len(all_ordered_test_ids) > 0:
+                if all_ordered_test_ids.issubset(dispatch_test_ids) and len(dispatch_test_ids) == len(all_ordered_test_ids):
+                    all_dispatched = True
+                elif len(dispatch_test_ids) > 0:
+                    partially_dispatched = True
+
+            if all_dispatched: status = "Dispatched"
+            elif partially_dispatched: status = "Partially Dispatched"
+            elif all_approved: status = "Approved"
+            elif partially_approved: status = "Partially Approved"
+            elif all_tested: status = "Tested"
+            elif partially_tested: status = "Partially Tested"
+
+            no_of_tests = len(test_list)
+
+            if isinstance(registration_date, str):
+                try:
+                    parsed_date = datetime.fromisoformat(registration_date.replace('Z', '+00:00'))
+                    registration_date = parsed_date.isoformat()
+                except ValueError: pass
+
+            test_created_date_formatted = None
+            if test_created_date:
+                if isinstance(test_created_date, datetime): test_created_date_formatted = test_created_date.isoformat()
+                else: test_created_date_formatted = str(test_created_date)
+
+            department_statuses = {}
+            if barcode:
+                department_statuses = get_department_status(
+                    test_list=test_list,
+                    barcode=barcode,
+                    sample_status_map=sample_status_map,
+                    test_value_map=test_value_map,
+                    mb_test_value_map=mb_test_value_map
+                )
+
+            formatted_data.append({
+                "date": formatted_date,
+                "registration_date": registration_date,
+                "patient_id": merged_patient_data["patient_id"],
+                "patient_name": merged_patient_data["patientname"],
+                "gender": merged_patient_data["gender"],
+                "age": f"{merged_patient_data['age']} {merged_patient_data['age_type']}",
+                "phone": merged_patient_data["phone"],
+                "email": merged_patient_data["email"],
+                "address": merged_patient_data["address"],
+                "refby": refby,
+                "segment": segment,
+                "b2b": b2b,
+                "branch": branch,
+                "sample_collector": sample_collector,
+                "salesMapping": sales_mapping,
+                "total_amount": total_amount,
+                "credit_amount": credit_amount,
+                "credit_details": json.loads(record.get("credit_details")) if isinstance(record.get("credit_details"), str) else record.get("credit_details", []),
+                "discount": discount,
+                "payment_method": payment_details,
+                "test_names": testnames,
+                "department": department,  
+                "department_statuses": department_statuses,
+                "test_statuses": individual_test_statuses,
+                "no_of_tests": no_of_tests,
+                "bill_no": bill_no,
+                "order_id": order_id,
+                "registeredby": registeredby,
+                "barcode": barcode,
+                "status": status,
+                "test_created_date": test_created_date_formatted,
+                "collection_time": collection_time_val,
+                "collected_date": collected_date_val,
+            })
+
+        return JsonResponse(formatted_data, safe=False)
+
+    except Exception as e:
+        print(f"Critical Error in shanmuga360_overall_report: {str(e)}")
+        print(traceback.format_exc())
+        return JsonResponse({"error": str(e)}, status=500)
+
 @api_view(['GET'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -885,11 +1457,23 @@ def patient_test_sorting(request):
         if not barcode:
             return JsonResponse({'error': 'Missing barcode'}, status=400)
         
-        # Ensure the date is in YYYY-MM-DD format
+        # Ensure the date is in YYYY-MM-DD format (supports both YYYY-MM-DD and DD-MM-YYYY)
         try:
-            formatted_date = datetime.strptime(date, "%Y-%m-%d").date()
+            if '-' in str(date):
+                parts = str(date).split('-')
+                if len(parts) == 3 and len(parts[0]) == 4:
+                    formatted_date = datetime.strptime(date, "%Y-%m-%d").date()
+                elif len(parts) == 3 and len(parts[2]) == 4:
+                    formatted_date = datetime.strptime(date, "%d-%m-%Y").date()
+                else:
+                    formatted_date = datetime.strptime(date, "%Y-%m-%d").date()
+            else:
+                formatted_date = datetime.strptime(date, "%Y-%m-%d").date()
         except ValueError:
-            return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+            try:
+                formatted_date = datetime.strptime(date, "%d-%m-%Y").date()
+            except ValueError:
+                return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
         
         # MongoDB connection
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
@@ -1279,7 +1863,17 @@ def get_patient_test_details(request):
 
                 approved_tests.append(test_detail)
 
-            if approved_tests:
+                order_id_val = getattr(billing, 'order_id', None) or getattr(barcode_details, 'order_id', None)
+                if not order_id_val and bill_no:
+                    try:
+                        b_doc = mongo_db.core_billing.find_one({"bill_no": bill_no}, {"order_id": 1})
+                        if b_doc and b_doc.get("order_id"):
+                            order_id_val = b_doc.get("order_id")
+                    except Exception:
+                        pass
+                if not order_id_val:
+                    order_id_val = bill_no
+
                 patient_details = {
                     "patient_id":  patient_id,
                     "patientname": patient.patientname if patient else "N/A",
@@ -1289,6 +1883,7 @@ def get_patient_test_details(request):
                     "date":        test_value_record.date,
                     "barcode":     test_value_record.barcode,
                     "bill_no":     bill_no,
+                    "order_id":    order_id_val,
                     "barcodes":    barcodes,
                     "testdetails": approved_tests,
                     "refby":       billing.refby   if billing else "N/A",

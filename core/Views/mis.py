@@ -85,7 +85,7 @@ class ConsolidatedDataView(APIView):
         barcode_qs = list(
             BarcodeTestDetails.objects.filter(
                 bill_no__in=bill_nos
-            ).only('bill_no', 'barcode', 'testdetails')
+            ).exclude(segment="Shanmuga 360").only('bill_no', 'barcode', 'testdetails', 'segment')
         )
 
         barcode_dict = {b.bill_no: b for b in barcode_qs}
@@ -346,6 +346,308 @@ class ConsolidatedDataView(APIView):
             "data": response_data,
             "count": len(response_data)
         }, status=200)     
+
+
+@permission_classes([HasRoleAndDataPermission])
+class Shanmuga360ConsolidatedDataView(APIView):
+
+    def parse_tat_format(self, tat_str):
+        if not tat_str or tat_str == 'N/A':
+            return None
+        try:
+            total_seconds = 0
+            days = re.search(r'(\d+)D', str(tat_str))
+            hours = re.search(r'(\d+)H', str(tat_str))
+            minutes = re.search(r'(\d+)M', str(tat_str))
+
+            if days:
+                total_seconds += int(days.group(1)) * 86400
+            if hours:
+                total_seconds += int(hours.group(1)) * 3600
+            if minutes:
+                total_seconds += int(minutes.group(1)) * 60
+
+            return total_seconds if total_seconds > 0 else None
+        except:
+            return None
+
+    def get(self, request):
+        single_date = request.query_params.get('date')
+        from_date = request.query_params.get('from_date')
+        to_date = request.query_params.get('to_date')
+
+        ist = pytz.timezone('Asia/Kolkata')
+
+        try:
+            if from_date and to_date:
+                from_date_obj = datetime.strptime(from_date, '%Y-%m-%d')
+                to_date_obj = datetime.strptime(to_date, '%Y-%m-%d')
+                to_date_obj = to_date_obj.replace(hour=23, minute=59, second=59)
+            elif single_date:
+                from_date_obj = datetime.strptime(single_date, '%Y-%m-%d')
+                to_date_obj = from_date_obj.replace(hour=23, minute=59, second=59)
+            else:
+                today = datetime.now(ist).date()
+                from_date_obj = datetime.combine(today, datetime.min.time())
+                to_date_obj = datetime.combine(today, datetime.max.time())
+        except ValueError:
+            return Response({"error": "Invalid date format"}, status=400)
+
+        from_date_ist = ist.localize(from_date_obj)
+        to_date_ist = ist.localize(to_date_obj)
+
+        billing_records = list(
+            Billing.objects.filter(
+                bill_date__gte=from_date_ist,
+                bill_date__lte=to_date_ist
+            ).only('bill_no', 'patient_id', 'bill_date')
+        )
+
+        if not billing_records:
+            return Response({"data": [], "count": 0}, status=200)
+
+        bill_nos = [b.bill_no for b in billing_records]
+
+        barcode_qs = list(
+            BarcodeTestDetails.objects.filter(
+                bill_no__in=bill_nos,
+                segment="Shanmuga 360"
+            ).only('bill_no', 'barcode', 'testdetails', 'segment')
+        )
+
+        barcode_dict = {b.bill_no: b for b in barcode_qs}
+        barcodes = [b.barcode for b in barcode_qs if b.barcode]
+
+        if not barcodes:
+            return Response({"data": [], "count": 0}, status=200)
+
+        sample_qs = list(
+            SampleStatus.objects.filter(
+                barcode__in=barcodes
+            ).only('barcode', 'testdetails')
+        )
+        sample_dict = {s.barcode: s for s in sample_qs}
+
+        testvalue_qs = list(
+            TestValue.objects.filter(
+                barcode__in=barcodes
+            ).order_by('-created_date', '-lastmodified_date')
+        )
+        testvalue_dict = {}
+        for tv in testvalue_qs:
+            testvalue_dict.setdefault(tv.barcode, []).append(tv)
+
+        mbtestvalue_qs = list(
+            MBTestValue.objects.filter(
+                barcode__in=barcodes
+            ).order_by('-created_date', '-lastmodified_date')
+        )
+        mbtestvalue_dict = {}
+        for mbtv in mbtestvalue_qs:
+            mbtestvalue_dict.setdefault(mbtv.barcode, []).append(mbtv)
+
+        patient_ids = list(set(b.patient_id for b in billing_records))
+        patients = list(Patient.objects.filter(patient_id__in=patient_ids))
+        patient_dict = {p.patient_id: p for p in patients}
+
+        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+        db = client.Diagnostics
+        test_collection = db.core_testdetails
+
+        test_ids = set()
+        for b in barcode_qs:
+            try:
+                tests = b.testdetails if isinstance(b.testdetails, list) else json.loads(b.testdetails)
+                for t in tests:
+                    if t.get("test_id"):
+                        test_ids.add(t.get("test_id"))
+            except:
+                continue
+
+        test_master_dict = {}
+        if test_ids:
+            cursor = test_collection.find({"test_id": {"$in": list(test_ids)}}, {"_id": 0})
+            for doc in cursor:
+                test_master_dict[doc["test_id"]] = doc
+
+        response_data = []
+
+        def convert_to_iso_if_needed(time_str):
+            if not time_str or time_str in ["pending", "null"]:
+                return time_str
+            try:
+                dt_ist = datetime.strptime(time_str, '%Y-%m-%d %H:%M:%S')
+                dt_ist_aware = ist.localize(dt_ist)
+                dt_utc = dt_ist_aware.astimezone(pytz.UTC)
+                return dt_utc.isoformat()
+            except:
+                return time_str
+
+        for billing in billing_records:
+            barcode_obj = barcode_dict.get(billing.bill_no)
+            if not barcode_obj:
+                continue
+
+            barcode = barcode_obj.barcode
+            patient = patient_dict.get(billing.patient_id)
+            if not patient:
+                continue
+
+            try:
+                barcode_tests = barcode_obj.testdetails if isinstance(barcode_obj.testdetails, list) else json.loads(barcode_obj.testdetails)
+            except:
+                barcode_tests = []
+
+            sample_obj = sample_dict.get(barcode)
+            sample_tests = []
+            if sample_obj:
+                try:
+                    sample_tests = sample_obj.testdetails if isinstance(sample_obj.testdetails, list) else json.loads(sample_obj.testdetails)
+                except:
+                    pass
+
+            sample_by_id = {t.get("test_id"): t for t in sample_tests if t.get("test_id")}
+
+            testvalues = testvalue_dict.get(barcode, [])
+            mbtestvalues = mbtestvalue_dict.get(barcode, [])
+            testvalue_by_id = {}
+
+            for tv in testvalues:
+                try:
+                    tv_list = tv.testdetails if isinstance(tv.testdetails, list) else json.loads(tv.testdetails)
+                    for t in tv_list:
+                        if t.get("test_id") and t.get("test_id") not in testvalue_by_id:
+                            testvalue_by_id[t.get("test_id")] = t
+                except:
+                    continue
+
+            for mbtv in mbtestvalues:
+                try:
+                    mbtv_list = mbtv.testdetails if isinstance(mbtv.testdetails, list) else json.loads(mbtv.testdetails)
+                    for t in mbtv_list:
+                        test_id = t.get("test_id")
+                        if test_id:
+                            if test_id not in testvalue_by_id:
+                                testvalue_by_id[test_id] = t
+                            else:
+                                existing = testvalue_by_id[test_id]
+                                if t.get("approve_time") and t.get("approve_time") not in ["pending", "null", None]:
+                                    if not existing.get("approve_time") or existing.get("approve_time") in ["pending", "null"]:
+                                        existing["approve_time"] = t.get("approve_time")
+                                if t.get("dispatch_time") and t.get("dispatch_time") not in ["pending", "null", None]:
+                                    if not existing.get("dispatch_time") or existing.get("dispatch_time") in ["pending", "null"]:
+                                        existing["dispatch_time"] = t.get("dispatch_time")
+                except:
+                    continue
+
+            registered_time = None
+            if billing.bill_date:
+                bill_date_ist = billing.bill_date.astimezone(ist)
+                bill_date_utc = bill_date_ist.astimezone(pytz.UTC)
+                registered_time = bill_date_utc.isoformat()
+
+            for test in barcode_tests:
+                test_id = test.get("test_id")
+                if not test_id:
+                    continue
+
+                sample_data = sample_by_id.get(test_id, {})
+                if sample_data.get("samplestatus") == "Outsource":
+                    continue
+
+                test_master = test_master_dict.get(test_id, {})
+
+                expected_tat_display = (
+                    test_master.get("TAT_Time")
+                    or test_master.get("tat_time")
+                    or (f"{test_master.get('TAT_hours')}H" if test_master.get("TAT_hours") else "N/A")
+                )
+
+                expected_tat_seconds = self.parse_tat_format(expected_tat_display)
+
+                approval_time = convert_to_iso_if_needed(
+                    testvalue_by_id.get(test_id, {}).get("approve_time")
+                )
+
+                dispatch_time = convert_to_iso_if_needed(
+                    testvalue_by_id.get(test_id, {}).get("dispatch_time")
+                )
+
+                collected_time = convert_to_iso_if_needed(
+                    sample_data.get("samplecollected_time")
+                )
+
+                received_time = convert_to_iso_if_needed(
+                    sample_data.get("received_time")
+                )
+
+                # -------- ACTUAL TAT --------
+                tat_time = "pending"
+                tat_seconds = None
+
+                if collected_time and approval_time not in ["pending", "null", None]:
+                    try:
+                        col_dt = datetime.fromisoformat(collected_time.replace('Z', '+00:00'))
+                        app_dt = datetime.fromisoformat(approval_time.replace('Z', '+00:00'))
+                        diff = app_dt - col_dt
+                        tat_seconds = int(diff.total_seconds())
+                        tat_time = str(timedelta(seconds=tat_seconds))
+                    except:
+                        tat_time = "pending"
+
+                # -------- TOTAL PROCESSING TIME --------
+                total_processing_time = "pending"
+                total_seconds = None
+
+                if registered_time not in ["pending", "null", None] and dispatch_time not in ["pending", "null", None]:
+                    try:
+                        reg_dt = datetime.fromisoformat(registered_time.replace('Z', '+00:00'))
+                        dis_dt = datetime.fromisoformat(dispatch_time.replace('Z', '+00:00'))
+                        diff = dis_dt - reg_dt
+                        total_seconds = int(diff.total_seconds())
+                        total_processing_time = str(timedelta(seconds=total_seconds))
+                    except:
+                        total_processing_time = "pending"
+
+                # -------- TAT Overage --------
+                tat_out_time = None
+                tat_status = "pending"
+
+                if tat_seconds is not None and expected_tat_seconds:
+                    if tat_seconds > expected_tat_seconds:
+                        over = tat_seconds - expected_tat_seconds
+                        tat_out_time = str(timedelta(seconds=over))
+                        tat_status = "exceeded"
+                    else:
+                        tat_status = "within_limit"
+
+                response_data.append({
+                    "bill_no": billing.bill_no,
+                    "patient_id": patient.patient_id,
+                    "patient_name": patient.patientname,
+                    "age": f"{patient.age} {patient.age_type}" if getattr(patient, 'age_type', None) else patient.age,
+                    "date": registered_time,
+                    "registered_time": registered_time,
+                    "barcode": barcode,
+                    "test_id": test_id,
+                    "test_name": test_master.get("test_name") or test.get("testname", "N/A"),
+                    "department": test_master.get("department") or test_master.get("Department", "N/A"),
+                    "collected_time": collected_time,
+                    "received_time": received_time,
+                    "approval_time": approval_time,
+                    "dispatch_time": dispatch_time,
+                    "expected_tat": expected_tat_display,
+                    "tat_time": tat_time,
+                    "tat_out_time": tat_out_time,
+                    "tat_status": tat_status,
+                    "total_processing_time": total_processing_time
+                })
+
+        return Response({
+            "data": response_data,
+            "count": len(response_data)
+        }, status=200)
+
 
 @permission_classes([HasRoleAndDataPermission])
 class HMSConsolidatedDataView(APIView):

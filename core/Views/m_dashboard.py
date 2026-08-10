@@ -97,6 +97,7 @@ def m_dashboard_stats(request):
                     "hospital": 0,
                     "franchise": 0,
                     "company_health_check": 0,
+                    "shanmuga_360": 0,
                     "other": 0
                 }
             },
@@ -112,9 +113,11 @@ def m_dashboard_stats(request):
                     "hospital": 0,
                     "home_collection": 0,
                     "company_health_check": 0,
-                    "franchise_share": 0
+                    "franchise_share": 0,
+                    "shanmuga_360": 0
                 },
                 "credit_amount": 0,
+                "total_discount": 0,
                 "net_amount": 0
             }
         }
@@ -130,7 +133,10 @@ def m_dashboard_stats(request):
             # Segment
             segment = (bill.segment or "").strip()
             # Normalize segment matching
-            if "Home" in segment and "Collection" in segment:
+            if "Shanmuga 360" in segment or "360" in segment:
+                stats["samples"]["segments"]["shanmuga_360"] += 1
+                stats["financials"]["gross"]["shanmuga_360"] += to_float(bill.totalAmount)
+            elif "Home" in segment and "Collection" in segment:
                 stats["samples"]["segments"]["home_collection"] += 1
                 stats["financials"]["gross"]["home_collection"] += to_float(bill.totalAmount)
             elif "Hospital" in segment:
@@ -162,6 +168,19 @@ def m_dashboard_stats(request):
             # Financials
             stats["financials"]["credit_amount"] += to_float(bill.credit_amount)
             stats["financials"]["net_amount"] += to_float(bill.netAmount)
+
+            disc_raw = getattr(bill, 'discount', None)
+            if disc_raw:
+                disc_str = str(disc_raw).strip()
+                tot = to_float(bill.totalAmount)
+                if disc_str.endswith('%'):
+                    try:
+                        pct = float(disc_str[:-1])
+                        stats["financials"]["total_discount"] += (tot * pct) / 100.0
+                    except:
+                        pass
+                else:
+                    stats["financials"]["total_discount"] += to_float(disc_str)
 
 
         # --- MongoDB Connection ---

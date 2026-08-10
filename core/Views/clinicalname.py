@@ -343,11 +343,14 @@ def update_clinicalname(request):
     except ClinicalName.DoesNotExist:
         return Response({"error": "Clinical record not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    serializer = ClinicalNameSerializer(instance, data=request.data, partial=True)
+    data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+    for key in ['created_at', 'created_date', 'first_approved_timestamp', 'final_approved_timestamp', 'rejected_date', 'id', '_id', 'contactPerson']:
+        data.pop(key, None)
+
+    serializer = ClinicalNameSerializer(instance, data=data, partial=True)
     if serializer.is_valid():
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
-
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -482,11 +485,14 @@ def update_clinicalname(request):
     except ClinicalName.DoesNotExist:
         return Response({"error": "Clinical record not found."}, status=status.HTTP_404_NOT_FOUND)
 
-    serializer = ClinicalNameSerializer(instance, data=request.data, partial=True)
+    data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+    for key in ['created_at', 'created_date', 'first_approved_timestamp', 'final_approved_timestamp', 'rejected_date', 'id', '_id', 'contactPerson']:
+        data.pop(key, None)
+
+    serializer = ClinicalNameSerializer(instance, data=data, partial=True)
     if serializer.is_valid():
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
-
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
