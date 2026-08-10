@@ -67,6 +67,8 @@ urlpatterns = [
     path('getsalesindividual/', sales.get_sales_individual_report, name='get_sales_individual_report'),
     path('salesdashboard/', sales.salesdashboard, name='salesdashboard'),
     path('salesplan/', sales.salesplan, name='salesplan'),
+    path('salesplan_summary/', sales.salesplan_summary, name='salesplan_summary'),
+    path('overall_summary/', sales.overall_summary, name='overall_summary'),
     path('salesplanreport/', sales.salesplanreport, name='salesplan'),
     path('salesexecutive_report/', sales.Adminview_salesexecutive_report, name='salesexecutive_report'),
     path('clinicalname_update/', sales.update_clinicalname, name='update_clinicalname'),
@@ -101,7 +103,11 @@ urlpatterns = [
 
     path("bus_fare/", logistic.bus_fare, name="bus_fare"),
     path("bus_fare_photo/", logistic.bus_fare_photo, name="bus_fare_photo"),
+
+  
     path("get_b2b_employees/", logistic.get_b2b_employees, name="get_b2b_employees"),
+
+      # customer complaints:
     path("get_b2b_lab_employees/", logistic.get_b2b_lab_employees, name="get_b2b_lab_employees"),
     path("customer_complaints/", logistic.customer_complaints, name="customer_complaints"),
 
@@ -217,7 +223,7 @@ urlpatterns = [
     path('corporate-receive/<str:batch_no>/', corporate.update_corporate_batch_received_status, name='update_corporate_batch_received_status'),
     path("get_corporate_Transferred/<str:batch_number>/", corporate.get_corporate_sample, name="get_corporate_sample"),
     path("update_corporate_sample/<str:barcode>/", corporate.update_corporate_sample, name="update_corporate_sample"),
-    
+
     #Corporate Reports:    
     path('corporate_overall_report/', corporate.corporate_overall_report, name='corporate_overall_report'),
     path('corporate_patient_test_details/', corporate.corporate_patient_test_details, name='corporate_patient_test_details'),

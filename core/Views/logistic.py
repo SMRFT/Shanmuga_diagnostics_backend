@@ -1551,7 +1551,7 @@ from django.utils import timezone
 
 from .dbcollection import profile_collection
 
-FULL_ACCESS_ROLES = {"SD-R-GM", "SD-R-MAVP"}
+FULL_ACCESS_ROLES = {"SD-R-GM", "SD-R-MAVP","SD-R-DOC"}
 
 
 def _has_full_access(employee_id):
