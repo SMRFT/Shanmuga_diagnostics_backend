@@ -22,6 +22,7 @@ from ..serializers import LogisticsSerializer, BillingSerializer,CustomerComplai
 
 
 from .dbcollection import profile_collection, B2B_ROLES, B2B_LAB_Roles, BIO_CHESMISTRY_ROLES
+from .expo_notifications import queue_task_assigned_notification
 
 #auth
 from rest_framework.permissions import IsAuthenticated
@@ -71,7 +72,12 @@ def create_logistics(request):
             serializer = LogisticsSerializer(data=data)
 
             if serializer.is_valid():
-                serializer.save()
+                instance = serializer.save()
+                queue_task_assigned_notification(
+                    collector=instance.sample_collector,
+                    task_id=instance.task_id,
+                    clinical_name=getattr(instance, 'clinicalname', '')
+                )
                 return Response(
                     {'message': 'Task assigned successfully', 'data': serializer.data},
                     status=status.HTTP_201_CREATED
@@ -254,6 +260,12 @@ def reassign_task(request, task_id):
         task.lastmodified_by = employee_id
         task.lastmodified_date = timezone.now()
         task.save()
+
+        queue_task_assigned_notification(
+            collector=new_collector,
+            task_id=task.task_id,
+            clinical_name=getattr(task, 'clinicalname', '')
+        )
 
         return Response(
             {'message': 'Task reassigned successfully', 'data': LogisticsSerializer(task).data},
