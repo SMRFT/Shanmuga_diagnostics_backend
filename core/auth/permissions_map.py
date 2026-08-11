@@ -75,12 +75,21 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/logistics-tat-report/?(\?.*)?$': 'SD-P-LTR',
     r'^/_b_a_c_k_e_n_d/LIS/logistics/.*$': 'SD-P-LTM',
     '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
-    #customer complaints
+
     '/_b_a_c_k_e_n_d/LIS/get_b2b_employees/': 'SD-P-LGE',
+    #customer complaints
     '/_b_a_c_k_e_n_d/LIS/get_b2b_lab_employees/': 'SD-P-LBL',
     r'/_b_a_c_k_e_n_d/LIS/customer_complaints/?(\?.*)?$': 'SD-P-LCC',
+    #Bus sample Tracking 
     r'/_b_a_c_k_e_n_d/LIS/bus_fare/?(\?.*)?$': 'SD-P-LBF',
-     r'/_b_a_c_k_e_n_d/LIS/salesplan/?(\?.*)?$': 'SD-P-LSP',
+    
+    #Sales
+    r'^/_b_a_c_k_e_n_d/LIS/salesplan/?(\?.*)?$': 'SD-P-LSP',
+    r'^/_b_a_c_k_e_n_d/LIS/salesplan_summary/?(\?.*)?$': 'SD-P-LSP',
+    r'^/_b_a_c_k_e_n_d/LIS/overall_summary/?(\?.*)?$': 'SD-P-LSP',
+    r'^/_b_a_c_k_e_n_d/LIS/salesplanreport/?(\?.*)?$': 'SD-P-LSP',
+
+
     r'^/_b_a_c_k_e_n_d/LIS/sample-collector-location-history/?(\\?.*)?$': 'SD-P-LGD',
 
     r'^/_b_a_c_k_e_n_d/LIS/routesetup/?(\?.*)?$': 'SD-P-LTM',
