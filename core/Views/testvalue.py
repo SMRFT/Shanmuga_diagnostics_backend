@@ -306,7 +306,7 @@ def get_samplestatus_testvalue(request):
                 elif hasattr(sample_status, 'patient_id'):
                     patient_id = sample_status.patient_id
                 
-                ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
+                ALLOWED_DEPARTMENTS = ["General","Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
                 # Enrich tests with MongoDB details and match test values
                 updated_tests = []
                 for test in filtered_tests:
@@ -381,7 +381,7 @@ def get_samplestatus_testvalue(request):
                     barcode_by = "Unknown"
                     barcode_date = "Unknown"
                 
-                ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
+                ALLOWED_DEPARTMENTS = ["General","Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
                 # Enrich tests with MongoDB details and match test values
                 updated_tests = []
                 for test in filtered_tests:
@@ -466,7 +466,7 @@ def get_samplestatus_testvalue(request):
                     employee_id = billing.get("employee_id")
                     patient = patient_map.get(employee_id, {})
                     
-                    ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
+                    ALLOWED_DEPARTMENTS = ["General","Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
                 # Enrich tests with MongoDB details and match test values
                     updated_tests = []
                     for test in filtered_tests:
@@ -549,7 +549,7 @@ def get_samplestatus_testvalue(request):
                     patient_id = billing_map.get(barcode, {}).get('patient_id')
                     patient = patient_map.get(patient_id, {})
                     
-                    ALLOWED_DEPARTMENTS = ["Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
+                    ALLOWED_DEPARTMENTS = ["General","Haematology","Coagulation", "Biochemistry", "Immunology", "Immunoassay", "Serology", "Clinical Pathology","Molecular Biology"]
                     # Enrich tests with MongoDB details and match test values
                     updated_tests = []
                     for test in filtered_tests:
