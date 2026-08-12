@@ -92,7 +92,8 @@ def micro_biology_testvalue(request):
                         "test_id": 1,
                         "test_name": 1,
                         "department": 1,
-                        "collection_container": 1
+                        "collection_container": 1,
+                        "TAT_Time": 1,
                     }
                 )
                 test_details_cache[test_id] = test_detail
@@ -183,7 +184,7 @@ def micro_biology_testvalue(request):
             except (json.JSONDecodeError, TypeError):
                 return []
         
-        def enrich_test_with_details(test):
+        def enrich_test_with_details(test, sample_status=None):
             """Enrich test with details from MongoDB"""
             test_id = test.get('test_id')
             if test_id:
@@ -192,6 +193,19 @@ def micro_biology_testvalue(request):
                     test['testname'] = test_detail.get('test_name', test.get('testname', 'N/A'))
                     test['department'] = test_detail.get('department', test.get('department', 'N/A'))
                     test['container'] = test_detail.get('collection_container', test.get('container', 'N/A'))
+                    tat_val = test_detail.get('TAT_Time') or test.get('TAT_Time') 
+                    test['tat_time'] = tat_val
+                    test['TAT_Time'] = tat_val
+            
+            # Ensure samplecollected_time exists on test
+            if not test.get('samplecollected_time') and not test.get('sample_collected_time'):
+                coll_time = (
+                    test.get('collected_time') or
+                    (safe_datetime_to_string(getattr(sample_status, 'created_date', None)) if sample_status else None) or
+                    (safe_datetime_to_string(getattr(sample_status, 'date', None)) if sample_status else None)
+                )
+                if coll_time:
+                    test['samplecollected_time'] = coll_time
             return test
         
         def match_test_values(test, barcode, test_values_by_barcode):
@@ -202,15 +216,19 @@ def micro_biology_testvalue(request):
             test.update({
                 'rerun': False,
                 'approve': False,
+                'dispatch': False,
+                'is_dispatched': False,
                 'test_value_exists': False,
                 'approve_time': None,
                 'rerun_time': None,
+                'dispatch_time': None,
                 'approve_by': None,
+                'dispatch_by': None,
                 'value': None,
                 'remarks': None,
                 'comment': None,
                 'verified_by': None,
-                'is_preliminary': False   # ✅ ADDED DEFAULT
+                'is_preliminary': False
             })
             
             # If no test_id, cannot match
@@ -228,20 +246,23 @@ def micro_biology_testvalue(request):
                     
                     # Match based on test_id
                     if tv_test_id == test_id:
+                        is_dispatched_val = bool(tv_test.get('dispatch', False) or tv_test.get('is_dispatched', False))
                         test.update({
                             'test_value_exists': True,
                             'approve': bool(tv_test.get('approve', False)),
                             'rerun': bool(tv_test.get('rerun', False)),
+                            'dispatch': is_dispatched_val,
+                            'is_dispatched': is_dispatched_val,
                             'approve_time': tv_test.get('approve_time'),
                             'rerun_time': tv_test.get('rerun_time'),
+                            'dispatch_time': tv_test.get('dispatch_time'),
                             'approve_by': tv_test.get('approve_by'),
+                            'dispatch_by': tv_test.get('dispatched_by') or tv_test.get('dispatch_by'),
                             'value': tv_test.get('value'),
                             'remarks': tv_test.get('remarks'),
                             'comment': tv_test.get('comment'),
                             'verified_by': tv_test.get('verified_by'),
-
-                            # ✅ MAIN CHANGE
-                            'is_preliminary': tv.is_preliminary
+                            'is_preliminary': getattr(tv, 'is_preliminary', False)
                         })
                         return test
 
@@ -285,7 +306,7 @@ def micro_biology_testvalue(request):
                 # Enrich tests with MongoDB details and match test values
                 updated_tests = []
                 for test in filtered_tests:
-                    enriched_test = enrich_test_with_details(test)
+                    enriched_test = enrich_test_with_details(test, sample_status)
 
                     # FILTER: Only allow Microbiology
                     if enriched_test.get('department') != 'Microbiology':
@@ -351,7 +372,7 @@ def micro_biology_testvalue(request):
                 # Enrich tests with MongoDB details and match test values
                 updated_tests = []
                 for test in filtered_tests:
-                    enriched_test = enrich_test_with_details(test)
+                    enriched_test = enrich_test_with_details(test, sample_status)
 
                     # FILTER: Only allow Microbiology
                     if enriched_test.get('department') != 'Microbiology':
@@ -432,7 +453,7 @@ def micro_biology_testvalue(request):
                     # Enrich tests with MongoDB details and match test values
                     updated_tests = []
                     for test in filtered_tests:
-                        enriched_test = enrich_test_with_details(test)
+                        enriched_test = enrich_test_with_details(test, record)
 
                         # FILTER: Only allow Microbiology
                         if enriched_test.get('department') != 'Microbiology':

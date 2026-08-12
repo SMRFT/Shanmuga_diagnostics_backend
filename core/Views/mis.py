@@ -1,3 +1,4 @@
+from django.db.models import Q
 from rest_framework.response import Response
 from datetime import datetime,timedelta
 from django.utils import timezone
@@ -685,22 +686,22 @@ class HMSConsolidatedDataView(APIView):
         # ---------------- DATE FILTER ----------------
         try:
             if from_date and to_date:
-                from_date_obj = datetime.strptime(from_date, '%Y-%m-%d')
-                to_date_obj = datetime.strptime(to_date, '%Y-%m-%d')
-                to_date_obj = to_date_obj.replace(hour=23, minute=59, second=59)
+                from_date_obj = datetime.strptime(from_date, '%Y-%m-%d').date()
+                to_date_obj = datetime.strptime(to_date, '%Y-%m-%d').date()
             elif single_date:
-                from_date_obj = datetime.strptime(single_date, '%Y-%m-%d')
-                to_date_obj = from_date_obj.replace(hour=23, minute=59, second=59)
+                from_date_obj = datetime.strptime(single_date, '%Y-%m-%d').date()
+                to_date_obj = from_date_obj
             else:
                 # Default to today if no date provided
-                today = datetime.now(ist).date()
-                from_date_obj = datetime.combine(today, datetime.min.time())
-                to_date_obj = datetime.combine(today, datetime.max.time())
+                from_date_obj = datetime.now(ist).date()
+                to_date_obj = from_date_obj
         except ValueError:
             return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
         
-        from_date_ist = ist.localize(from_date_obj)
-        to_date_ist = ist.localize(to_date_obj)
+        from_date_dt = datetime.combine(from_date_obj, datetime.min.time())
+        to_date_dt = datetime.combine(to_date_obj, datetime.max.time())
+        from_date_ist = ist.localize(from_date_dt)
+        to_date_ist = ist.localize(to_date_dt)
         
         try:
             # Connect to MongoDB to get test details from core_testdetails
@@ -708,32 +709,62 @@ class HMSConsolidatedDataView(APIView):
             db = client.Diagnostics
             test_details_collection = db.core_testdetails
             
-            # ---------------- BARCODE RECORDS ----------------
-            barcode_records = list(
-                Hmsbarcode.objects.filter(
-                    date__gte=from_date_ist,
-                    date__lte=to_date_ist
-                ).order_by('-date', 'barcode')
+            # ---------------- 1. INITIAL SEARCH: Hmssamplestatus for current date range ----------------
+            sample_qs = list(
+                Hmssamplestatus.objects.filter(
+                    Q(date__gte=from_date_obj, date__lte=to_date_obj) |
+                    Q(created_date__gte=from_date_ist, created_date__lte=to_date_ist)
+                ).order_by('-created_date', '-date')
             )
             
-            if not barcode_records:
+            sample_barcodes = [s.barcode for s in sample_qs if s.barcode]
+            
+            # ---------------- 2. BARCODE RECORDS FROM Hmsbarcode ----------------
+            barcode_qs = list(
+                Hmsbarcode.objects.filter(
+                    Q(barcode__in=sample_barcodes) |
+                    Q(date__gte=from_date_obj, date__lte=to_date_obj) |
+                    Q(created_date__gte=from_date_ist, created_date__lte=to_date_ist)
+                ).order_by('-date', '-created_date')
+            )
+            
+            barcode_dict = {}
+            for b in barcode_qs:
+                if b.barcode and b.barcode not in barcode_dict:
+                    barcode_dict[b.barcode] = b
+
+            # Combine all barcodes, prioritizing Hmssamplestatus order first
+            barcodes = []
+            seen_barcodes = set()
+            for b in sample_barcodes:
+                if b and b not in seen_barcodes:
+                    barcodes.append(b)
+                    seen_barcodes.add(b)
+            for b_rec in barcode_qs:
+                if b_rec.barcode and b_rec.barcode not in seen_barcodes:
+                    barcodes.append(b_rec.barcode)
+                    seen_barcodes.add(b_rec.barcode)
+            
+            if not barcodes:
                 return Response({
                     "data": [],
                     "count": 0
                 }, status=200)
             
-            barcodes = [b.barcode for b in barcode_records if b.barcode]
+            # Organize Hmssamplestatus dict
+            sample_dict = {}
+            for s in sample_qs:
+                if s.barcode and s.barcode not in sample_dict:
+                    sample_dict[s.barcode] = s
             
-            # ---------------- SAMPLE STATUS ----------------
-            sample_qs = list(
-                Hmssamplestatus.objects.filter(
-                    barcode__in=barcodes
-                ).only('barcode', 'testdetails')
-            )
-            
-            sample_dict = {s.barcode: s for s in sample_qs}
-            
-            # ---------------- TEST VALUES (TestValue) ----------------
+            # Fetch sample status for any barcodes found in Hmsbarcode but not in initial sample_qs
+            missing_sample_barcodes = [b for b in barcodes if b not in sample_dict]
+            if missing_sample_barcodes:
+                extra_samples = list(Hmssamplestatus.objects.filter(barcode__in=missing_sample_barcodes))
+                for s in extra_samples:
+                    sample_dict[s.barcode] = s
+
+            # ---------------- 3. TEST VALUES (TestValue) ----------------
             testvalue_qs = list(
                 TestValue.objects.filter(
                     barcode__in=barcodes
@@ -744,7 +775,7 @@ class HMSConsolidatedDataView(APIView):
             for tv in testvalue_qs:
                 testvalue_dict.setdefault(tv.barcode, []).append(tv)
             
-            # ---------------- MB TEST VALUES (MBTestValue) ----------------
+            # ---------------- 4. MB TEST VALUES (MBTestValue) ----------------
             mbtestvalue_qs = list(
                 MBTestValue.objects.filter(
                     barcode__in=barcodes
@@ -755,16 +786,27 @@ class HMSConsolidatedDataView(APIView):
             for mbtv in mbtestvalue_qs:
                 mbtestvalue_dict.setdefault(mbtv.barcode, []).append(mbtv)
             
-            # ---------------- TEST MASTER (Mongo) ----------------
+            # ---------------- 5. TEST MASTER (Mongo) ----------------
             test_ids = set()
-            for barcode_record in barcode_records:
-                try:
-                    tests = barcode_record.testdetails if isinstance(barcode_record.testdetails, list) else json.loads(barcode_record.testdetails)
-                    for t in tests:
-                        if t.get("test_id"):
-                            test_ids.add(t.get("test_id"))
-                except:
-                    continue
+            for b in barcodes:
+                b_rec = barcode_dict.get(b)
+                if b_rec and b_rec.testdetails:
+                    try:
+                        tests = b_rec.testdetails if isinstance(b_rec.testdetails, list) else json.loads(b_rec.testdetails)
+                        for t in tests:
+                            if t.get("test_id"):
+                                test_ids.add(t.get("test_id"))
+                    except:
+                        pass
+                s_rec = sample_dict.get(b)
+                if s_rec and s_rec.testdetails:
+                    try:
+                        tests = s_rec.testdetails if isinstance(s_rec.testdetails, list) else json.loads(s_rec.testdetails)
+                        for t in tests:
+                            if t.get("test_id"):
+                                test_ids.add(t.get("test_id"))
+                    except:
+                        pass
             
             test_master_dict = {}
             if test_ids:
@@ -790,39 +832,92 @@ class HMSConsolidatedDataView(APIView):
             
             # ---------------- RESPONSE BUILD ----------------
             response_data = []
-            processed_barcodes = set()  # Track processed barcodes to avoid duplicates
+            processed_barcodes = set()
             
-            for barcode_record in barcode_records:
-                barcode = barcode_record.barcode
-                
+            for barcode in barcodes:
                 if not barcode or barcode in processed_barcodes:
                     continue
                 
-                # Parse JSON fields from barcode record to get test_ids
-                try:
-                    barcode_tests = barcode_record.testdetails if isinstance(barcode_record.testdetails, list) else json.loads(barcode_record.testdetails)
-                except json.JSONDecodeError:
+                barcode_record = barcode_dict.get(barcode)
+                sample_obj = sample_dict.get(barcode)
+                
+                # Get patient info
+                patient_id = ''
+                patient_name = ''
+                age = 0
+                gender = ''
+                phone = ''
+                ref_doctor = ''
+                registered_time = None
+                
+                if barcode_record:
+                    patient_id = barcode_record.patient_id or ''
+                    patient_name = barcode_record.patientname or ''
+                    age = barcode_record.age or 0
+                    gender = barcode_record.gender or ''
+                    phone = getattr(barcode_record, 'phone', '') or ''
+                    ref_doctor = barcode_record.ref_doctor or ''
+                    if barcode_record.created_date:
+                        if hasattr(barcode_record.created_date, 'astimezone'):
+                            registered_dt_ist = barcode_record.created_date.astimezone(ist)
+                        else:
+                            utc = pytz.UTC
+                            registered_dt_utc = utc.localize(barcode_record.created_date)
+                            registered_dt_ist = registered_dt_utc.astimezone(ist)
+                        registered_time = registered_dt_ist.astimezone(pytz.UTC).isoformat()
+                    elif barcode_record.date:
+                        dt_ist = datetime.combine(barcode_record.date, datetime.min.time())
+                        registered_time = ist.localize(dt_ist).astimezone(pytz.UTC).isoformat()
+                
+                if not patient_name:
+                    billing_rec = HmspatientBilling.objects.filter(barcode=barcode).first()
+                    if billing_rec:
+                        patient_id = patient_id or billing_rec.patient_id or ''
+                        patient_name = billing_rec.patientname or ''
+                        age = age or billing_rec.age or 0
+                        gender = gender or billing_rec.gender or ''
+                        phone = phone or getattr(billing_rec, 'phone', '') or ''
+                        ref_doctor = ref_doctor or billing_rec.ref_doctor or ''
+                        if not registered_time and billing_rec.date:
+                            if hasattr(billing_rec.date, 'astimezone'):
+                                registered_dt_ist = billing_rec.date.astimezone(ist)
+                            else:
+                                utc = pytz.UTC
+                                registered_dt_utc = utc.localize(billing_rec.date)
+                                registered_dt_ist = registered_dt_utc.astimezone(ist)
+                            registered_time = registered_dt_ist.astimezone(pytz.UTC).isoformat()
+
+                # Parse JSON fields from barcode record or sample object to get test_ids
+                barcode_tests = []
+                if barcode_record and barcode_record.testdetails:
+                    try:
+                        barcode_tests = barcode_record.testdetails if isinstance(barcode_record.testdetails, list) else json.loads(barcode_record.testdetails)
+                    except:
+                        barcode_tests = []
+                
+                if not barcode_tests and sample_obj and sample_obj.testdetails:
+                    try:
+                        barcode_tests = sample_obj.testdetails if isinstance(sample_obj.testdetails, list) else json.loads(sample_obj.testdetails)
+                    except:
+                        barcode_tests = []
+                        
+                if not barcode_tests:
                     continue
                 
                 # Get sample status data
-                sample_obj = sample_dict.get(barcode)
                 sample_tests = []
                 if sample_obj:
                     try:
                         sample_tests = sample_obj.testdetails if isinstance(sample_obj.testdetails, list) else json.loads(sample_obj.testdetails)
-                    except json.JSONDecodeError:
+                    except:
                         sample_tests = []
-                
-                # Create a dictionary to map test_id to sample status info
                 sample_by_id = {t.get("test_id"): t for t in sample_tests if t.get("test_id")}
                 
                 # Combine TestValue and MBTestValue data
                 testvalues = testvalue_dict.get(barcode, [])
                 mbtestvalues = mbtestvalue_dict.get(barcode, [])
-                
                 testvalue_by_id = {}
                 
-                # First, process TestValue records
                 for tv in testvalues:
                     try:
                         tv_list = tv.testdetails if isinstance(tv.testdetails, list) else json.loads(tv.testdetails)
@@ -832,100 +927,60 @@ class HMSConsolidatedDataView(APIView):
                     except:
                         continue
                 
-                # Then, process MBTestValue records (will override if same test_id exists)
                 for mbtv in mbtestvalues:
                     try:
                         mbtv_list = mbtv.testdetails if isinstance(mbtv.testdetails, list) else json.loads(mbtv.testdetails)
                         for t in mbtv_list:
                             test_id = t.get("test_id")
                             if test_id:
-                                # Check if we should use MBTestValue data
-                                # If test_id not in testvalue_by_id, add it directly
                                 if test_id not in testvalue_by_id:
                                     testvalue_by_id[test_id] = t
                                 else:
-                                    # If test_id exists, merge the data, preferring non-null/non-pending values
                                     existing = testvalue_by_id[test_id]
-                                    
-                                    # Update approve_time if MBTestValue has a valid value
                                     if t.get("approve_time") and t.get("approve_time") not in ["pending", "null", None]:
                                         if not existing.get("approve_time") or existing.get("approve_time") in ["pending", "null"]:
                                             existing["approve_time"] = t.get("approve_time")
-                                    
-                                    # Update dispatch_time if MBTestValue has a valid value
                                     if t.get("dispatch_time") and t.get("dispatch_time") not in ["pending", "null", None]:
                                         if not existing.get("dispatch_time") or existing.get("dispatch_time") in ["pending", "null"]:
                                             existing["dispatch_time"] = t.get("dispatch_time")
                     except:
                         continue
-                
-                # Format registration time from barcode record's created_date and convert to IST
-                registered_time = None
-                if barcode_record.created_date:
-                    # Convert to IST timezone
-                    if hasattr(barcode_record.created_date, 'astimezone'):
-                        # If it's a timezone-aware datetime, convert to IST then UTC
-                        registered_dt_ist = barcode_record.created_date.astimezone(ist)
-                    else:
-                        # If it's a naive datetime, assume it's UTC and convert to IST
-                        utc = pytz.UTC
-                        registered_dt_utc = utc.localize(barcode_record.created_date)
-                        registered_dt_ist = registered_dt_utc.astimezone(ist)
-                    
-                    # Convert to UTC for ISO format
-                    registered_dt_utc = registered_dt_ist.astimezone(pytz.UTC)
-                    registered_time = registered_dt_utc.isoformat()
-                
-                # Process each test
+                        
                 for test in barcode_tests:
                     test_id = test.get('test_id')
-                    
                     if not test_id:
                         continue
                     
-                    # Get sample status for this test_id
                     sample_data = sample_by_id.get(test_id, {})
-                    
-                    # Skip if sample status is "Outsource"
                     if sample_data.get('samplestatus') == 'Outsource':
                         continue
                     
-                    # Get test master data
                     test_master = test_master_dict.get(test_id, {})
-                    
                     if not test_master:
                         continue
                     
-                    # Get expected TAT
                     expected_tat_display = (
                         test_master.get("TAT_Time")
                         or test_master.get("tat_time")
                         or (f"{test_master.get('TAT_hours')}H" if test_master.get("TAT_hours") else "N/A")
                     )
-                    
                     expected_tat_seconds = self.parse_tat_format(expected_tat_display)
                     
-                    # Get timestamps and convert to ISO format
                     approval_time = convert_to_iso_if_needed(
                         testvalue_by_id.get(test_id, {}).get("approve_time")
                     )
-                    
                     dispatch_time = convert_to_iso_if_needed(
                         testvalue_by_id.get(test_id, {}).get("dispatch_time")
                     )
-                    
                     collected_time = convert_to_iso_if_needed(
                         sample_data.get("samplecollected_time")
                     )
-                    
                     received_time = convert_to_iso_if_needed(
                         sample_data.get("received_time")
                     )
                     
-                    # -------- ACTUAL TAT (approval_time - registered_time) --------
                     tat_time = "pending"
                     tat_seconds = None
-                    
                     if collected_time and approval_time not in ["pending", "null", None]:
                         try:
                             col_dt = datetime.fromisoformat(collected_time.replace('Z', '+00:00'))
@@ -935,11 +990,8 @@ class HMSConsolidatedDataView(APIView):
                             tat_time = str(timedelta(seconds=tat_seconds))
                         except:
                             tat_time = "pending"
-                    
-                    # -------- TOTAL PROCESSING TIME (dispatch_time - collected_time) --------
+                            
                     total_processing_time = "pending"
-                    total_seconds = None
-                    
                     if registered_time not in ["pending", "null", None] and dispatch_time not in ["pending", "null", None]:
                         try:
                             reg_dt = datetime.fromisoformat(registered_time.replace('Z', '+00:00'))
@@ -949,11 +1001,9 @@ class HMSConsolidatedDataView(APIView):
                             total_processing_time = str(timedelta(seconds=total_seconds))
                         except:
                             total_processing_time = "pending"
-                    
-                    # -------- TAT Overage (using total_processing_time) --------
+                            
                     tat_out_time = None
                     tat_status = "pending"
-                    
                     if tat_seconds is not None and expected_tat_seconds:
                         if tat_seconds > expected_tat_seconds:
                             over = tat_seconds - expected_tat_seconds
@@ -961,15 +1011,15 @@ class HMSConsolidatedDataView(APIView):
                             tat_status = "exceeded"
                         else:
                             tat_status = "within_limit"
-                    
+                            
                     response_data.append({
-                        "patient_id": barcode_record.patient_id or '',
-                        "patient_name": barcode_record.patientname or '',
-                        "age": barcode_record.age or 0,
-                        "gender": barcode_record.gender or '',
-                        "phone": getattr(barcode_record, 'phone', '') or '',
-                        "ref_doctor": barcode_record.ref_doctor or '',
-                        "date": registered_time,
+                        "patient_id": patient_id,
+                        "patient_name": patient_name,
+                        "age": age,
+                        "gender": gender,
+                        "phone": phone,
+                        "ref_doctor": ref_doctor,
+                        "date": registered_time or sample_data.get("samplecollected_time") or (convert_to_iso_if_needed(str(sample_obj.date)) if sample_obj else None),
                         "registered_time": registered_time,
                         "barcode": barcode,
                         "test_id": test_id,
@@ -986,7 +1036,6 @@ class HMSConsolidatedDataView(APIView):
                         "total_processing_time": total_processing_time
                     })
                 
-                # Mark this barcode as processed
                 processed_barcodes.add(barcode)
             
             return Response({
