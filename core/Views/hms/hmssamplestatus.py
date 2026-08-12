@@ -683,300 +683,155 @@ def hms_check_sample_status(request, barcode):
             return JsonResponse({'error': str(e)}, status=400)
 
 
-@api_view(['POST'])
-@csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
-def send_tat_whatsapp(request):
-    """
-    Sends WhatsApp notification using template 'sh_sample_collection_tat' for sample collection TAT,
-    and logs the result in a separate MongoDB collection 'sample_TAT_comm_log' and Django CommunicationLog.
-    """
-    try:
-        if hasattr(request, 'data'):
-            data = request.data
-        else:
-            data = json.loads(request.body)
+# @api_view(['GET', 'POST'])
+# @csrf_exempt
+# # @permission_classes([HasRoleAndDataPermission])
+# def get_sample_tat_comm_logs(request):
+#     """
+#     Fetches communication log entries specifically from the 'sample_TAT_comm_log' MongoDB collection.
+#     """
+#     try:
+#         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+#         db = client["Diagnostics"]
+#         tat_comm_log = db["sample_TAT_comm_log"]
 
-        patient_name = data.get('patient_name', 'Valued Patient')
-        phone = str(data.get('phone', '')).strip()
-        patient_id = data.get('patient_id', '')
-
-        if not phone:
-            return JsonResponse({'success': False, 'error': 'Missing phone number'}, status=400)
-
-        # Sanitize phone number (strip + and ensure 91 prefix)
-        if phone.startswith('+'):
-            phone = phone[1:]
-        if not phone.startswith('91'):
-            phone = f"91{phone}"
-
-        template_name = data.get('template_name', 'sh_tat_sample_final')
-        template_data = data.get('template_data', [patient_name, ""])
-
-        payload = {
-            "to": phone,
-            "type": "template",
-            "templateName": template_name,
-            "templateData": template_data,
-            "category": "UTILITY"
-        }
-        headers = {
-            "Authorization": "Bearer btfy_aa1b818c6473403a74cce7c913007df4af197c22ee4ae0c12019e5f408d93b70",
-            "Content-Type": "application/json"
-        }
-
-        botify_url = "https://login.botify.in/api/whatsapp/external"
-        r = requests.post(botify_url, headers=headers, json=payload, timeout=20)
-
-        try:
-            response_json = r.json()
-            is_success = r.status_code in [200, 201]
-        except ValueError:
-            response_json = {}
-            is_success = r.status_code in [200, 201]
-
-        status = "Success" if is_success else "Failed"
-
-        # Log strictly in separate MongoDB collection 'sample_TAT_comm_log'
-        try:
-            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-            db = client["Diagnostics"]
-            tat_comm_log = db["sample_TAT_comm_log"]
-            tat_comm_log.insert_one({
-                "barcode": data.get('barcode', ''),
-                "patient_id": patient_id,
-                "patient_name": patient_name,
-                "type": "WhatsApp",
-                "recipient": phone,
-                "template_name": template_name,
-                "template_data": template_data,
-                "status": status,
-                "details": f"Template: {template_name} | Response: {r.text}",
-                "created_date": datetime.now().isoformat()
-            })
-        except Exception as mongo_err:
-            print(f"Error saving to sample_TAT_comm_log: {mongo_err}")
-
-        if is_success:
-            return JsonResponse({"success": True, "data": response_json})
-        return JsonResponse({"success": False, "error": r.text}, status=400)
-
-    except Exception as e:
-        status = "Failed"
-        details = str(e)
-        try:
-            data = request.data if hasattr(request, 'data') else {}
-            # Log failure in MongoDB sample_TAT_comm_log
-            try:
-                client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-                db = client["Diagnostics"]
-                tat_comm_log = db["sample_TAT_comm_log"]
-                tat_comm_log.insert_one({
-                    "barcode": data.get('barcode', ''),
-                    "patient_id": data.get('patient_id', ''),
-                    "patient_name": data.get('patient_name', ''),
-                    "type": "WhatsApp",
-                    "recipient": str(data.get('phone', '')),
-                    "status": status,
-                    "details": details,
-                    "created_date": datetime.now().isoformat()
-                })
-            except Exception:
-                pass
-        except Exception:
-            pass
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
+#         logs = list(tat_comm_log.find({}, {"_id": 0}).sort("created_date", -1))
+#         return JsonResponse({"success": True, "data": logs})
+#     except Exception as e:
+#         return JsonResponse({"success": False, "error": str(e)}, status=500)
 
 
-@api_view(['GET', 'POST'])
-@csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
-def get_sample_tat_comm_logs(request):
-    """
-    Fetches communication log entries specifically from the 'sample_TAT_comm_log' MongoDB collection.
-    """
-    try:
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-        db = client["Diagnostics"]
-        tat_comm_log = db["sample_TAT_comm_log"]
-
-        logs = list(tat_comm_log.find({}, {"_id": 0}).sort("created_date", -1))
-        return JsonResponse({"success": True, "data": logs})
-    except Exception as e:
-        return JsonResponse({"success": False, "error": str(e)}, status=500)
-
-
-def parse_tat_to_minutes(tat_str):
-    if not tat_str or tat_str == 'N/A':
-        return 0
-    total_minutes = 0
-    s = str(tat_str).upper()
-
-    days = re.search(r'(\d+)\s*D', s)
-    hours = re.search(r'(\d+)\s*H', s)
-    mins = re.search(r'(\d+)\s*M', s)
-
-    if days:
-        total_minutes += int(days.group(1)) * 1440
-    if hours:
-        total_minutes += int(hours.group(1)) * 60
-    if mins:
-        total_minutes += int(mins.group(1))
-
-    if not days and not hours and not mins:
-        pure_num = re.search(r'(\d+)', s)
-        if pure_num:
-            if "DAY" in s:
-                total_minutes += int(pure_num.group(1)) * 1440
-            elif "MIN" in s:
-                total_minutes += int(pure_num.group(1))
-            else:
-                total_minutes += int(pure_num.group(1)) * 60
-
-    return total_minutes
+# def parse_to_datetime(dt_or_str):
+#     if not dt_or_str or dt_or_str == 'N/A':
+#         return None
+#     if isinstance(dt_or_str, datetime):
+#         return dt_or_str
+#     if isinstance(dt_or_str, str):
+#         s = dt_or_str.split('.')[0]
+#         for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y %H:%M'):
+#             try:
+#                 return datetime.strptime(s, fmt)
+#             except ValueError:
+#                 pass
+#         try:
+#             return datetime.fromisoformat(s.replace('Z', '+00:00'))
+#         except Exception:
+#             pass
+#     return None
 
 
-def parse_to_datetime(dt_or_str):
-    if not dt_or_str or dt_or_str == 'N/A':
-        return None
-    if isinstance(dt_or_str, datetime):
-        return dt_or_str
-    if isinstance(dt_or_str, str):
-        s = dt_or_str.split('.')[0]
-        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%d-%m-%Y %H:%M:%S', '%d-%m-%Y %H:%M'):
-            try:
-                return datetime.strptime(s, fmt)
-            except ValueError:
-                pass
-        try:
-            return datetime.fromisoformat(s.replace('Z', '+00:00'))
-        except Exception:
-            pass
-    return None
+# def format_12hr(dt_obj, include_date=True):
+#     if not dt_obj:
+#         return 'N/A'
+#     if include_date:
+#         return dt_obj.strftime('%d-%m-%Y %I:%M %p')
+#     return dt_obj.strftime('%I:%M %p')
 
 
-def format_12hr(dt_obj, include_date=True):
-    if not dt_obj:
-        return 'N/A'
-    if include_date:
-        return dt_obj.strftime('%d-%m-%Y %I:%M %p')
-    return dt_obj.strftime('%I:%M %p')
+# def trigger_tat_whatsapp_notification(barcode, testdetails):
+#     """
+#     Sends WhatsApp notification using 'sh_sample_collection_tat' template
+#     and stores communication log in MongoDB collection 'sample_TAT_comm_log'.
+#     """
+#     try:
+#         # Retrieve patient information from Hmsbarcode
+#         hms_patient = Hmsbarcode.objects.filter(barcode=barcode).first()
+#         patient_id = hms_patient.patient_id if hms_patient else ""
+#         patient_name = hms_patient.patientname if hms_patient else "Valued Patient"
+#         phone = getattr(hms_patient, 'phone', '') if hms_patient else ""
 
+#         if not phone:
+#             print(f"[TAT WA] No phone number found for barcode {barcode}, skipping notification.")
+#             return
 
-def calculate_approx_report_dt(dt_obj, tat_str):
-    try:
-        minutes = parse_tat_to_minutes(tat_str)
-        if not minutes or not dt_obj:
-            return dt_obj
-        return dt_obj + timedelta(minutes=minutes)
-    except Exception:
-        return dt_obj
+#         phone_clean = str(phone).strip()
+#         if phone_clean.startswith('+'):
+#             phone_clean = phone_clean[1:]
+#         if not phone_clean.startswith('91'):
+#             phone_clean = f"91{phone_clean}"
 
+#         collected_tests = []
+#         for t in testdetails:
+#             if isinstance(t, dict) and t.get('samplestatus') == 'Sample Collected':
+#                 collected_tests.append(t)
 
-def trigger_tat_whatsapp_notification(barcode, testdetails):
-    """
-    Sends WhatsApp notification using 'sh_sample_collection_tat' template
-    and stores communication log in MongoDB collection 'sample_TAT_comm_log'.
-    """
-    try:
-        # Retrieve patient information from Hmsbarcode
-        hms_patient = Hmsbarcode.objects.filter(barcode=barcode).first()
-        patient_id = hms_patient.patient_id if hms_patient else ""
-        patient_name = hms_patient.patientname if hms_patient else "Valued Patient"
-        phone = getattr(hms_patient, 'phone', '') if hms_patient else ""
+#         if not collected_tests:
+#             return
 
-        if not phone:
-            print(f"[TAT WA] No phone number found for barcode {barcode}, skipping notification.")
-            return
+#         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+#         db = client["Diagnostics"]
+#         test_details_coll = db.core_testdetails
 
-        phone_clean = str(phone).strip()
-        if phone_clean.startswith('+'):
-            phone_clean = phone_clean[1:]
-        if not phone_clean.startswith('91'):
-            phone_clean = f"91{phone_clean}"
+#         # Get common collection time
+#         first_coll_time_raw = collected_tests[0].get('samplecollected_time') or datetime.now()
+#         common_coll_dt = parse_to_datetime(first_coll_time_raw) or datetime.now()
+#         common_coll_display = format_12hr(common_coll_dt, include_date=True)
 
-        collected_tests = []
-        for t in testdetails:
-            if isinstance(t, dict) and t.get('samplestatus') == 'Sample Collected':
-                collected_tests.append(t)
+#         formatted_lines = []
+#         for idx, t in enumerate(collected_tests, 1):
+#             t_id = t.get('test_id')
+#             t_name = "N/A"
+#             tat_str = ""
 
-        if not collected_tests:
-            return
+#             if t_id:
+#                 t_query = {"test_id": t_id}
+#                 if isinstance(t_id, str) and t_id.isdigit():
+#                     t_query = {"$or": [{"test_id": t_id}, {"test_id": int(t_id)}]}
+#                 elif isinstance(t_id, int):
+#                     t_query = {"$or": [{"test_id": t_id}, {"test_id": str(t_id)}]}
 
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-        db = client["Diagnostics"]
-        test_details_coll = db.core_testdetails
+#                 td_doc = test_details_coll.find_one(t_query, {"_id": 0, "test_name": 1, "TAT_Time": 1, "tat_time": 1})
+#                 if td_doc:
+#                     t_name = td_doc.get('test_name', 'N/A')
+#                     tat_str = td_doc.get('TAT_Time') or td_doc.get('tat_time') or ''
 
-        # Get common collection time
-        first_coll_time_raw = collected_tests[0].get('samplecollected_time') or datetime.now()
-        common_coll_dt = parse_to_datetime(first_coll_time_raw) or datetime.now()
-        common_coll_display = format_12hr(common_coll_dt, include_date=True)
+#             tat_display = tat_str if tat_str else "N/A"
+#             formatted_lines.append(f"{idx}. {t_name} (TAT: {tat_display})")
 
-        formatted_lines = []
-        for idx, t in enumerate(collected_tests, 1):
-            t_id = t.get('test_id')
-            t_name = "N/A"
-            tat_str = ""
+#         formatted_tests_str = " | ".join(formatted_lines)
+#         template_name = "sh_tat_sample_final"
+#         template_data = [
+#             patient_name,
+#             str(patient_id or ""),
+#             common_coll_display,
+#             formatted_tests_str
+#         ]
 
-            if t_id:
-                t_query = {"test_id": t_id}
-                if isinstance(t_id, str) and t_id.isdigit():
-                    t_query = {"$or": [{"test_id": t_id}, {"test_id": int(t_id)}]}
-                elif isinstance(t_id, int):
-                    t_query = {"$or": [{"test_id": t_id}, {"test_id": str(t_id)}]}
+#         payload = {
+#             "to": phone_clean,
+#             "type": "template",
+#             "templateName": template_name,
+#             "templateData": template_data,
+#             "category": "UTILITY"
+#         }
+#         headers = {
+#             "Authorization": "Bearer btfy_aa1b818c6473403a74cce7c913007df4af197c22ee4ae0c12019e5f408d93b70",
+#             "Content-Type": "application/json"
+#         }
 
-                td_doc = test_details_coll.find_one(t_query, {"_id": 0, "test_name": 1, "TAT_Time": 1, "tat_time": 1})
-                if td_doc:
-                    t_name = td_doc.get('test_name', 'N/A')
-                    tat_str = td_doc.get('TAT_Time') or td_doc.get('tat_time') or ''
+#         botify_url = "https://login.botify.in/api/whatsapp/external"
+#         r = requests.post(botify_url, headers=headers, json=payload, timeout=20)
 
-            tat_display = tat_str if tat_str else "N/A"
-            formatted_lines.append(f"{idx}. {t_name} (TAT: {tat_display})")
+#         is_success = r.status_code in [200, 201]
+#         status = "Success" if is_success else "Failed"
 
-        formatted_tests_str = " | ".join(formatted_lines)
-        template_name = "sh_tat_sample_final"
-        template_data = [
-            patient_name,
-            str(patient_id or ""),
-            common_coll_display,
-            formatted_tests_str
-        ]
+#         # Log strictly in separate MongoDB collection 'sample_TAT_comm_log'
+#         try:
+#             tat_comm_log = db["sample_TAT_comm_log"]
+#             tat_comm_log.insert_one({
+#                 "barcode": barcode,
+#                 "patient_id": patient_id,
+#                 "patient_name": patient_name,
+#                 "type": "WhatsApp",
+#                 "recipient": phone_clean,
+#                 "template_name": template_name,
+#                 "template_data": template_data,
+#                 "status": status,
+#                 "details": f"Template: {template_name} | Response: {r.text}",
+#                 "created_date": datetime.now().isoformat()
+#             })
+#         except Exception as mongo_err:
+#             print(f"Error saving to sample_TAT_comm_log: {mongo_err}")
 
-        payload = {
-            "to": phone_clean,
-            "type": "template",
-            "templateName": template_name,
-            "templateData": template_data,
-            "category": "UTILITY"
-        }
-        headers = {
-            "Authorization": "Bearer btfy_aa1b818c6473403a74cce7c913007df4af197c22ee4ae0c12019e5f408d93b70",
-            "Content-Type": "application/json"
-        }
-
-        botify_url = "https://login.botify.in/api/whatsapp/external"
-        r = requests.post(botify_url, headers=headers, json=payload, timeout=20)
-
-        is_success = r.status_code in [200, 201]
-        status = "Success" if is_success else "Failed"
-
-        # Log strictly in separate MongoDB collection 'sample_TAT_comm_log'
-        try:
-            tat_comm_log = db["sample_TAT_comm_log"]
-            tat_comm_log.insert_one({
-                "barcode": barcode,
-                "patient_id": patient_id,
-                "patient_name": patient_name,
-                "type": "WhatsApp",
-                "recipient": phone_clean,
-                "template_name": template_name,
-                "template_data": template_data,
-                "status": status,
-                "details": f"Template: {template_name} | Response: {r.text}",
-                "created_date": datetime.now().isoformat()
-            })
-        except Exception as mongo_err:
-            print(f"Error saving to sample_TAT_comm_log: {mongo_err}")
-
-    except Exception as e:
-        print(f"Error in trigger_tat_whatsapp_notification: {e}")
+#     except Exception as e:
+#         print(f"Error in trigger_tat_whatsapp_notification: {e}")
