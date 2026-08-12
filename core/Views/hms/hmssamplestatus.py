@@ -710,7 +710,7 @@ def send_tat_whatsapp(request):
         if not phone.startswith('91'):
             phone = f"91{phone}"
 
-        template_name = data.get('template_name', 'sh_tat_sample_collection')
+        template_name = data.get('template_name', 'sh_tat_sample_final')
         template_data = data.get('template_data', [patient_name, ""])
 
         payload = {
@@ -931,10 +931,10 @@ def trigger_tat_whatsapp_notification(barcode, testdetails):
                     tat_str = td_doc.get('TAT_Time') or td_doc.get('tat_time') or ''
 
             tat_display = tat_str if tat_str else "N/A"
-            formatted_lines.append(f"{idx}. {t_name} (Report: {tat_display})")
+            formatted_lines.append(f"{idx}. {t_name} (TAT: {tat_display})")
 
         formatted_tests_str = " | ".join(formatted_lines)
-        template_name = "sh_tat_sample_collection"
+        template_name = "sh_tat_sample_final"
         template_data = [
             patient_name,
             str(patient_id or ""),
