@@ -262,6 +262,33 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/get_clinicalpatient_test_details/?(\?.*)?$':'SD-P-CPT',
     r'^/_b_a_c_k_e_n_d/LIS/clinical_hospital_ledger/?(\?.*)?$':'SD-P-CHL',
 
+    # Franchise Enrollment & Management
+    r'^/_b_a_c_k_e_n_d/LIS/franchiseregister/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/franchise/reset-password/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/franchise/validate-token/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/reset-password/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/validate-token/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/toggle-franchise-status/[^/]+/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/getlocations/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/getactivelocations/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/get-franchise/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/get-file/[^/]+/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/updatestatus/[^/]+/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/get-franchise-edit/[^/]+/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/update-franchise/[^/]+/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/getnextfranchiseid/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/getfranchise/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/stockbarcode/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/inactive-franchises/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/resend-password-reset/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/bulk-resend-password-reset/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/cancel-requested/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/update-test-status/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/update_cancel_status/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/monthend/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/post_loaction/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/getandupdatebarcode/?(\?.*)?$': 'FE-API-FRM',
+    '/_b_a_c_k_e_n_d/LIS/savebarcode/': 'FE-API-FRM',
 }
 
 PAGE_ACTION_MAPPING = {

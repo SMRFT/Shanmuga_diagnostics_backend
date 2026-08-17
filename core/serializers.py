@@ -203,5 +203,47 @@ class SalesPlanSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 
+from .models import FranchiseLocation
+class FranchiseLocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FranchiseLocation
+        fields = [
+            'location_id', 'Cluster_Name', 'District', 'Covered_Areas',
+            'is_active', 'created_by', 'created_date',
+            'lastmodified_by', 'lastmodified_date',
+        ]
+        read_only_fields = [
+            'location_id', 'created_by', 'created_date',
+            'lastmodified_by', 'lastmodified_date',
+        ]
+
+    def validate_Cluster_Name(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("Cluster_Name cannot be blank.")
+        return value.strip()
+
+    def validate_District(self, value):
+        if not value.strip():
+            raise serializers.ValidationError("District cannot be blank.")
+        return value.strip()
+
+
+
+from .models import barcodestock
+class BarcodestockSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = barcodestock
+        fields = [
+            'barcode_id',
+            'startbarcode',
+            'endbarcode',
+            'date',
+            'createddate',
+            'createdby',
+            'modifedby',
+            'modifieddatetime',
+        ]
+
+
 
 

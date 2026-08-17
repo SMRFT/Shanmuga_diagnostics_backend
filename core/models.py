@@ -576,7 +576,96 @@ class SalesPlan(AuditModel):
             self.sales_plan_id = (last_id + 1) if last_id else 1
         super().save(*args, **kwargs)
 
+# =============================================================================
+# Franchise Entrollment
+# =============================================================================
+
+class Franchise(AuditModel):
+    PAYMENT_MODE_CHOICES = [
+        ('cash', 'Cash'),
+        ('upi', 'UPI'),
+    ]
+
+    franchise_id = models.CharField(max_length=100, primary_key=True)
+    franchise_name = models.CharField(max_length=100)
+    location_id = models.CharField(max_length=100)
+    contact_no = models.CharField(max_length=15)
+    email = models.EmailField()
+    alt_number = models.CharField(max_length=15, blank=True, null=True)
+    address = models.TextField()
+    qualification = models.CharField(max_length=100)
+    age = models.IntegerField()
+    gender = models.CharField(max_length=10)
+    pincode = models.CharField(max_length=10)
+    dob = models.DateField(null=True, blank=True)
+    initialpayment = models.CharField(max_length=100)
+    is_active = models.BooleanField(default=False)
+
+   
+    aadhaar_file_id = models.CharField(max_length=100, blank=True, null=True)
+    pan_file_id = models.CharField(max_length=100, blank=True, null=True)
+    payment_file_id = models.CharField(max_length=100, blank=True, null=True)
+    agreement_file_id = models.CharField(max_length=100, blank=True, null=True)
+    franchise_photo_file_id = models.CharField(max_length=100, blank=True, null=True)
+
+    def __str__(self):
+        return self.franchise_name
 
 
 
+class FranchiseLocation(models.Model):
+    location_id = models.CharField(max_length=20, unique=True, blank=True)
+    Cluster_Name = models.CharField(max_length=200)
+    District = models.CharField(max_length=200)
+    Covered_Areas = models.CharField(max_length=500, blank=True, default='')
+    is_active = models.BooleanField(default=True)
+    created_by = models.CharField(max_length=50)
+    created_date = models.DateTimeField(auto_now_add=True)
+    lastmodified_by = models.CharField(max_length=50, blank=True, null=True)
+    lastmodified_date = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        managed = False
+        app_label = 'core'
+
+    def __str__(self):
+        return f"{self.location_id} - {self.Cluster_Name}"
+
+    def to_mongo_dict(self):
+        return {
+            "Cluster_Name": self.Cluster_Name,
+            "District": self.District,
+            "Covered_Areas": self.Covered_Areas,
+            "is_active": self.is_active,
+            "created_by": self.created_by,
+            "created_date": self.created_date,
+            "lastmodified_by": self.lastmodified_by,
+            "lastmodified_date": self.lastmodified_date,
+            "location_id": self.location_id,
+        }
+
+
+
+class barcodestock(models.Model):
+    barcode_id = models.CharField(max_length=100, unique=True, blank=True)
+    startbarcode = models.CharField(max_length=100)
+    endbarcode = models.CharField(max_length=100)
+    date = models.DateTimeField(auto_now_add=True)
+    createddate = models.DateTimeField(auto_now_add=True)
+    createdby = models.CharField(max_length=100)
+    modifedby = models.CharField(max_length=100, null=True, blank=True, default='')
+    modifieddatetime = models.DateTimeField(null=True, blank=True)
+
+    def save(self, *args, **kwargs):
+        if not self.barcode_id:
+            last_obj = barcodestock.objects.order_by('-createddate').first()
+            if last_obj and last_obj.barcode_id:
+                try:
+                    last_number = int(last_obj.barcode_id.replace("BC", ""))
+                    next_number = last_number + 1
+                except:
+                    next_number = 1
+            else:
+                next_number = 1
+            self.barcode_id = f"BC{next_number:05d}"
+        super().save(*args, **kwargs)
