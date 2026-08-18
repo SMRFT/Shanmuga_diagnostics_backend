@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology,expo_notifications
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology,franchiseentrollment, expo_notifications
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
@@ -182,7 +182,7 @@ urlpatterns = [
     path('refund_cancellation_logs/', logs_api, name='refund_cancellation_logs'),
     path('patient-get/', patients.patient_get, name='patient_get'),
     path("upload-pdf/", whatsapp.upload_pdf_to_gridfs, name="upload_pdf"),
-    path("get-file/<str:file_id>/", whatsapp.get_pdf_from_gridfs, name="get_pdf"),
+    path("whatsapp-get-file/<str:file_id>/", whatsapp.get_pdf_from_gridfs, name="whatsapp_get_pdf"),
     path("send-whatsapp/", whatsapp.send_whatsapp, name="send_whatsapp"),
     path('get_patientsbyb2b/', patients.get_patientsbyb2b, name='get_patients'),
     path('patient_overview/', patients.patient_overview, name='patient_overview'),
@@ -290,8 +290,31 @@ urlpatterns = [
     
     path("test-summary/", dashboard.test_summary, name="test-summary"),
 
-   
-
+    # Franchise Enrollment & Management URLs
+    path('franchiseregister/', franchiseentrollment.register_franchise, name='register_franchise'),
+    path('franchise/reset-password/', franchiseentrollment.reset_franchise_password, name='reset_franchise_password'),
+    path('franchise/validate-token/', franchiseentrollment.validate_reset_token, name='validate_reset_token'),
+    path('toggle-franchise-status/<str:franchise_id>/', franchiseentrollment.toggle_franchise_status, name='toggle_franchise_status'),
+    path('getlocations/', franchiseentrollment.get_all_franchise_locations, name='get_all_franchise_locations'),
+    path('getactivelocations/', franchiseentrollment.get_inactive_franchise_locations, name='get_inactive_franchise_locations'),
+    path('get-franchise/', franchiseentrollment.get_registered_franchise, name='get_registered_franchise'),
+    path('get-file/<str:file_id>/', franchiseentrollment.get_file, name='get_file'),
+    path('updatestatus/<str:location_id>/', franchiseentrollment.update_franchise_status, name='update_franchise_status'),
+    path('get-franchise-edit/<str:franchise_id>/', franchiseentrollment.get_franchise, name='get_franchise'),
+    path('update-franchise/<str:franchise_id>/', franchiseentrollment.update_franchise, name='update_franchise'),
+    path('getnextfranchiseid/', franchiseentrollment.generate_next_franchise_id, name='generate_next_franchise_id'),
+    path('getfranchise/', franchiseentrollment.get_franchises, name='get_franchises'),
+    path('stockbarcode/', franchiseentrollment.savestockbarcode, name='savestockbarcode'),
+    path('inactive-franchises/', franchiseentrollment.inactive_franchises, name='inactive_franchises'),
+    path('resend-password-reset/', franchiseentrollment.resend_password_reset_email, name='resend_password_reset'),
+    path('bulk-resend-password-reset/', franchiseentrollment.bulk_resend_password_reset_emails, name='bulk_resend_password_reset'),
+    path('cancel-requested/', franchiseentrollment.get_cancel_requested_tests, name='cancel_requested'),
+    path('update-test-status/', franchiseentrollment.update_test_status, name='update_test_status'),
+    path('update_cancel_status/', franchiseentrollment.update_cancel_status, name='update_cancel_status'),
+    path('monthend/', franchiseentrollment.month_end_calculation, name='month_end_calculation'),
+    path('post_loaction/', franchiseentrollment.post_location, name='post_loaction'),
+    path('getandupdatebarcode/', franchiseentrollment.getandupdatebarcode, name='getandupdatebarcode'),
+    path('savebarcode/', franchiseentrollment.savestockbarcode, name='savebarcode'),
 ]
 
 
