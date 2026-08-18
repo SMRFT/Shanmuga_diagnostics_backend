@@ -39,6 +39,7 @@ urlpatterns = [
     path("appointments/<int:appointment_id>/cancel/", patients.cancel_appointment, name="cancel_appointment"),
     path('get_clinicalname/', clinicalname.get_clinicalname, name='get_clinicalname'),
     path('b2b_packages/', clinicalname.b2b_packages, name='b2b_packages'),
+    
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
     path('get-max-barcode/', barcode.get_max_barcode, name='get_max_barcode'),
