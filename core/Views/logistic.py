@@ -1578,6 +1578,52 @@ def _has_full_access(employee_id):
     return bool(FULL_ACCESS_ROLES.intersection(employee_roles))
 
 
+def _enrich_complaints_with_names(complaints_data):
+    """Enriches complaint items with employeeName for created_by and assignedto from profile_collection."""
+    if not complaints_data:
+        return complaints_data
+
+    is_list = isinstance(complaints_data, list)
+    items = complaints_data if is_list else [complaints_data]
+
+    emp_ids = set()
+    for item in items:
+        cb = str(item.get("created_by") or "").strip()
+        at = str(item.get("assignedto") or item.get("assignedby") or "").strip()
+        if cb:
+            emp_ids.add(cb)
+        if at:
+            emp_ids.add(at)
+
+    emp_name_map = {}
+    if emp_ids:
+        try:
+            profiles = list(profile_collection.find(
+                {"employeeId": {"$in": list(emp_ids)}},
+                {"employeeId": 1, "employeeName": 1, "_id": 0}
+            ))
+            for p in profiles:
+                eid = str(p.get("employeeId") or "").strip()
+                ename = p.get("employeeName") or eid
+                if eid:
+                    emp_name_map[eid] = ename
+        except Exception as e:
+            print("Error fetching employee names in _enrich_complaints_with_names:", e)
+
+    enriched = []
+    for item in items:
+        d = dict(item)
+        cb = str(d.get("created_by") or "").strip()
+        at = str(d.get("assignedto") or d.get("assignedby") or "").strip()
+        d["assignedto"] = at
+        d["created_by_name"] = emp_name_map.get(cb, cb)
+        d["assignedto_name"] = emp_name_map.get(at, at)
+        d["assigned_to_name"] = emp_name_map.get(at, at)
+        enriched.append(d)
+
+    return enriched if is_list else enriched[0]
+
+
 @api_view(['GET', 'POST', 'PATCH'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
@@ -1661,7 +1707,7 @@ def customer_complaints(request):
                     )
 
             serializer = CustomerComplaintSerializer(queryset, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
+            return Response(_enrich_complaints_with_names(serializer.data), status=status.HTTP_200_OK)
 
         # ===================== POST =====================
         elif request.method == "POST":
@@ -1689,13 +1735,15 @@ def customer_complaints(request):
             data["completion_comments"] = None
             data["created_by"] = str(employee_id)
             data["lastmodified_by"] = str(employee_id)
+            if "assignedby" in data and "assignedto" not in data:
+                data["assignedto"] = data.pop("assignedby")
 
             serializer = CustomerComplaintSerializer(data=data)
 
             if serializer.is_valid():
                 serializer.save()
                 return Response(
-                    serializer.data,
+                    _enrich_complaints_with_names(serializer.data),
                     status=status.HTTP_201_CREATED,
                 )
 
@@ -1752,7 +1800,7 @@ def customer_complaints(request):
             serializer = CustomerComplaintSerializer(complaint)
 
             return Response(
-                serializer.data,
+                _enrich_complaints_with_names(serializer.data),
                 status=status.HTTP_200_OK,
             )
 
