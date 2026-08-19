@@ -8,7 +8,7 @@ from django.db.models import Q, Count, Case, When, IntegerField
 from pymongo import MongoClient
 import certifi
 from gridfs import GridFS
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from django.core.files.storage import default_storage
 from pymongo import MongoClient
 import certifi
@@ -17,7 +17,7 @@ from gridfs import GridFS
 from collections import defaultdict
 from core.utils import get_employee_name
 
-from ..models import Logistics, Billing, CustomerComplaint
+from ..models import Logistics, Billing, CustomerComplaint, CustomercomplaintsQRScan
 from ..serializers import LogisticsSerializer, BillingSerializer,CustomerComplaintSerializer
 
 
@@ -1563,7 +1563,7 @@ from django.utils import timezone
 
 from .dbcollection import profile_collection
 
-FULL_ACCESS_ROLES = {"SD-R-GM", "SD-R-MAVP","SD-R-DOC"}
+FULL_ACCESS_ROLES = {"SD-R-DOC","SD-R-GM", "SD-R-MAVP"}
 
 
 def _has_full_access(employee_id):
@@ -1605,7 +1605,7 @@ def customer_complaints(request):
             request.headers.get("auth-user-id")
             or request.data.get("auth-user-id")
         )
-
+        print("employee_id",employee_id)
         if not employee_id:
             return Response(
                 {"error": "auth-user-id is required"},
@@ -1761,3 +1761,107 @@ def customer_complaints(request):
             {"error": str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@api_view(['GET', 'POST'])
+@csrf_exempt
+def customer_complaints_qr_scan(request):
+    """
+    Public QR Feedback & Grievance endpoint.
+    Only stores and retrieves:
+    1. labname (Lab Name)
+    2. patient_id (Patient ID - optional)
+    3. issuetype (Issue Type)
+    4. comments (Comments / Grievance Details)
+    5. created_date (Auto stored timestamp)
+    """
+    try:
+        if request.method == "POST":
+            labname = request.data.get("labname") or request.data.get("labcode")
+            issuetype = request.data.get("issuetype")
+            comments = request.data.get("comments")
+            patient_id = request.data.get("patient_id")
+
+            if not labname or not issuetype or not comments:
+                return Response(
+                    {"error": "Lab name, issue type, and comments are required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            entry = CustomercomplaintsQRScan.objects.create(
+                labname=str(labname).strip(),
+                patient_id=str(patient_id).strip() if patient_id and str(patient_id).strip() else None,
+                issuetype=str(issuetype).strip(),
+                comments=str(comments).strip(),
+            )
+
+            return Response(
+                {
+                    "message": "Feedback submitted successfully.",
+                    "complaint_id": entry.complaint_id,
+                },
+                status=status.HTTP_201_CREATED,
+            )
+
+        elif request.method == "GET":
+            from_date = request.GET.get("from_date")
+            to_date = request.GET.get("to_date")
+
+            queryset = CustomercomplaintsQRScan.objects.all().order_by("-complaint_id")
+
+            if from_date:
+                try:
+                    from_day = datetime.strptime(from_date, "%Y-%m-%d").date()
+                    start_dt = timezone.make_aware(
+                        datetime.combine(from_day, time.min)
+                    )
+                    queryset = queryset.filter(created_date__gte=start_dt)
+                except Exception:
+                    pass
+
+            if to_date:
+                try:
+                    to_day = datetime.strptime(to_date, "%Y-%m-%d").date()
+                    end_dt = timezone.make_aware(
+                        datetime.combine(
+                            to_day + timedelta(days=1),
+                            time.min,
+                        )
+                    )
+                    queryset = queryset.filter(created_date__lt=end_dt)
+                except Exception:
+                    pass
+
+            data = [
+                {
+                    "complaint_id": item.complaint_id,
+                    "created_date": item.created_date.strftime("%Y-%m-%d %H:%M:%S") if item.created_date else None,
+                    "labname": getattr(item, "labname", getattr(item, "labcode", "")),
+                    "patient_id": item.patient_id,
+                    "issuetype": item.issuetype,
+                    "comments": item.comments,
+                }
+                for item in queryset
+            ]
+            return Response(data, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        return Response(
+            {"error": str(e)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([AllowAny])
+def get_public_clinical_names(request):
+    """
+    Public lab names endpoint for QR Scan form autocomplete without auth.
+    """
+    try:
+        from core.models import ClinicalName
+        clinicals = ClinicalName.objects.all().values("clinicalname", "referrerCode")
+        return Response(list(clinicals), status=status.HTTP_200_OK)
+    except Exception:
+        return Response([], status=status.HTTP_200_OK)

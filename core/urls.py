@@ -112,6 +112,8 @@ urlpatterns = [
       # customer complaints:
     path("get_b2b_lab_employees/", logistic.get_b2b_lab_employees, name="get_b2b_lab_employees"),
     path("customer_complaints/", logistic.customer_complaints, name="customer_complaints"),
+    path("customer_complaints_qr_scan/", logistic.customer_complaints_qr_scan, name="customer_complaints_qr_scan"),
+    path("get_public_clinical_names/", logistic.get_public_clinical_names, name="get_public_clinical_names"),
 
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),

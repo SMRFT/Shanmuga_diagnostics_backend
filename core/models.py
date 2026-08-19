@@ -457,6 +457,27 @@ class CustomerComplaint(AuditModel):
 
     def __str__(self):
         return f"{self.labname} - {self.status}"
+
+
+class CustomercomplaintsQRScan(models.Model):
+    complaint_id = models.IntegerField(primary_key=True)
+    created_date = models.DateTimeField(auto_now_add=True)
+    labname = models.CharField(max_length=255)
+    patient_id = models.CharField(max_length=255, blank=True, null=True)
+    issuetype = models.CharField(max_length=255)
+    comments = models.TextField()
+
+    def save(self, *args, **kwargs):
+        if not self.complaint_id:
+            last = CustomercomplaintsQRScan.objects.order_by('-complaint_id').first()
+            if last:
+                self.complaint_id = last.complaint_id + 1
+            else:
+                self.complaint_id = 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"QR Feedback {self.complaint_id} - {self.labname}"
     
 
 
