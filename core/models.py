@@ -442,7 +442,7 @@ class CustomerComplaint(AuditModel):
     labcode  = models.CharField(max_length=255)
     issuetype = models.CharField(max_length=255)
     comments = models.TextField()
-    assignedby = models.CharField(max_length=255,blank=True, null=True)
+    assignedto = models.CharField(max_length=255,blank=True, null=True)
     completion_comments = models.TextField(blank=True, null=True)
     status = models.CharField(max_length=20, default="pending") 
    
@@ -456,7 +456,7 @@ class CustomerComplaint(AuditModel):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.labname} - {self.status}"
+        return f"{self.labcode} - {self.status}"
 
 
 class CustomercomplaintsQRScan(models.Model):
