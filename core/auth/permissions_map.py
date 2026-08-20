@@ -286,11 +286,14 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/bulk-resend-password-reset/?(\?.*)?$': 'FE-API-FRM',
     r'^/_b_a_c_k_e_n_d/LIS/cancel-requested/?(\?.*)?$': 'FE-API-FRM',
     r'^/_b_a_c_k_e_n_d/LIS/update-test-status/?(\?.*)?$': 'FE-API-FRM',
-    r'^/_b_a_c_k_e_n_d/LIS/update_cancel_status/?(\?.*)?$': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/cancelled-bill-report/?(\?.*)?$': 'FE-API-FRM',
     r'^/_b_a_c_k_e_n_d/LIS/monthend/?(\?.*)?$': 'FE-API-FRM',
     r'^/_b_a_c_k_e_n_d/LIS/post_loaction/?(\?.*)?$': 'FE-API-FRM',
     r'^/_b_a_c_k_e_n_d/LIS/getandupdatebarcode/?(\?.*)?$': 'FE-API-FRM',
     '/_b_a_c_k_e_n_d/LIS/savebarcode/': 'FE-API-FRM',
+     '/_b_a_c_k_e_n_d/LIS/get_cancel_requested_tests/': 'FE-API-FRM',
+    r'^/_b_a_c_k_e_n_d/LIS/franchise-home-collection/?(\?.*)?$': 'FE-API-FRM',
+   
 }
 
 PAGE_ACTION_MAPPING = {
