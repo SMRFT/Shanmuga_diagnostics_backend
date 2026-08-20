@@ -229,21 +229,16 @@ class FranchiseLocationSerializer(serializers.ModelSerializer):
 
 
 
-from .models import barcodestock
-class BarcodestockSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = barcodestock
-        fields = [
-            'barcode_id',
-            'startbarcode',
-            'endbarcode',
-            'date',
-            'createddate',
-            'createdby',
-            'modifedby',
-            'modifieddatetime',
-        ]
 
+
+from .models import FranchiseHomeCollection
+
+class FranchiseHomeCollectionSerializer(serializers.ModelSerializer):
+    id = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = FranchiseHomeCollection
+        fields = '__all__'
 
 
 

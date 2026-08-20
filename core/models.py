@@ -690,3 +690,25 @@ class barcodestock(models.Model):
                 next_number = 1
             self.barcode_id = f"BC{next_number:05d}"
         super().save(*args, **kwargs)
+
+
+
+
+
+class FranchiseHomeCollection(AuditModel):
+    patient_name = models.CharField(max_length=150)
+    address = models.TextField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    franchise_id = models.CharField(max_length=50)
+
+    status = models.CharField( max_length=50,default="Assigned")
+    date = models.DateTimeField(auto_now_add=True)
+
+    Remarks = models.TextField(blank=True, null=True)
+
+    accepted_by = models.CharField(max_length=50, blank=True, null=True)
+    sample_accepted_time = models.DateTimeField(blank=True, null=True)
+
+    
+    def __str__(self):
+        return f"{self.patient_name} - {self.franchise_id}"

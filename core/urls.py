@@ -313,11 +313,13 @@ urlpatterns = [
     path('bulk-resend-password-reset/', franchiseentrollment.bulk_resend_password_reset_emails, name='bulk_resend_password_reset'),
     path('cancel-requested/', franchiseentrollment.get_cancel_requested_tests, name='cancel_requested'),
     path('update-test-status/', franchiseentrollment.update_test_status, name='update_test_status'),
-    path('update_cancel_status/', franchiseentrollment.update_cancel_status, name='update_cancel_status'),
+    path('cancelled-bill-report/', franchiseentrollment.get_cancelled_bill_report, name='cancelled_bill_report'),
     path('monthend/', franchiseentrollment.month_end_calculation, name='month_end_calculation'),
     path('post_loaction/', franchiseentrollment.post_location, name='post_loaction'),
     path('getandupdatebarcode/', franchiseentrollment.getandupdatebarcode, name='getandupdatebarcode'),
     path('savebarcode/', franchiseentrollment.savestockbarcode, name='savebarcode'),
+    path('franchise-home-collection/', franchiseentrollment.franchise_home_collection_views, name='franchise_home_collection'),
+    path('franchise-home-collection/<str:collection_id>/', franchiseentrollment.update_franchise_home_collection, name='update_franchise_home_collection'),
 ]
 
 
