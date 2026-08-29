@@ -878,6 +878,18 @@ def salesplan_summary(request):
         )
         return sum(_to_float(p.total_revenue) for p in plans)
 
+    # Fetch working days per category
+    working_days_by_category = {}
+    for cat in all_categories:
+        plan = SalesPlan.objects.filter(month=month, year=year, category=cat).first()
+        if plan and plan.working_days:
+            try:
+                working_days_by_category[cat] = float(plan.working_days)
+            except (ValueError, TypeError):
+                working_days_by_category[cat] = month_adjusted_days
+        else:
+            working_days_by_category[cat] = month_adjusted_days
+
     # Day sets for plan lookups
     today_days = {report_day}
     wtd_days   = set(range(wtd_start_date.day, report_day + 1))
@@ -931,7 +943,8 @@ def salesplan_summary(request):
 
     for cat in all_categories:
         d = cat_data[cat]
-        trend = trending(d['mtd_actual'], adjusted_elapsed, month_adjusted_days)
+        cat_working_days = working_days_by_category.get(cat, month_adjusted_days)
+        trend = trending(d['mtd_actual'], adjusted_elapsed, cat_working_days)
         proj  = projection(trend, d['full_plan'])
         rows.append({
             'category':      cat,
@@ -951,7 +964,8 @@ def salesplan_summary(request):
             grand[k] += d[k]
 
     # Grand Total row
-    grand_trend = trending(grand['mtd_actual'], adjusted_elapsed, month_adjusted_days)
+    max_working_days = max(working_days_by_category.values()) if working_days_by_category else month_adjusted_days
+    grand_trend = trending(grand['mtd_actual'], adjusted_elapsed, max_working_days)
     grand_proj  = projection(grand_trend, grand['full_plan'])
     rows.append({
         'category':      'Total',
@@ -1308,6 +1322,7 @@ def salesplanreport(request):
             plan_wtd = 0.0
             plan_day = 0.0
             plan_by_day = {d['day']: 0.0 for d in days}
+            plan_volume_by_day = {d['day']: 0.0 for d in days}
             # Accumulate plan weekly totals from SalesPlan.weekly_totals
             plan_weekly_totals = {}  # { iso_week_number: revenue }
             for plan in plan_qs:
@@ -1332,6 +1347,7 @@ def salesplanreport(request):
                     if entry_day in plan_by_day:
                         # Store revenue amount in the daily grid
                         plan_by_day[entry_day] += entry_revenue
+                        plan_volume_by_day[entry_day] += entry_volume
                 # Accumulate weekly totals from the pre-computed weekly_totals array
                 for wt in (plan.weekly_totals or []):
                     try:
@@ -1395,8 +1411,9 @@ def salesplanreport(request):
                 'diff_day': (
                     round(plan_day - actual_day, 2) if day_target is not None else None
                 ),
-                # Daily grids: plan uses revenue (₹), actual uses sum of netAmount (₹)
+                # Daily grids: plan uses revenue (₹) and volume, actual uses sum of netAmount (₹)
                 'plan_by_day': {str(k): round(v, 2) for k, v in plan_by_day.items()},
+                'plan_volume_by_day': {str(k): round(v, 2) for k, v in plan_volume_by_day.items()},
                 'actual_by_day': {str(k): round(v, 2) for k, v in actual_by_day.items()},
                 # Weekly totals: plan from SalesPlan.weekly_totals, actual computed from billing
                 'plan_weekly_totals': {str(k): round(v, 2) for k, v in plan_weekly_totals.items()},
