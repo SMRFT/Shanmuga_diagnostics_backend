@@ -88,11 +88,12 @@ def send_whatsapp(request):
         file_url = request.data.get("file_url")
         pdf_name = request.data.get("pdf_name", "Report.pdf")
         patient_id = request.data.get("patient_id", "")  # Get patient_id
+        barcode = request.data.get("barcode", "")
 
         if not phone or not file_url:
             return Response({"success": False, "error": "Missing phone or file URL"}, status=400)
 
-        if not phone.startswith("91"):
+        if not str(phone).startswith("91"):
             phone = f"91{phone}"
 
         # Prepare params list for the template
@@ -137,6 +138,7 @@ def send_whatsapp(request):
         CommunicationLog.objects.create(
             patient_id=patient_id,
             patient_name=patient_name,
+            barcode=barcode,
             type="WhatsApp",
             recipient=phone,
             status=status,
@@ -154,6 +156,7 @@ def send_whatsapp(request):
         CommunicationLog.objects.create(
             patient_id=request.data.get("patient_id", ""),
             patient_name=request.data.get("patient_name", ""),
+            barcode=request.data.get("barcode", ""),
             type="WhatsApp",
             recipient=str(request.data.get("phone", "")),
             status=status,
@@ -172,6 +175,7 @@ def send_email(request):
         from_email = request.POST.get('from_email', settings.DEFAULT_FROM_EMAIL)
         patient_id = request.POST.get('patient_id', '') # Get patient_id
         patient_name = request.POST.get('patient_name', '') # Get patient_name
+        barcode = request.POST.get('barcode', '') # Get barcode
 
         # Create HTML Content
         html_message = f"""
@@ -305,6 +309,7 @@ def send_email(request):
         CommunicationLog.objects.create(
             patient_id=patient_id,
             patient_name=patient_name,
+            barcode=barcode,
             type="Email",
             recipient=", ".join(recipient_list),
             status="Success",
@@ -314,14 +319,19 @@ def send_email(request):
         return JsonResponse({'status': 'success', 'message': 'Email sent successfully!'})
     except Exception as e:
         # Log failure
-        CommunicationLog.objects.create(
-            patient_id=request.POST.get('patient_id', ''),
-            patient_name=request.POST.get('patient_name', ''),
-            type="Email",
-            recipient=", ".join(recipient_list),
-            status="Failed",
-            details=str(e)
-        )
+        try:
+            CommunicationLog.objects.create(
+                patient_id=request.POST.get('patient_id', ''),
+                patient_name=request.POST.get('patient_name', ''),
+                barcode=request.POST.get('barcode', ''),
+                type="Email",
+                recipient=", ".join(recipient_list) if isinstance(recipient_list, list) else str(recipient_list),
+                status="Failed",
+                details=str(e)
+            )
+        except Exception as log_err:
+            print("Failed to save communication log:", log_err)
+        return JsonResponse({'status': 'error', 'message': f'Failed to send email: {str(e)}', 'error': str(e)}, status=500)
 
 from django.utils.dateparse import parse_date
 import datetime
@@ -332,22 +342,34 @@ import datetime
 def get_communication_logs(request):
     print(f"DEBUG: get_communication_logs called with method {request.method}")
     try:
+        barcodes = None
+        barcode = None
         if request.method == 'POST':
             from_date_str = request.data.get('from_date')
             to_date_str = request.data.get('to_date')
+            barcode = request.data.get('barcode')
+            barcodes = request.data.get('barcodes')
         else:
             from_date_str = request.GET.get('from_date')
             to_date_str = request.GET.get('to_date')
+            barcode = request.GET.get('barcode')
         
         filter_kwargs = {}
-        if from_date_str:
-            d = parse_date(from_date_str)
-            if d:
-                filter_kwargs['created_date__gte'] = datetime.datetime.combine(d, datetime.time.min)
-        if to_date_str:
-            d = parse_date(to_date_str)
-            if d:
-                filter_kwargs['created_date__lte'] = datetime.datetime.combine(d, datetime.time.max)
+        if barcode:
+            filter_kwargs['barcode'] = barcode
+        elif barcodes and isinstance(barcodes, list):
+            valid_barcodes = [str(b).strip() for b in barcodes if b]
+            if valid_barcodes:
+                filter_kwargs['barcode__in'] = valid_barcodes
+        else:
+            if from_date_str:
+                d = parse_date(from_date_str)
+                if d:
+                    filter_kwargs['created_date__gte'] = datetime.datetime.combine(d, datetime.time.min)
+            if to_date_str:
+                d = parse_date(to_date_str)
+                if d:
+                    filter_kwargs['created_date__lte'] = datetime.datetime.combine(d, datetime.time.max)
             
         logs = CommunicationLog.objects.filter(**filter_kwargs).order_by('-created_date')
             
@@ -357,13 +379,30 @@ def get_communication_logs(request):
                 "date": log.created_date,
                 "patientId": log.patient_id,
                 "patientName": log.patient_name,
+                "barcode": getattr(log, 'barcode', '') or '',
                 "type": log.type,
                 "recipient": log.recipient,
                 "status": log.status,
                 "details": log.details
             } for log in logs
         ]
+
+        summary = {}
+        for log in logs:
+            bc = getattr(log, 'barcode', '') or ''
+            if not bc:
+                continue
+            if bc not in summary:
+                summary[bc] = {
+                    "WhatsApp": {"success": 0, "failed": 0},
+                    "Email": {"success": 0, "failed": 0}
+                }
+            log_type = log.type
+            if log_type not in summary[bc]:
+                summary[bc][log_type] = {"success": 0, "failed": 0}
+            status_key = "success" if str(log.status).strip().lower() == "success" else "failed"
+            summary[bc][log_type][status_key] += 1
             
-        return JsonResponse({"success": True, "data": data})
+        return JsonResponse({"success": True, "data": data, "summary": summary})
     except Exception as e:
         return JsonResponse({"success": False, "error": str(e)}, status=500)

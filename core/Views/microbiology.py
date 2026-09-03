@@ -1268,6 +1268,11 @@ def mb_approve_test_detail(request, barcode):
     test_found = False
     for test_detail in test_details:
         if test_detail.get("test_id") == test_id:
+            if test_detail.get("rerun"):
+                return JsonResponse({"error": "Already reruned."}, status=400)
+            if test_detail.get("approve"):
+                return JsonResponse({"error": "Already approved."}, status=400)
+
             test_detail["approve"] = update_data.get("approve", False)
             if test_detail["approve"]:
                 # Use approve_time from frontend if provided
@@ -1323,6 +1328,11 @@ def mb_rerun_test_detail(request, barcode):
     test_found = False
     for test_detail in test_details:
         if test_detail.get("test_id") == test_id:
+            if test_detail.get("approve"):
+                return JsonResponse({"error": "Already approved unable to rerun the approved value."}, status=400)
+            if test_detail.get("rerun"):
+                return JsonResponse({"error": "Already reruned."}, status=400)
+
             test_detail["rerun"] = update_data.get("rerun", False)
             if test_detail["rerun"]:
                 # Use rureun_time from frontend if provided

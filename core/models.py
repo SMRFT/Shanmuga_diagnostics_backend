@@ -315,6 +315,7 @@ class Hmssamplestatus(AuditModel):
 class CommunicationLog(AuditModel):
     patient_id = models.CharField(max_length=50, blank=True, null=True)
     patient_name = models.CharField(max_length=255, blank=True, null=True)
+    barcode = models.CharField(max_length=50, blank=True, null=True)
     type = models.CharField(max_length=20) # 'Email' or 'WhatsApp'
     recipient = models.CharField(max_length=255) # Phone or Email
     status = models.CharField(max_length=50) # 'Success', 'Failed'
