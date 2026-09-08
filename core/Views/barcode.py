@@ -195,7 +195,7 @@ def get_barcode_by_date(request):
         try:
             client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
             db = client.Diagnostics
-            for doc in db.core_testdetails.find({}, {"test_id": 1, "test_name": 1, "shortcut": 1, "collection_container": 1, "suffix": 1}):
+            for doc in db.core_testdetails.find({}, {"test_id": 1, "test_name": 1, "shortcut": 1, "collection_container": 1, "suffix": 1, "is_servicecharge": 1, "test_code": 1}):
                 if doc.get("test_id") is not None:
                     test_master_by_id[str(doc.get("test_id"))] = doc
                 if doc.get("test_name"):
@@ -209,6 +209,21 @@ def get_barcode_by_date(request):
                 bill_no__isnull=False
             ).values_list("bill_no", flat=True)
         )
+
+        def is_service_charge(test_item, master_info):
+            if master_info.get("is_servicecharge") is True or str(master_info.get("is_servicecharge", "")).lower() == "true":
+                return True
+            if str(master_info.get("test_code", "")).strip().lower() == "home collection - service charge":
+                return True
+            m_name = str(master_info.get("test_name") or "").strip().lower()
+            if "service charge" in m_name:
+                return True
+            if test_item.get("is_servicecharge") is True or str(test_item.get("is_servicecharge", "")).lower() == "true":
+                return True
+            t_name = str(test_item.get("test_name") or test_item.get("testname") or "").strip().lower()
+            if "service charge" in t_name:
+                return True
+            return False
 
         # Process each billing record and get corresponding patient details
         patient_data = []
@@ -259,11 +274,26 @@ def get_barcode_by_date(request):
                             test_item['collection_container'] = master_info.get('collection_container', '')
                         if not test_item.get('suffix'):
                             test_item['suffix'] = master_info.get('suffix', '')
+                        if master_info.get('is_servicecharge') is not None and 'is_servicecharge' not in test_item:
+                            test_item['is_servicecharge'] = master_info.get('is_servicecharge')
 
                         valid_tests.append(test_item)
                 
                 # If no valid tests remain after filtering, skip this billing record entirely
                 if not valid_tests:
+                    continue
+
+                # If only service charges are billed, don't display in barcode list
+                has_clinical_tests = False
+                for test_item in valid_tests:
+                    tid = str(test_item.get('test_id', ''))
+                    tname = str(test_item.get('test_name') or test_item.get('testname') or '').strip().lower()
+                    master_info = test_master_by_id.get(tid) or test_master_by_name.get(tname) or {}
+                    if not is_service_charge(test_item, master_info):
+                        has_clinical_tests = True
+                        break
+
+                if not has_clinical_tests:
                     continue
                 
                 barcode_status = "Generated" if billing.bill_no in existing_bill_numbers else "Pending"
