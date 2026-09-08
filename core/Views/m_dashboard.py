@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from pyauth.auth import HasRoleAndDataPermission
 from django.views.decorators.csrf import csrf_exempt
 from ..models import Billing
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from pymongo import MongoClient
 import os
 import json
@@ -127,7 +127,10 @@ def m_dashboard_stats(request):
         stats["patients"]["total_registered"] = Patient.objects.filter(created_date__gte=start_date, created_date__lt=end_date).count()
 
         # --- 1. Core Billing (Django) ---
-        core_query = Billing.objects.filter(date__gte=start_date, date__lt=end_date)
+        core_query = Billing.objects.filter(
+            Q(bill_date__gte=start_date, bill_date__lt=end_date) |
+            (Q(bill_date__isnull=True) & Q(date__gte=start_date, date__lt=end_date))
+        )
         
         for bill in core_query:
             # Segment

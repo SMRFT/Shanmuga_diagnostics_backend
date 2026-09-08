@@ -890,11 +890,17 @@ def get_patients_by_date(request):
             + timedelta(days=1) - timedelta(seconds=1)
         )
 
-        # Fetch Billing records
+        # Total registrations from Patient table in the given date range
+        total_registrations = Patient.objects.filter(
+            created_date__gte=start_date_parsed,
+            created_date__lte=end_date_parsed
+        ).count()
+
+        # Fetch Billing records based on bill_date
         patients = Billing.objects.filter(
-            date__gte=start_date_parsed,
-            date__lte=end_date_parsed
-        ).order_by('date')
+            Q(bill_date__gte=start_date_parsed, bill_date__lte=end_date_parsed) |
+            (Q(bill_date__isnull=True) & Q(date__gte=start_date_parsed, date__lte=end_date_parsed))
+        ).order_by('-bill_date', '-date')
 
         # ------------------ MongoDB Connection ------------------
         mongo_url = os.getenv("GLOBAL_DB_HOST")
@@ -979,6 +985,7 @@ def get_patients_by_date(request):
 
         return Response({
             'success': True,
+            'total_registrations': total_registrations,
             'data': patient_data
         })
 
@@ -1088,7 +1095,11 @@ def dashboard_data(request):
         query = {}
 
         if from_date and to_date:
-            query['date'] = {'$gte': from_date, '$lte': to_date}
+            query['$or'] = [
+                {'bill_date': {'$gte': from_date, '$lte': to_date}},
+                {'bill_date': None, 'date': {'$gte': from_date, '$lte': to_date}},
+                {'bill_date': {'$exists': False}, 'date': {'$gte': from_date, '$lte': to_date}}
+            ]
 
         if payment_method:
             if payment_method == "PartialPayment":
@@ -1476,7 +1487,10 @@ def patient_record_dashboard(request):
             try:
                 start_dt = datetime.strptime(start_date, "%Y-%m-%d")
                 end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-                bills = bills.filter(date__gte=start_dt, date__lt=end_dt)
+                bills = bills.filter(
+                    Q(bill_date__gte=start_dt, bill_date__lt=end_dt) |
+                    (Q(bill_date__isnull=True) & Q(date__gte=start_dt, date__lt=end_dt))
+                )
             except ValueError:
                 pass
 
@@ -1499,7 +1513,7 @@ def patient_record_dashboard(request):
             bills = bills.filter(patient_id__in=patients)
             
         # Sort by latest
-        bills = bills.order_by('-date')
+        bills = bills.order_by('-bill_date', '-date')
         
         # Calculate total revenue for filtered bills
         total_revenue = 0
@@ -1522,13 +1536,14 @@ def patient_record_dashboard(request):
                 patient = patient_map.get(bill.patient_id)
                 patient_name = patient.patientname if patient else "N/A"
                 phone = patient.phone if patient else "N/A"
+                b_date = bill.bill_date or bill.date
                 
                 export_data.append({
                     "Patient ID": bill.patient_id,
                     "Name": patient_name,
                     "Phone": phone,
                     "Bill No": bill.bill_no,
-                    "Date": bill.date.strftime('%Y-%m-%d %H:%M') if bill.date else "",
+                    "Date": b_date.strftime('%Y-%m-%d %H:%M') if b_date else "",
                     "Sample Collector": get_employee_name(bill.sample_collector) if bill.sample_collector else bill.sample_collector,
                     "Sales Mapping": bill.salesMapping,
                     "B2B": bill.B2B,

@@ -15,6 +15,7 @@ from django.utils.timezone import make_aware
 from core.utils import get_employee_name
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
+from django.db.models import Q
 from ..models import Patient
 from ..models import SampleStatus,Billing
 from ..models import TestValue, MBTestValue
@@ -2445,11 +2446,15 @@ def b2b_ledger_report(request):
         to_date = request.GET.get('to_date')
         b2b_name = request.GET.get('b2b_name')
         query = {}
+        date_filter = Q()
         if from_date and to_date:
             try:
                 start_date = datetime.strptime(from_date, "%Y-%m-%d")
                 end_date = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-                query['date__range'] = [start_date, end_date]
+                date_filter = (
+                    Q(bill_date__gte=start_date, bill_date__lt=end_date) |
+                    (Q(bill_date__isnull=True) & Q(date__gte=start_date, date__lt=end_date))
+                )
             except ValueError:
                 return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
         
@@ -2457,7 +2462,7 @@ def b2b_ledger_report(request):
             query['B2B'] = b2b_name
 
         # Construct QuerySet
-        billings_qs = Billing.objects.filter(**query)
+        billings_qs = Billing.objects.filter(date_filter, **query)
 
         # Exclude empty B2B if showing "All" (implied by not having b2b_name or b2b_name == "All" if we handled it above)
         # Note: If b2b_name is None, we didn't add it to query.
@@ -2465,7 +2470,7 @@ def b2b_ledger_report(request):
              # Use exclude instead of regex for better compatibility
             billings_qs = billings_qs.exclude(B2B__isnull=True).exclude(B2B__exact='')
 
-        billings = billings_qs.order_by('date')
+        billings = billings_qs.order_by('-bill_date', '-date')
         
         data = []
         for bill in billings:
@@ -2478,10 +2483,11 @@ def b2b_ledger_report(request):
 
             # Safely get ID
             bill_id = getattr(bill, 'id', str(bill.pk))
+            b_disp = bill.bill_date or bill.date
 
             data.append({
                 "id": bill_id,
-                "date": bill.date.strftime("%Y-%m-%d") if bill.date else "N/A",
+                "date": b_disp.strftime("%Y-%m-%d") if b_disp else "N/A",
                 "bill_no": bill.bill_no,
                 "patient_name": bill.patientname,
                 "b2b_name": bill.B2B,
@@ -2526,11 +2532,19 @@ def get_home_collection_report(request):
         db = client.Diagnostics
         billing_collection = db["core_billing"]
 
-        # Query for Home Collection in given date range
+        # Query for Home Collection in given date range (by bill_date or date)
         query = {
-            "date": {"$gte": from_dt, "$lt": to_dt},
+            "$or": [
+                {"bill_date": {"$gte": from_dt, "$lt": to_dt}},
+                {"bill_date": None, "date": {"$gte": from_dt, "$lt": to_dt}},
+                {"bill_date": {"$exists": False}, "date": {"$gte": from_dt, "$lt": to_dt}}
+            ],
             "segment": "Home Collection"
         }
+
+        status_param = data.get('status')
+        if status_param and str(status_param).strip().upper() != 'ALL':
+            query["status"] = {"$regex": f"^{str(status_param).strip()}$", "$options": "i"}
 
         records = list(billing_collection.find(query))
         
@@ -2582,30 +2596,56 @@ def get_home_collection_report(request):
             # Phone priority: Patient Model > Billing
             phone = p_details.get("phone") or record.get("phone") or "N/A"
 
-            # Parse Test Names
-            test_names = record.get("test_names", "")
-            if not test_names:
-                # Fallback to testdetails parsing similar to overall_report (simplified)
-                td = record.get("testdetails")
-                if isinstance(td, str):
-                    try:
-                        parsed = json.loads(td)
-                        test_names = ", ".join([t.get("testname", "") for t in parsed if isinstance(t, dict)])
-                    except:
-                        pass
-                elif isinstance(td, list):
-                    test_names = ", ".join([t.get("testname", "") for t in td if isinstance(t, dict)])
+            # Parse Test Details
+            test_items = []
+            td = record.get("testdetails")
+            if isinstance(td, str):
+                try:
+                    td = json.loads(td)
+                except:
+                    td = []
+            
+            if isinstance(td, list):
+                for t in td:
+                    if isinstance(t, dict):
+                        tname = t.get("testname") or t.get("test_name") or ""
+                        if tname:
+                            test_items.append({
+                                "test_id": t.get("test_id", ""),
+                                "test_name": tname,
+                                "amount": t.get("amount", 0)
+                            })
+                    elif isinstance(t, str) and t.strip():
+                        test_items.append({
+                            "test_id": "",
+                            "test_name": t.strip(),
+                            "amount": 0
+                        })
 
+            # Fallback to test_names field if test_items is empty
+            if not test_items and record.get("test_names"):
+                for name in str(record.get("test_names")).split(","):
+                    if name.strip():
+                        test_items.append({
+                            "test_id": "",
+                            "test_name": name.strip(),
+                            "amount": 0
+                        })
 
+            test_names_formatted = "\n".join([f"{idx+1}. {t['test_name']}" for idx, t in enumerate(test_items)]) if test_items else "-"
+
+            b_dt = record.get("bill_date") or record.get("date")
             item = {
-                "date": record.get("date").strftime("%Y-%m-%d") if record.get("date") else "N/A",
+                "date": b_dt.strftime("%Y-%m-%d") if isinstance(b_dt, datetime) else (str(b_dt) if b_dt else "N/A"),
                 "bill_no": bill_no,
                 "patient_id": pid or "N/A",
                 "patient_name": patient_name,
                 "phone": phone,
                 "address": formatted_address,
                 "sample_collector": get_employee_name(record.get("sample_collector", "")) or "N/A",
-                "test_names": test_names,
+                "tests": test_items,
+                "test_count": len(test_items),
+                "test_names": test_names_formatted,
                 "total_amount": record.get("totalAmount", 0),
                 "paid_amount": record.get("paid_amount", 0),
                 "balance_amount": record.get("balance_amount", 0),

@@ -486,11 +486,8 @@ class CustomercomplaintsQRScan(models.Model):
 # ---------------- shared rollup helpers ----------------
 
 def get_week_of_year(d):
-    """Simple sequential 7-day blocks from Jan 1 (Week 1 = Jan 1-7, ...) —
-    matches the frontend's week grouping, not ISO weeks."""
-    start = date_cls(d.year, 1, 1)
-    day_of_year = (d - start).days + 1
-    return math.ceil(day_of_year / 7)
+    """Return standard ISO week number (1-53), matching ISO calendar (Monday to Sunday)."""
+    return d.isocalendar()[1]
 
 
 def recompute_entries_and_rollups(entries, avg_revenue_per_prescription, year, month):
