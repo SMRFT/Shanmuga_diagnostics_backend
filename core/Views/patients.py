@@ -896,10 +896,14 @@ def get_patients_by_date(request):
             created_date__lte=end_date_parsed
         ).count()
 
-        # Fetch Billing records based on bill_date
+        # Fetch only Billed records based on bill_date (exclude unbilled / "Registered" only)
         patients = Billing.objects.filter(
-            Q(bill_date__gte=start_date_parsed, bill_date__lte=end_date_parsed) |
-            (Q(bill_date__isnull=True) & Q(date__gte=start_date_parsed, date__lte=end_date_parsed))
+            bill_date__gte=start_date_parsed,
+            bill_date__lte=end_date_parsed
+        ).exclude(
+            status="Registered"
+        ).exclude(
+            bill_no__in=["", None]
         ).order_by('-bill_date', '-date')
 
         # ------------------ MongoDB Connection ------------------
@@ -935,6 +939,9 @@ def get_patients_by_date(request):
         for patient in patients:
             try:
                 patient_dict = model_to_dict(patient)
+                patient_dict['id'] = str(patient.id)
+                patient_dict['order_id'] = getattr(patient, 'order_id', '') or ''
+                patient_dict['status'] = getattr(patient, 'status', 'Billed') or 'Billed'
 
                 # -------- Patient Model Data --------
                 try:

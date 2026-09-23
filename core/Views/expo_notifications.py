@@ -38,6 +38,8 @@ def send_expo_push_notification(push_tokens, title, body, data=None):
             "body": body,
             "data": data or {},
             "priority": "high",
+            "channelId": "default",
+            "_displayInForeground": True,
         }
         messages.append(msg)
 

@@ -2,7 +2,7 @@
 from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
-from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology,franchiseentrollment, expo_notifications
+from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology,franchiseentrollment, expo_notifications, testdirectory
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
@@ -83,6 +83,7 @@ urlpatterns = [
 
     #Logistics
     path('register-push-token/', expo_notifications.register_push_token, name='register_push_token'),
+    path('collector-profile/<str:employee_id>/', logistic.get_collector_profile, name='get_collector_profile'),
     path('logistics/',logistic.create_logistics, name='logistics'),
     path('logistics_by_collector/',logistic.logistics_by_collector, name='logistics_by_collector'),
     path('logistics/accept/<int:task_id>/', logistic.accept_task, name='accept_task'),
@@ -109,11 +110,18 @@ urlpatterns = [
   
     path("get_b2b_employees/", logistic.get_b2b_employees, name="get_b2b_employees"),
 
-      # customer complaints:
+    # Customer complaints:
     path("get_b2b_lab_employees/", logistic.get_b2b_lab_employees, name="get_b2b_lab_employees"),
     path("customer_complaints/", logistic.customer_complaints, name="customer_complaints"),
     path("customer_complaints_qr_scan/", logistic.customer_complaints_qr_scan, name="customer_complaints_qr_scan"),
     path("get_public_clinical_names/", logistic.get_public_clinical_names, name="get_public_clinical_names"),
+
+    # Test Directory (Master Catalog & Sample Reports):
+    path("test-directory/", testdirectory.test_directory_list_create, name="test_directory_list_create"),
+    path("test-directory/stats/", testdirectory.test_directory_stats, name="test_directory_stats"),
+    path("test-directory/core-test-options/", testdirectory.get_core_test_options, name="get_core_test_options"),
+    path("test-directory/<str:test_id>/", testdirectory.test_directory_detail, name="test_directory_detail"),
+    path("test-directory/sample-report/<str:file_id>/", testdirectory.stream_sample_report, name="stream_sample_report"),
 
     #Barcode:
     path('patients_get_barcode/', barcode.get_barcode_by_date, name='get_barcode_by_date'),
