@@ -13,16 +13,19 @@ from core.utils import get_employee_name
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     """Haversine formula – returns distance in meters."""
-    lat1, lon1, lat2, lon2 = map(
-        math.radians, 
-        [float(lat1), float(lon1), float(lat2), float(lon2)]
-    )
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-    a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    r = 6371000
-    return c * r
+    try:
+        lat1, lon1, lat2, lon2 = map(
+            math.radians, 
+            [float(lat1), float(lon1), float(lat2), float(lon2)]
+        )
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(max(0, min(1, a))))
+        r = 6371000  # Earth radius in meters
+        return c * r
+    except (ValueError, TypeError):
+        return 0.0
 
 def get_route(item):
     if not item or not item.location_history:
@@ -36,20 +39,68 @@ def get_route(item):
         return item.location_history
     return []
 
+def parse_iso_timestamp(ts):
+    if not ts:
+        return None
+    try:
+        if isinstance(ts, datetime):
+            return ts
+        return datetime.fromisoformat(str(ts).replace('Z', '+00:00'))
+    except Exception:
+        return None
+
 def calc_route_distance_km(route):
+    """
+    Computes accurate road/travel distance with:
+    1. Stationary jitter rejection (ignores micro-movements < 15 meters)
+    2. Outlier rejection (ignores unrealistic jumps > 140 km/h)
+    3. Null / zero coordinate rejection
+    """
     if not route or len(route) < 2:
         return "0.00"
-    total_m = 0
-    for i in range(1, len(route)):
-        p1 = route[i-1]
-        p2 = route[i]
+    
+    total_m = 0.0
+    last_valid_point = None
+    
+    # Minimum movement threshold in meters to filter stationary GPS jitter
+    MIN_MOVEMENT_METERS = 15.0
+    # Maximum reasonable speed in m/s (40 m/s ~ 144 km/h)
+    MAX_SPEED_MPS = 40.0
+
+    for point in route:
         try:
-            lat1, lon1 = float(p1.get("lat", 0)), float(p1.get("lng", 0))
-            lat2, lon2 = float(p2.get("lat", 0)), float(p2.get("lng", 0))
-            if lat1 and lon1 and lat2 and lon2:
-                total_m += calculate_distance(lat1, lon1, lat2, lon2)
+            lat = float(point.get("lat") or point.get("latitude") or 0)
+            lng = float(point.get("lng") or point.get("longitude") or 0)
+            if not lat or not lng or lat == 0.0 or lng == 0.0:
+                continue
+            
+            if last_valid_point is None:
+                last_valid_point = {"lat": lat, "lng": lng, "timestamp": point.get("timestamp")}
+                continue
+
+            dist = calculate_distance(last_valid_point["lat"], last_valid_point["lng"], lat, lng)
+            
+            # Check for stationary jitter
+            if dist < MIN_MOVEMENT_METERS:
+                # User is stationary or micro-drifting; do not accumulate fake distance
+                continue
+
+            # Check for unreasonable teleport jumps if timestamps are present
+            t1 = parse_iso_timestamp(last_valid_point.get("timestamp"))
+            t2 = parse_iso_timestamp(point.get("timestamp"))
+            if t1 and t2:
+                time_diff = abs((t2 - t1).total_seconds())
+                if time_diff > 0:
+                    speed = dist / time_diff
+                    if speed > MAX_SPEED_MPS and time_diff < 120:
+                        # Unrealistic speed/GPS jump; ignore this outlier
+                        continue
+
+            total_m += dist
+            last_valid_point = {"lat": lat, "lng": lng, "timestamp": point.get("timestamp")}
         except (ValueError, TypeError):
             continue
+
     return f"{(total_m / 1000):.2f}"
 
 def format_location_response(item):
@@ -69,6 +120,7 @@ def format_location_response(item):
         total_duration = str(duration)
 
     dist_val = item.distance_travelled
+    # Recalculate if not present or 0 with valid route
     if (not dist_val or dist_val == "0.00" or dist_val == "0") and len(route) > 1:
         dist_val = calc_route_distance_km(route)
 
@@ -223,20 +275,11 @@ def sample_collector_location(request):
                     "timestamp": timezone.now().isoformat()
                 })
 
-                # Distance calculation
-                total = 0
-                for i in range(1, len(route)):
-                    total += calculate_distance(
-                        route[i-1].get("lat", 0), route[i-1].get("lng", 0),
-                        route[i].get("lat", 0), route[i].get("lng", 0)
-                    )
-
-                # Haversine distance is in meters, convert to km
-                haversine_distance_km = total / 1000
-                total_distance = f"{haversine_distance_km:.2f}"
+                # Accurate Distance calculation with jitter & outlier filtering
+                total_distance = calc_route_distance_km(route)
                 
-                # If the frontend passes a more accurate distance (e.g. from Google Maps API)
-                if data.get("distance_travelled"):
+                # If the frontend/mobile passes a more accurate distance (e.g. from Google Maps Road API)
+                if data.get("distance_travelled") and float(data.get("distance_travelled") or 0) > 0:
                     total_distance = str(data.get("distance_travelled"))
 
                 item.endTime = timezone.now()
@@ -262,19 +305,42 @@ def sample_collector_location(request):
             curr_lng = data.get("currentLongitude")
 
             if curr_lat and curr_lng:
-                route.append({
-                    "lat": str(curr_lat),
-                    "lng": str(curr_lng),
-                    "timestamp": timezone.now().isoformat()
-                })
+                try:
+                    c_lat_f = float(curr_lat)
+                    c_lng_f = float(curr_lng)
+                except (ValueError, TypeError):
+                    c_lat_f, c_lng_f = 0, 0
 
-                live_dist = calc_route_distance_km(route)
-                SampleCollectorLocation.objects.filter(location_id=item.location_id).update(
-                    distance_travelled=live_dist,
-                    location_history=json.dumps(route) if isinstance(item.location_history, str) else route
-                )
+                # Only process valid coordinates
+                if c_lat_f != 0 and c_lng_f != 0:
+                    should_append = True
+                    if route:
+                        last_pt = route[-1]
+                        try:
+                            l_lat_f = float(last_pt.get("lat") or last_pt.get("latitude") or 0)
+                            l_lng_f = float(last_pt.get("lng") or last_pt.get("longitude") or 0)
+                            dist_from_last = calculate_distance(l_lat_f, l_lng_f, c_lat_f, c_lng_f)
+                            # If moved less than 10 meters, simply update the timestamp of the last point instead of appending duplicate jitter
+                            if dist_from_last < 10.0:
+                                should_append = False
+                                route[-1]["timestamp"] = timezone.now().isoformat()
+                        except Exception:
+                            should_append = True
 
-                return JsonResponse({"success": True, "message": "Location updated", "distance": live_dist})
+                    if should_append:
+                        route.append({
+                            "lat": str(curr_lat),
+                            "lng": str(curr_lng),
+                            "timestamp": timezone.now().isoformat()
+                        })
+
+                    live_dist = calc_route_distance_km(route)
+                    SampleCollectorLocation.objects.filter(location_id=item.location_id).update(
+                        distance_travelled=live_dist,
+                        location_history=json.dumps(route) if isinstance(item.location_history, str) else route
+                    )
+
+                    return JsonResponse({"success": True, "message": "Location updated", "distance": live_dist})
 
             return JsonResponse({"success": False, "message": "No valid data"}, status=400)
 

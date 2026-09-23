@@ -1913,3 +1913,56 @@ def get_public_clinical_names(request):
         return Response(list(clinicals), status=status.HTTP_200_OK)
     except Exception:
         return Response([], status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@csrf_exempt
+@permission_classes([AllowAny])
+def get_collector_profile(request, employee_id):
+    """
+    Retrieve employee profile from Global database (backend_diagnostics_profile collection)
+    by employeeId.
+    """
+    try:
+        if not employee_id:
+            return Response({"error": "Employee ID is required", "success": False}, status=status.HTTP_400_BAD_REQUEST)
+            
+        clean_id = str(employee_id).strip()
+        doc = profile_collection.find_one({"employeeId": clean_id})
+        if not doc:
+            doc = profile_collection.find_one({
+                "$or": [
+                    {"employeeId": clean_id},
+                    {"employeeId": {"$regex": f"^{clean_id}$", "$options": "i"}}
+                ]
+            })
+            
+        if not doc:
+            return Response({"error": "Employee profile not found", "success": False}, status=status.HTTP_404_NOT_FOUND)
+            
+        # Serialize fields cleanly
+        profile_data = {
+            "employeeId": str(doc.get("employeeId", "")),
+            "employeeName": doc.get("employeeName", ""),
+            "mobileNumber": doc.get("mobileNumber", ""),
+            "email": doc.get("email", ""),
+            "gender": doc.get("gender", ""),
+            "bloodGroup": doc.get("bloodGroup", ""),
+            "department": doc.get("department", "Nursing"),
+            "designation": doc.get("designation", "Sample Collector"),
+            "primaryRole": doc.get("primaryRole", "SD-R-SMC"),
+            "additionalRoles": doc.get("additionalRoles", []),
+            "employmentStatus": doc.get("employmentStatus", "full-time"),
+            "hospitalCode": doc.get("hospitalCode", "SH001"),
+            "fatherName": doc.get("fatherName", ""),
+            "motherName": doc.get("motherName", ""),
+            "maritalStatus": doc.get("maritalStatus", ""),
+            "guardianNumber": doc.get("guardianNumber", ""),
+            "dateOfBirth": doc.get("dateOfBirth").isoformat() if doc.get("dateOfBirth") else None,
+            "age": doc.get("age"),
+            "profileImage": str(doc.get("profileImage", "")),
+            "created_date": doc.get("created_date").isoformat() if doc.get("created_date") else None,
+        }
+        return Response({"success": True, "profile": profile_data}, status=status.HTTP_200_OK)
+    except Exception as e:
+        return Response({"error": str(e), "success": False}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
