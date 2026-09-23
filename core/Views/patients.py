@@ -4,7 +4,7 @@ from django.views.decorators.http import require_http_methods
 from rest_framework import status
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models import Max
+from django.db.models import Max, Q
 from datetime import datetime, timedelta
 import json
 import ast
@@ -896,15 +896,12 @@ def get_patients_by_date(request):
             created_date__lte=end_date_parsed
         ).count()
 
-        # Fetch only Billed records based on bill_date (exclude unbilled / "Registered" only)
+        # Fetch Billing records (both Billed and Registered) in the given date range
         patients = Billing.objects.filter(
-            bill_date__gte=start_date_parsed,
-            bill_date__lte=end_date_parsed
-        ).exclude(
-            status="Registered"
-        ).exclude(
-            bill_no__in=["", None]
-        ).order_by('-bill_date', '-date')
+            Q(date__gte=start_date_parsed, date__lte=end_date_parsed) |
+            Q(bill_date__gte=start_date_parsed, bill_date__lte=end_date_parsed) |
+            Q(created_date__gte=start_date_parsed, created_date__lte=end_date_parsed)
+        ).order_by('-date', '-created_date')
 
         # ------------------ MongoDB Connection ------------------
         mongo_url = os.getenv("GLOBAL_DB_HOST")
@@ -941,7 +938,7 @@ def get_patients_by_date(request):
                 patient_dict = model_to_dict(patient)
                 patient_dict['id'] = str(patient.id)
                 patient_dict['order_id'] = getattr(patient, 'order_id', '') or ''
-                patient_dict['status'] = getattr(patient, 'status', 'Billed') or 'Billed'
+                patient_dict['status'] = getattr(patient, 'status', 'Registered') or 'Registered'
 
                 # -------- Patient Model Data --------
                 try:
