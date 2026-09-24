@@ -496,19 +496,24 @@ def update_bill(request):
         query = {}
         
         # Build query to find the EXISTING record
-        if bill_id:
+        is_valid_bill_id = False
+        if bill_id and str(bill_id).strip() and str(bill_id).lower() not in ["none", "null", "undefined"]:
             try:
                 if isinstance(bill_id, str) and len(bill_id) == 24:
                     query = {"_id": ObjectId(bill_id)}
+                    is_valid_bill_id = True
                 elif isinstance(bill_id, dict) and "$oid" in bill_id:
                     query = {"_id": ObjectId(bill_id["$oid"])}
-                else:
+                    is_valid_bill_id = True
+                elif ObjectId.is_valid(str(bill_id)):
                     query = {"_id": ObjectId(str(bill_id))}
-            except Exception as e:
-                return Response({"error": f"Invalid bill_id format: {bill_id}"}, status=400)
-        else:
+                    is_valid_bill_id = True
+            except Exception:
+                is_valid_bill_id = False
+
+        if not is_valid_bill_id:
             if not patient_id:
-                return Response({"error": "Provide bill_id or patient_id"}, status=400)
+                return Response({"error": "Provide valid bill_id or patient_id"}, status=400)
             query = {"patient_id": patient_id}
             if bill_date_str:
                 try:
@@ -521,24 +526,25 @@ def update_bill(request):
                     start_date = dt.replace(hour=0, minute=0, second=0, microsecond=0)
                     end_date = dt.replace(hour=23, minute=59, second=59, microsecond=999999)
                     query["date"] = {"$gte": start_date, "$lte": end_date}
-                except Exception as e:
+                except Exception:
                     pass
-        
+
         # Find the existing record(s)
         billing_record = None
-        if bill_id:
+        if is_valid_bill_id:
             billing_record = collection.find_one(query)
-        else:
+
+        if not billing_record:
             matching_records = list(collection.find(query).sort("date", -1))
+            if not matching_records and patient_id:
+                matching_records = list(collection.find({"patient_id": patient_id}).sort("date", -1))
+
             if not matching_records:
-                return Response({"error": "Billing record not found. Cannot update non-existing record."}, status=404)
-            
+                return Response({"error": f"Billing record not found for patient_id: {patient_id}. Cannot update non-existing record."}, status=404)
+
             # Prefer Registered record if exists
             registered_record = next((rec for rec in matching_records if rec.get("status") == "Registered"), None)
             billing_record = registered_record if registered_record else matching_records[0]
-        
-        if not billing_record:
-            return Response({"error": "Billing record not found"}, status=404)
         
         record_id = billing_record["_id"]
         bill_no = billing_record.get('bill_no')
@@ -546,7 +552,7 @@ def update_bill(request):
         
         # Keep existing bill_no and bill_date if missing
         if not bill_no:
-            today = datetime.now().strftime('%Y%m%d')
+            today = timezone.now().strftime('%Y%m%d')
             last_bill_cursor = collection.find(
                 {"bill_no": {"$regex": f"^{today}"}},
                 {"bill_no": 1}
@@ -555,7 +561,7 @@ def update_bill(request):
             next_id = (int(last_bill_list[0]['bill_no'][-4:]) + 1) if last_bill_list else 1
             bill_no = f"{today}{next_id:04d}"
         
-        bill_date = datetime.now()
+        bill_date = timezone.now()
         
         # Process testdetails
         testdetails = request.data.get("testdetails", [])
@@ -619,7 +625,7 @@ def update_bill(request):
             "is_emergency": emergency,
             "patient_history": patient_history,
             "lastmodified_by": employee_id,
-            "lastmodified_date": datetime.now(),
+            "lastmodified_date": timezone.now(),
         }
         
         if isinstance(payment_method_data, dict):
@@ -909,18 +915,16 @@ def get_patients_by_date(request):
         db = client["Global"]
         profile_col = db.backend_diagnostics_profile
 
-        # Collect unique lastmodified_by values
-        lastmodified_users = set(
-            patients.values_list('lastmodified_by', flat=True)
-        )
-        lastmodified_users.discard(None)
+        # Collect unique user IDs from both created_by and lastmodified_by
+        user_ids = set(patients.values_list('lastmodified_by', flat=True)) | set(patients.values_list('created_by', flat=True))
+        user_ids.discard(None)
 
         # Convert all to string (important)
-        lastmodified_users = [str(user) for user in lastmodified_users]
+        user_ids = [str(u) for u in user_ids]
 
         # Fetch matching profiles
         profiles = profile_col.find(
-            {"employeeId": {"$in": lastmodified_users}},
+            {"employeeId": {"$in": user_ids}},
             {"employeeId": 1, "employeeName": 1}
         )
 
@@ -936,7 +940,13 @@ def get_patients_by_date(request):
         for patient in patients:
             try:
                 patient_dict = model_to_dict(patient)
-                patient_dict['id'] = str(patient.id)
+                pk_val = getattr(patient, 'pk', None) or getattr(patient, 'id', None)
+                if pk_val and str(pk_val) != 'None':
+                    patient_dict['id'] = str(pk_val)
+                    patient_dict['_id'] = str(pk_val)
+                else:
+                    patient_dict.pop('id', None)
+                    patient_dict.pop('_id', None)
                 patient_dict['order_id'] = getattr(patient, 'order_id', '') or ''
                 patient_dict['status'] = getattr(patient, 'status', 'Registered') or 'Registered'
 
@@ -956,9 +966,9 @@ def get_patients_by_date(request):
                     patient_dict['phone'] = 'N/A'
 
                 # -------- Profile Name Mapping --------
-                username = str(patient_dict.get("lastmodified_by"))
+                user_id = str(patient_dict.get("lastmodified_by") or patient_dict.get("created_by") or "")
                 patient_dict["lastmodified_name"] = profile_map.get(
-                    username, "Unknown"
+                    user_id, "Unknown"
                 )
 
                 # -------- Handle testdetails --------
