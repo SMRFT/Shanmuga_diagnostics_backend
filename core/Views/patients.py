@@ -902,27 +902,12 @@ def get_patients_by_date(request):
             created_date__lte=end_date_parsed
         ).count()
 
-        # Check if caller requested only billed records (e.g., Print Bill)
-        status_filter = request.GET.get('status', '').strip().lower()
-        billed_only = request.GET.get('billed_only', '').strip().lower() == 'true'
-
-        if status_filter == 'billed' or billed_only:
-            # Fetch only Billed records based on bill_date (exclude unbilled / "Registered" only)
-            patients = Billing.objects.filter(
-                bill_date__gte=start_date_parsed,
-                bill_date__lte=end_date_parsed
-            ).exclude(
-                status="Registered"
-            ).exclude(
-                bill_no__in=["", None]
-            ).order_by('-bill_date', '-date')
-        else:
-            # Default for Patient Billing & Register Dashboard: Fetch BOTH Registered & Billed records
-            patients = Billing.objects.filter(
-                Q(date__gte=start_date_parsed, date__lte=end_date_parsed) |
-                Q(created_date__gte=start_date_parsed, created_date__lte=end_date_parsed) |
-                Q(bill_date__gte=start_date_parsed, bill_date__lte=end_date_parsed)
-            ).order_by('-date', '-created_date', '-bill_date')
+        # Fetch Billing records (both Billed and Registered) in the given date range
+        patients = Billing.objects.filter(
+            Q(date__gte=start_date_parsed, date__lte=end_date_parsed) |
+            Q(bill_date__gte=start_date_parsed, bill_date__lte=end_date_parsed) |
+            Q(created_date__gte=start_date_parsed, created_date__lte=end_date_parsed)
+        ).order_by('-date', '-created_date')
 
         # ------------------ MongoDB Connection ------------------
         mongo_url = os.getenv("GLOBAL_DB_HOST")
@@ -963,10 +948,7 @@ def get_patients_by_date(request):
                     patient_dict.pop('id', None)
                     patient_dict.pop('_id', None)
                 patient_dict['order_id'] = getattr(patient, 'order_id', '') or ''
-                raw_status = getattr(patient, 'status', None)
-                if not raw_status or raw_status == 'None':
-                    raw_status = 'Billed' if getattr(patient, 'bill_no', None) else 'Registered'
-                patient_dict['status'] = raw_status
+                patient_dict['status'] = getattr(patient, 'status', 'Registered') or 'Registered'
 
                 # -------- Patient Model Data --------
                 try:
