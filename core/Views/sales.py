@@ -794,6 +794,7 @@ def salesplan_summary(request):
       }
     """
     date_str = request.GET.get("date")
+    category = request.GET.get("category") or "all"
 
     if date_str:
         try:
@@ -831,7 +832,19 @@ def salesplan_summary(request):
     )
 
     # ── Pull all sales executives ──────────────────────────────────────────────
-    employees = fetch_sales_executives(request)
+    employees_param = request.GET.get("employees")
+    if employees_param:
+        if isinstance(employees_param, str):
+            try:
+                employees = json.loads(employees_param)
+            except Exception:
+                employees = []
+        elif isinstance(employees_param, list):
+            employees = employees_param
+        else:
+            employees = []
+    else:
+        employees = fetch_sales_executives(request)
 
     # ── Categories we care about ───────────────────────────────────────────────
     all_categories = list(
@@ -841,10 +854,12 @@ def salesplan_summary(request):
     if not all_categories:
         all_categories = ['B2B', 'Corporate Health Checkup', 'Home Collection', 'Franchise']
 
-    def sum_plan_for_days(emp_id, category, day_numbers):
+    cats_to_query = all_categories if category == 'all' else [category]
+
+    def sum_plan_for_days(emp_id, cat, day_numbers):
         """Sum SalesPlan entries[].revenue for the given calendar day numbers."""
         plans = SalesPlan.objects.filter(
-            employee_id=emp_id, month=month, year=year, category=category
+            employee_id=emp_id, month=month, year=year, category=cat
         )
         total = 0.0
         for plan in plans:
@@ -858,25 +873,31 @@ def salesplan_summary(request):
                     total += r
         return total
 
-    def sum_actual_for_range(emp_name, category, start_dt, end_dt):
+    def sum_actual_for_range(emp_name, cat, start_dt, end_dt):
         """Sum Billing.netAmount for the given date range and category (segment)."""
         qs = Billing.objects.filter(
             salesMapping=emp_name,
             bill_date__gte=start_dt,
             bill_date__lte=end_dt,
-            segment=category,
+            segment=cat,
         )
         total = 0.0
         for bill in qs.only('netAmount'):
             total += _to_float(bill.netAmount)
         return total
 
-    def sum_plan_total_revenue(emp_id, category):
+    def sum_plan_total_revenue(emp_id, cat):
         """Full month plan total revenue for trending/projection."""
         plans = SalesPlan.objects.filter(
-            employee_id=emp_id, month=month, year=year, category=category
+            employee_id=emp_id, month=month, year=year, category=cat
         )
-        return sum(_to_float(p.total_revenue) for p in plans)
+        tot = 0.0
+        for p in plans:
+            p_rev = _to_float(p.total_revenue)
+            if p_rev == 0.0 and p.entries:
+                p_rev = sum(_to_float(e.get('revenue')) for e in p.entries)
+            tot += p_rev
+        return tot
 
     # Fetch working days per category
     working_days_by_category = {}
@@ -895,43 +916,14 @@ def salesplan_summary(request):
     wtd_days   = set(range(wtd_start_date.day, report_day + 1))
     mtd_days   = set(range(1, report_day + 1))
 
-    # ── Accumulate per category ───────────────────────────────────────────────
-    cat_data = {}  # { category: { today_plan, today_actual, wtd_*, mtd_*, full_plan, mtd_actual } }
-
-    for cat in all_categories:
-        cat_data[cat] = {
-            'today_plan': 0.0, 'today_actual': 0.0,
-            'wtd_plan':   0.0, 'wtd_actual':   0.0,
-            'mtd_plan':   0.0, 'mtd_actual':   0.0,
-            'full_plan':  0.0,  # total_revenue for whole month (for trending/projection)
-        }
-
-    for emp in employees:
-        if not isinstance(emp, dict):
-            continue
-        emp_id   = emp.get("employeeId") or emp.get("employee_id")
-        emp_name = emp.get("employeeName") or emp.get("employee_name")
-        if not emp_id or not emp_name:
-            continue
-
-        for cat in all_categories:
-            d = cat_data[cat]
-            d['today_plan']  += sum_plan_for_days(emp_id, cat, today_days)
-            d['wtd_plan']    += sum_plan_for_days(emp_id, cat, wtd_days)
-            d['mtd_plan']    += sum_plan_for_days(emp_id, cat, mtd_days)
-            d['full_plan']   += sum_plan_total_revenue(emp_id, cat)
-            d['today_actual'] += sum_actual_for_range(emp_name, cat, today_start_dt, today_end_dt)
-            d['wtd_actual']   += sum_actual_for_range(emp_name, cat, wtd_start_dt,   wtd_end_dt)
-            d['mtd_actual']   += sum_actual_for_range(emp_name, cat, mtd_start_dt,   mtd_end_dt)
-
-    # ── Build result rows ─────────────────────────────────────────────────────
+    # ── Build result rows per sales person ────────────────────────────────────
     def pct(actual, plan):
         return round((actual / plan * 100), 1) if plan > 0 else 0.0
 
-    def trending(mtd_actual, adjusted_elapsed, month_adjusted_days):
+    def trending(mtd_actual, adjusted_elapsed, month_adj_days):
         """(actual so far / elapsed adjusted days) * total adjusted days in month."""
         if adjusted_elapsed > 0:
-            return round((mtd_actual / adjusted_elapsed) * month_adjusted_days, 2)
+            return round((mtd_actual / adjusted_elapsed) * month_adj_days, 2)
         return 0.0
 
     def projection(trend, full_plan):
@@ -941,33 +933,78 @@ def salesplan_summary(request):
     grand = {k: 0.0 for k in ['today_plan','today_actual','wtd_plan','wtd_actual',
                                 'mtd_plan','mtd_actual','full_plan']}
 
-    for cat in all_categories:
-        d = cat_data[cat]
-        cat_working_days = working_days_by_category.get(cat, month_adjusted_days)
-        trend = trending(d['mtd_actual'], adjusted_elapsed, cat_working_days)
-        proj  = projection(trend, d['full_plan'])
+    for emp in employees:
+        if not isinstance(emp, dict):
+            continue
+        emp_id   = emp.get("employeeId") or emp.get("employee_id")
+        emp_name = emp.get("employeeName") or emp.get("employee_name")
+        if not emp_id or not emp_name:
+            continue
+
+        emp_today_plan   = 0.0
+        emp_today_actual = 0.0
+        emp_wtd_plan     = 0.0
+        emp_wtd_actual   = 0.0
+        emp_mtd_plan     = 0.0
+        emp_mtd_actual   = 0.0
+        emp_full_plan    = 0.0
+
+        for cat in cats_to_query:
+            emp_today_plan   += sum_plan_for_days(emp_id, cat, today_days)
+            emp_wtd_plan     += sum_plan_for_days(emp_id, cat, wtd_days)
+            emp_mtd_plan     += sum_plan_for_days(emp_id, cat, mtd_days)
+            emp_full_plan    += sum_plan_total_revenue(emp_id, cat)
+            emp_today_actual += sum_actual_for_range(emp_name, cat, today_start_dt, today_end_dt)
+            emp_wtd_actual   += sum_actual_for_range(emp_name, cat, wtd_start_dt,   wtd_end_dt)
+            emp_mtd_actual   += sum_actual_for_range(emp_name, cat, mtd_start_dt,   mtd_end_dt)
+
+        emp_working_days = month_adjusted_days
+        for cat in cats_to_query:
+            plan = SalesPlan.objects.filter(employee_id=emp_id, month=month, year=year, category=cat).first()
+            if plan and plan.working_days:
+                try:
+                    w = float(plan.working_days)
+                    if w > 0:
+                        emp_working_days = w
+                        break
+                except (ValueError, TypeError):
+                    pass
+
+        trend = trending(emp_mtd_actual, adjusted_elapsed, emp_working_days)
+        proj  = projection(trend, emp_full_plan)
+
         rows.append({
-            'category':      cat,
-            'today_plan':    round(d['today_plan'],   2),
-            'today_actual':  round(d['today_actual'], 2),
-            'today_pct':     pct(d['today_actual'], d['today_plan']),
-            'wtd_plan':      round(d['wtd_plan'],   2),
-            'wtd_actual':    round(d['wtd_actual'], 2),
-            'wtd_pct':       pct(d['wtd_actual'], d['wtd_plan']),
-            'mtd_plan':      round(d['mtd_plan'],   2),
-            'mtd_actual':    round(d['mtd_actual'], 2),
-            'mtd_pct':       pct(d['mtd_actual'], d['mtd_plan']),
+            'employee_id':   emp_id,
+            'employee_name': emp_name,
+            'category':      emp_name,  # for compatibility
+            'today_plan':    round(emp_today_plan,   2),
+            'today_actual':  round(emp_today_actual, 2),
+            'today_pct':     pct(emp_today_actual, emp_today_plan),
+            'wtd_plan':      round(emp_wtd_plan,   2),
+            'wtd_actual':    round(emp_wtd_actual, 2),
+            'wtd_pct':       pct(emp_wtd_actual, emp_wtd_plan),
+            'mtd_plan':      round(emp_mtd_plan,   2),
+            'mtd_actual':    round(emp_mtd_actual, 2),
+            'mtd_pct':       pct(emp_mtd_actual, emp_mtd_plan),
             'trending':      trend,
             'projection':    proj,
         })
-        for k in grand:
-            grand[k] += d[k]
+
+        grand['today_plan']   += emp_today_plan
+        grand['today_actual'] += emp_today_actual
+        grand['wtd_plan']     += emp_wtd_plan
+        grand['wtd_actual']   += emp_wtd_actual
+        grand['mtd_plan']     += emp_mtd_plan
+        grand['mtd_actual']   += emp_mtd_actual
+        grand['full_plan']    += emp_full_plan
 
     # Grand Total row
     max_working_days = max(working_days_by_category.values()) if working_days_by_category else month_adjusted_days
     grand_trend = trending(grand['mtd_actual'], adjusted_elapsed, max_working_days)
     grand_proj  = projection(grand_trend, grand['full_plan'])
     rows.append({
+        'employee_id':   'total',
+        'employee_name': 'Total',
         'category':      'Total',
         'today_plan':    round(grand['today_plan'],   2),
         'today_actual':  round(grand['today_actual'], 2),
@@ -988,6 +1025,8 @@ def salesplan_summary(request):
         'today_label':  report_upto.strftime("%d-%b").lstrip("0"),
         'wtd_label':    f"{wtd_start_date.strftime('%d-%b').lstrip('0')} to {report_upto.strftime('%d-%b').lstrip('0')}",
         'mtd_label':    f"1-{report_upto.strftime('%b')} to {report_upto.strftime('%d-%b').lstrip('0')}",
+        'category':     category,
+        'categories':   all_categories,
         'rows': rows,
     })
 
@@ -1370,6 +1409,7 @@ def salesplanreport(request):
             actual_wtd = 0.0
             actual_day = 0.0
             actual_by_day = {d['day']: 0.0 for d in days}
+            actual_volume_by_day = {d['day']: 0 for d in days}
             actual_weekly_totals = {}  # { iso_week_number: revenue }
             for bill in billing_qs.only('bill_date', 'netAmount'):
                 if not bill.bill_date:
@@ -1387,8 +1427,9 @@ def salesplanreport(request):
                 if day_target is not None and bill_day == day_target:
                     actual_day += amount
                 if bill_day in actual_by_day:
-                    # Sum netAmount (revenue) per day instead of just counting bills
+                    # Sum netAmount (revenue) per day and count bills as volume
                     actual_by_day[bill_day] += amount
+                    actual_volume_by_day[bill_day] += 1
                 # Aggregate into ISO week bucket
                 _, bill_iso_week, _ = bill_local_dt.date().isocalendar()
                 actual_weekly_totals[bill_iso_week] = (
@@ -1411,10 +1452,11 @@ def salesplanreport(request):
                 'diff_day': (
                     round(plan_day - actual_day, 2) if day_target is not None else None
                 ),
-                # Daily grids: plan uses revenue (₹) and volume, actual uses sum of netAmount (₹)
+                # Daily grids: plan uses revenue (₹) and volume, actual uses sum of netAmount (₹) and count of billings
                 'plan_by_day': {str(k): round(v, 2) for k, v in plan_by_day.items()},
                 'plan_volume_by_day': {str(k): round(v, 2) for k, v in plan_volume_by_day.items()},
                 'actual_by_day': {str(k): round(v, 2) for k, v in actual_by_day.items()},
+                'actual_volume_by_day': {str(k): v for k, v in actual_volume_by_day.items()},
                 # Weekly totals: plan from SalesPlan.weekly_totals, actual computed from billing
                 'plan_weekly_totals': {str(k): round(v, 2) for k, v in plan_weekly_totals.items()},
                 'actual_weekly_totals': {str(k): round(v, 2) for k, v in actual_weekly_totals.items()},
