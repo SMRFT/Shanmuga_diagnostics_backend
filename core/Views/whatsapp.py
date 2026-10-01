@@ -51,7 +51,7 @@ def upload_pdf_to_gridfs(request):
         file_id = fs.put(file, filename=safe_name)
 
         # 5. Generate access URL
-        file_url = f"https://shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}"
+        file_url = f"https://test.shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}/"
 
         return JsonResponse({"file_id": str(file_id), "file_url": file_url})
 
@@ -96,27 +96,92 @@ def send_whatsapp(request):
         if not str(phone).startswith("91"):
             phone = f"91{phone}"
 
-        # Prepare params list for the template
-        # Order: 1=Name, 2=Time, 3=Date, 4=Link
-        template_params_list = [
-            patient_name,
-            collection_time,
-            collected_date,
-            file_url
-        ]
-        # Join with commas. Note: ensure no commas in values or handle them? 
-        # API likely expects simple CSV.
-        template_params = ",".join([str(p) for p in template_params_list])
+        # Ensure file_url has trailing slash if it is get-file endpoint
+        if file_url and not file_url.endswith("/"):
+            file_url = f"{file_url}/"
 
-        template_name = request.data.get("template_name", "diagnostics_report_main")
+        # Sanitize pdf_name: remove dots in the middle (e.g. "Mr. Name" -> "Mr_Name")
+        # because Meta WhatsApp API rejects/fails filename parsing if dots exist prior to .pdf
+        import re
+        base_name = pdf_name
+        if base_name.lower().endswith(".pdf"):
+            base_name = base_name[:-4]
+        clean_base = re.sub(r'[^a-zA-Z0-9_\- ]', '_', base_name).strip()
+        clean_base = re.sub(r'_+', '_', clean_base)
+        if not clean_base:
+            clean_base = "Diagnostics_Report"
+        pdf_name = f"{clean_base}.pdf"
 
-        payload = {
-            "to": phone,
-            "type": "template",
-            "templateName": template_name,
-            "templateData": template_params_list,
-            "category": "UTILITY"
-        }
+        template_name = request.data.get("template_name", "diagnostics_report_direct_pdf")
+
+        if template_name in ["hms_diagnostics_template", "hms_diagnostics_direct_pdf", "hms_lab_pdf", "hms_report_pdf"]:
+            # HMS Direct PDF template:
+            # Header: DOCUMENT (mediaUrl, filename)
+            # Body: 1=Name, 2=Time, 3=Date
+            template_name = "hms_report_pdf"
+            template_params_list = [
+                patient_name,
+                collection_time,
+                collected_date
+            ]
+            payload = {
+                "to": phone,
+                "type": "template",
+                "templateName": template_name,
+                "templateData": template_params_list,
+                "mediaUrl": file_url,
+                "filename": pdf_name,
+                "fileName": pdf_name,
+                "mediaFilename": pdf_name,
+                "mediaFileName": pdf_name,
+                "documentName": pdf_name,
+                "category": "UTILITY"
+            }
+        elif template_name in ["diagnostics_report_direct_pdf", "diagnostics_report_main_new", "diagnostics_report_main"]:
+            # Main LIS Direct PDF template:
+            # Header: DOCUMENT (mediaUrl, filename)
+            # Body: 1=Name, 2=Time, 3=Date
+            template_name = "diagnostics_report_direct_pdf"
+            template_params_list = [
+                patient_name,
+                collection_time,
+                collected_date
+            ]
+            payload = {
+                "to": phone,
+                "type": "template",
+                "templateName": template_name,
+                "templateData": template_params_list,
+                "mediaUrl": file_url,
+                "filename": pdf_name,
+                "fileName": pdf_name,
+                "mediaFilename": pdf_name,
+                "mediaFileName": pdf_name,
+                "documentName": pdf_name,
+                "category": "UTILITY"
+            }
+        else:
+            # Fallback for other templates
+            template_params_list = [
+                patient_name,
+                collection_time,
+                collected_date,
+                file_url
+            ]
+            payload = {
+                "to": phone,
+                "type": "template",
+                "templateName": template_name,
+                "templateData": template_params_list,
+                "mediaUrl": file_url,
+                "filename": pdf_name,
+                "fileName": pdf_name,
+                "mediaFilename": pdf_name,
+                "mediaFileName": pdf_name,
+                "documentName": pdf_name,
+                "category": "UTILITY"
+            }
+
         headers = {
             "Authorization": "Bearer btfy_aa1b818c6473403a74cce7c913007df4af197c22ee4ae0c12019e5f408d93b70",
             "Content-Type": "application/json"

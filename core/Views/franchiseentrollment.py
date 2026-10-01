@@ -677,7 +677,7 @@ def get_file(request, file_id):
                 content_type = 'application/octet-stream'
 
         response = HttpResponse(file_obj.read(), content_type=content_type)
-        response['Content-Disposition'] = f'inline; filename="{filename}"'
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
         response['Access-Control-Allow-Origin'] = '*'
         return response
     except Exception as e:
