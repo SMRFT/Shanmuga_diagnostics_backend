@@ -1972,12 +1972,53 @@ def franchise_home_collection_views(request):
         try:
             franchise_id = request.GET.get('franchise_id')
             status_filter = request.GET.get('status')
+            from_date = request.GET.get('from_date') or request.GET.get('fromDate')
+            to_date = request.GET.get('to_date') or request.GET.get('toDate')
 
             query = {}
             if franchise_id:
                 query['franchise_id'] = franchise_id
             if status_filter and status_filter != 'all':
                 query['status'] = status_filter
+
+            # Date range filtering (supports both ISODate and ISO string)
+            if from_date or to_date:
+                try:
+                    dt_start = datetime.strptime(from_date, "%Y-%m-%d") if from_date else None
+                    dt_end = (
+                        datetime.strptime(to_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+                        if to_date else None
+                    )
+                    sub_queries = []
+                    
+                    # 1. Date as ISODate
+                    d_iso = {}
+                    if dt_start: d_iso["$gte"] = dt_start
+                    if dt_end: d_iso["$lte"] = dt_end
+                    if d_iso: sub_queries.append({"date": d_iso})
+
+                    # 2. created_date as ISODate
+                    c_iso = {}
+                    if dt_start: c_iso["$gte"] = dt_start
+                    if dt_end: c_iso["$lte"] = dt_end
+                    if c_iso: sub_queries.append({"created_date": c_iso})
+
+                    # 3. Date as ISO String
+                    d_str = {}
+                    if from_date: d_str["$gte"] = from_date
+                    if to_date: d_str["$lte"] = to_date + "T23:59:59.999999"
+                    if d_str: sub_queries.append({"date": d_str})
+
+                    # 4. created_date as ISO String
+                    c_str = {}
+                    if from_date: c_str["$gte"] = from_date
+                    if to_date: c_str["$lte"] = to_date + "T23:59:59.999999"
+                    if c_str: sub_queries.append({"created_date": c_str})
+
+                    if sub_queries:
+                        query["$or"] = sub_queries
+                except Exception as date_err:
+                    print("Date parsing error in franchise_home_collection_views:", date_err)
 
             # Build lookup dictionary for franchise names
             franchise_map = {}
