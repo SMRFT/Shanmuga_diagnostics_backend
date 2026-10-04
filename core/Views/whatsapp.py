@@ -153,6 +153,12 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
+                "media_url": file_url,
+                "headerValues": [file_url],
+                "headerData": [file_url],
+                "header_params": [file_url],
+                "header_url": file_url,
+                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
@@ -168,6 +174,12 @@ def send_whatsapp(request):
                 "templateName": "diagnostics_report_direct_pdf",
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
+                "media_url": file_url,
+                "headerValues": [file_url],
+                "headerData": [file_url],
+                "header_params": [file_url],
+                "header_url": file_url,
+                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
@@ -187,6 +199,12 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
+                "media_url": file_url,
+                "headerValues": [file_url],
+                "headerData": [file_url],
+                "header_params": [file_url],
+                "header_url": file_url,
+                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }

@@ -641,47 +641,47 @@ def get_all_franchise_locations(request):
         return JsonResponse({ "error": str(e) }, status=500)
 
 
-@csrf_exempt
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def get_file(request, file_id):
-    try:
-        mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
+# @csrf_exempt
+# @api_view(['GET'])
+# @permission_classes([AllowAny])
+# def get_file(request, file_id):
+#     try:
+#         mongo_url = os.getenv("GLOBAL_DB_HOST")
+#         client = MongoClient(mongo_url)
         
-        file_obj = None
-        # Try Diagnostics, franchise, whatsapp, Global databases GridFS
-        for db_name in ["Diagnostics", "franchise", "whatsapp", "Global"]:
-            try:
-                fs_candidate = gridfs.GridFS(client[db_name])
-                file_obj = fs_candidate.get(ObjectId(file_id))
-                if file_obj:
-                    break
-            except Exception:
-                pass
+#         file_obj = None
+#         # Try Diagnostics, franchise, whatsapp, Global databases GridFS
+#         for db_name in ["Diagnostics", "franchise", "whatsapp", "Global"]:
+#             try:
+#                 fs_candidate = gridfs.GridFS(client[db_name])
+#                 file_obj = fs_candidate.get(ObjectId(file_id))
+#                 if file_obj:
+#                     break
+#             except Exception:
+#                 pass
 
-        if not file_obj:
-            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+#         if not file_obj:
+#             return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        content_type = getattr(file_obj, 'content_type', None)
-        filename = getattr(file_obj, 'filename', '') or 'document'
-        if not content_type:
-            lower_name = filename.lower()
-            if lower_name.endswith('.pdf'):
-                content_type = 'application/pdf'
-            elif lower_name.endswith(('.jpg', '.jpeg')):
-                content_type = 'image/jpeg'
-            elif lower_name.endswith('.png'):
-                content_type = 'image/png'
-            else:
-                content_type = 'application/octet-stream'
+#         content_type = getattr(file_obj, 'content_type', None)
+#         filename = getattr(file_obj, 'filename', '') or 'document'
+#         if not content_type:
+#             lower_name = filename.lower()
+#             if lower_name.endswith('.pdf'):
+#                 content_type = 'application/pdf'
+#             elif lower_name.endswith(('.jpg', '.jpeg')):
+#                 content_type = 'image/jpeg'
+#             elif lower_name.endswith('.png'):
+#                 content_type = 'image/png'
+#             else:
+#                 content_type = 'application/octet-stream'
 
-        response = HttpResponse(file_obj.read(), content_type=content_type)
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        response['Access-Control-Allow-Origin'] = '*'
-        return response
-    except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+#         response = HttpResponse(file_obj.read(), content_type=content_type)
+#         response['Content-Disposition'] = f'attachment; filename="{filename}"'
+#         response['Access-Control-Allow-Origin'] = '*'
+#         return response
+#     except Exception as e:
+#         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['PATCH'])
@@ -1972,12 +1972,53 @@ def franchise_home_collection_views(request):
         try:
             franchise_id = request.GET.get('franchise_id')
             status_filter = request.GET.get('status')
+            from_date = request.GET.get('from_date') or request.GET.get('fromDate')
+            to_date = request.GET.get('to_date') or request.GET.get('toDate')
 
             query = {}
             if franchise_id:
                 query['franchise_id'] = franchise_id
             if status_filter and status_filter != 'all':
                 query['status'] = status_filter
+
+            # Date range filtering (supports both ISODate and ISO string)
+            if from_date or to_date:
+                try:
+                    dt_start = datetime.strptime(from_date, "%Y-%m-%d") if from_date else None
+                    dt_end = (
+                        datetime.strptime(to_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999)
+                        if to_date else None
+                    )
+                    sub_queries = []
+                    
+                    # 1. Date as ISODate
+                    d_iso = {}
+                    if dt_start: d_iso["$gte"] = dt_start
+                    if dt_end: d_iso["$lte"] = dt_end
+                    if d_iso: sub_queries.append({"date": d_iso})
+
+                    # 2. created_date as ISODate
+                    c_iso = {}
+                    if dt_start: c_iso["$gte"] = dt_start
+                    if dt_end: c_iso["$lte"] = dt_end
+                    if c_iso: sub_queries.append({"created_date": c_iso})
+
+                    # 3. Date as ISO String
+                    d_str = {}
+                    if from_date: d_str["$gte"] = from_date
+                    if to_date: d_str["$lte"] = to_date + "T23:59:59.999999"
+                    if d_str: sub_queries.append({"date": d_str})
+
+                    # 4. created_date as ISO String
+                    c_str = {}
+                    if from_date: c_str["$gte"] = from_date
+                    if to_date: c_str["$lte"] = to_date + "T23:59:59.999999"
+                    if c_str: sub_queries.append({"created_date": c_str})
+
+                    if sub_queries:
+                        query["$or"] = sub_queries
+                except Exception as date_err:
+                    print("Date parsing error in franchise_home_collection_views:", date_err)
 
             # Build lookup dictionary for franchise names
             franchise_map = {}
