@@ -28,9 +28,22 @@ client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
 db = client["Diagnostics"]
 fs = gridfs.GridFS(db)
 
+def clean_filename(name):
+    import re
+    if not name:
+        return "Diagnostics_Report.pdf"
+    name_str = str(name).strip()
+    if name_str.lower().endswith(".pdf"):
+        name_str = name_str[:-4]
+    clean = re.sub(r'[^a-zA-Z0-9_\-]', '_', name_str).strip()
+    clean = re.sub(r'_+', '_', clean).strip('_')
+    if not clean:
+        clean = "Diagnostics_Report"
+    return f"{clean}.pdf"
+
 @api_view(['POST'])
+@permission_classes([AllowAny])
 @csrf_exempt
-# @permission_classes([HasRoleAndDataPermission])
 def upload_pdf_to_gridfs(request):
     if request.method == "POST" and request.FILES.get("file"):
         file = request.FILES["file"]
@@ -43,15 +56,14 @@ def upload_pdf_to_gridfs(request):
         if file.size > 5 * 1024 * 1024:
             return JsonResponse({"error": "File too large (max 5 MB)."}, status=400)
 
-        # 3. Sanitize filename
-        import re
-        safe_name = re.sub(r'[^a-zA-Z0-9_\.\-]', '_', file.name)
+        # 3. Sanitize filename (strictly no dots before .pdf)
+        safe_name = clean_filename(file.name)
 
         # 4. Upload to GridFS
         file_id = fs.put(file, filename=safe_name)
 
-        # 5. Generate access URL
-        file_url = f"https://test.shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}/"
+        # 5. Generate access URL (Must be public HTTPS domain for Meta WhatsApp API)
+        file_url = f"https://shinova.in/_b_a_c_k_e_n_d/LIS/get-file/{str(file_id)}/"
 
         return JsonResponse({"file_id": str(file_id), "file_url": file_url})
 
@@ -61,16 +73,36 @@ from django.http import HttpResponse
 from bson import ObjectId
 
 @api_view(['GET'])
+@permission_classes([AllowAny])
 @csrf_exempt
-# @permission_classes([ HasRoleAndDataPermission])
-def get_pdf_from_gridfs(request, file_id):
+def get_pdf_from_gridfs(request, file_id, filename=None):
     try:
-        file = fs.get(ObjectId(file_id))
-        response = HttpResponse(file.read(), content_type="application/pdf")
-        response["Content-Disposition"] = f'attachment; filename="{file.filename}"'  # ← forces download
+        clean_file_id = str(file_id).strip()
+        if clean_file_id.lower().endswith(".pdf"):
+            clean_file_id = clean_file_id[:-4]
+
+        file_obj = None
+        for db_name in ["Diagnostics", "franchise", "whatsapp", "Global"]:
+            try:
+                fs_candidate = gridfs.GridFS(client[db_name])
+                file_obj = fs_candidate.get(ObjectId(clean_file_id))
+                if file_obj:
+                    break
+            except Exception:
+                pass
+
+        if not file_obj:
+            return JsonResponse({"error": "File not found"}, status=404)
+
+        response = HttpResponse(file_obj.read(), content_type="application/pdf")
+        out_filename = clean_filename(filename or getattr(file_obj, 'filename', 'Report.pdf'))
+
+        response["Content-Disposition"] = f'attachment; filename="{out_filename}"'
+        response['Access-Control-Allow-Origin'] = '*'
         return response
-    except:
-        return JsonResponse({"error": "File not found"}, status=404)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=404)
+
 
 
 
@@ -79,6 +111,8 @@ from core.models import CommunicationLog
 
 
 @api_view(["POST"])
+@permission_classes([AllowAny])
+@csrf_exempt
 def send_whatsapp(request):
     try:
         patient_name = request.data.get("patient_name", "Valued Patient")
@@ -96,28 +130,17 @@ def send_whatsapp(request):
         if not str(phone).startswith("91"):
             phone = f"91{phone}"
 
-        # Ensure file_url has trailing slash if it is get-file endpoint
-        if file_url and not file_url.endswith("/"):
-            file_url = f"{file_url}/"
+        # Ensure file_url has trailing slash for get-file endpoint
+        if file_url:
+            if not file_url.endswith("/"):
+                file_url = f"{file_url}/"
 
-        # Sanitize pdf_name: remove dots in the middle (e.g. "Mr. Name" -> "Mr_Name")
-        # because Meta WhatsApp API rejects/fails filename parsing if dots exist prior to .pdf
-        import re
-        base_name = pdf_name
-        if base_name.lower().endswith(".pdf"):
-            base_name = base_name[:-4]
-        clean_base = re.sub(r'[^a-zA-Z0-9_\- ]', '_', base_name).strip()
-        clean_base = re.sub(r'_+', '_', clean_base)
-        if not clean_base:
-            clean_base = "Diagnostics_Report"
-        pdf_name = f"{clean_base}.pdf"
+        # Sanitize pdf_name: remove dots/spaces in middle for Meta WhatsApp API compatibility
+        pdf_name = clean_filename(pdf_name)
 
         template_name = request.data.get("template_name", "diagnostics_report_direct_pdf")
 
         if template_name in ["hms_diagnostics_template", "hms_diagnostics_direct_pdf", "hms_lab_pdf", "hms_report_pdf"]:
-            # HMS Direct PDF template:
-            # Header: DOCUMENT (mediaUrl, filename)
-            # Body: 1=Name, 2=Time, 3=Date
             template_name = "hms_report_pdf"
             template_params_list = [
                 patient_name,
@@ -130,6 +153,12 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
+                "media_url": file_url,
+                "headerValues": [file_url],
+                "headerData": [file_url],
+                "header_params": [file_url],
+                "header_url": file_url,
+                "headerUrl": file_url,
                 "filename": pdf_name,
                 "fileName": pdf_name,
                 "mediaFilename": pdf_name,
@@ -138,9 +167,6 @@ def send_whatsapp(request):
                 "category": "UTILITY"
             }
         elif template_name in ["diagnostics_report_direct_pdf", "diagnostics_report_main_new", "diagnostics_report_main"]:
-            # Main LIS Direct PDF template:
-            # Header: DOCUMENT (mediaUrl, filename)
-            # Body: 1=Name, 2=Time, 3=Date
             template_name = "diagnostics_report_direct_pdf"
             template_params_list = [
                 patient_name,
@@ -153,6 +179,12 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
+                "media_url": file_url,
+                "headerValues": [file_url],
+                "headerData": [file_url],
+                "header_params": [file_url],
+                "header_url": file_url,
+                "headerUrl": file_url,
                 "filename": pdf_name,
                 "fileName": pdf_name,
                 "mediaFilename": pdf_name,
@@ -161,7 +193,6 @@ def send_whatsapp(request):
                 "category": "UTILITY"
             }
         else:
-            # Fallback for other templates
             template_params_list = [
                 patient_name,
                 collection_time,
@@ -174,6 +205,12 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
+                "media_url": file_url,
+                "headerValues": [file_url],
+                "headerData": [file_url],
+                "header_params": [file_url],
+                "header_url": file_url,
+                "headerUrl": file_url,
                 "filename": pdf_name,
                 "fileName": pdf_name,
                 "mediaFilename": pdf_name,
