@@ -641,47 +641,47 @@ def get_all_franchise_locations(request):
         return JsonResponse({ "error": str(e) }, status=500)
 
 
-@csrf_exempt
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def get_file(request, file_id):
-    try:
-        mongo_url = os.getenv("GLOBAL_DB_HOST")
-        client = MongoClient(mongo_url)
+# @csrf_exempt
+# @api_view(['GET'])
+# @permission_classes([AllowAny])
+# def get_file(request, file_id):
+#     try:
+#         mongo_url = os.getenv("GLOBAL_DB_HOST")
+#         client = MongoClient(mongo_url)
         
-        file_obj = None
-        # Try Diagnostics, franchise, whatsapp, Global databases GridFS
-        for db_name in ["Diagnostics", "franchise", "whatsapp", "Global"]:
-            try:
-                fs_candidate = gridfs.GridFS(client[db_name])
-                file_obj = fs_candidate.get(ObjectId(file_id))
-                if file_obj:
-                    break
-            except Exception:
-                pass
+#         file_obj = None
+#         # Try Diagnostics, franchise, whatsapp, Global databases GridFS
+#         for db_name in ["Diagnostics", "franchise", "whatsapp", "Global"]:
+#             try:
+#                 fs_candidate = gridfs.GridFS(client[db_name])
+#                 file_obj = fs_candidate.get(ObjectId(file_id))
+#                 if file_obj:
+#                     break
+#             except Exception:
+#                 pass
 
-        if not file_obj:
-            return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
+#         if not file_obj:
+#             return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        content_type = getattr(file_obj, 'content_type', None)
-        filename = getattr(file_obj, 'filename', '') or 'document'
-        if not content_type:
-            lower_name = filename.lower()
-            if lower_name.endswith('.pdf'):
-                content_type = 'application/pdf'
-            elif lower_name.endswith(('.jpg', '.jpeg')):
-                content_type = 'image/jpeg'
-            elif lower_name.endswith('.png'):
-                content_type = 'image/png'
-            else:
-                content_type = 'application/octet-stream'
+#         content_type = getattr(file_obj, 'content_type', None)
+#         filename = getattr(file_obj, 'filename', '') or 'document'
+#         if not content_type:
+#             lower_name = filename.lower()
+#             if lower_name.endswith('.pdf'):
+#                 content_type = 'application/pdf'
+#             elif lower_name.endswith(('.jpg', '.jpeg')):
+#                 content_type = 'image/jpeg'
+#             elif lower_name.endswith('.png'):
+#                 content_type = 'image/png'
+#             else:
+#                 content_type = 'application/octet-stream'
 
-        response = HttpResponse(file_obj.read(), content_type=content_type)
-        response['Content-Disposition'] = f'attachment; filename="{filename}"'
-        response['Access-Control-Allow-Origin'] = '*'
-        return response
-    except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+#         response = HttpResponse(file_obj.read(), content_type=content_type)
+#         response['Content-Disposition'] = f'attachment; filename="{filename}"'
+#         response['Access-Control-Allow-Origin'] = '*'
+#         return response
+#     except Exception as e:
+#         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 @api_view(['PATCH'])
