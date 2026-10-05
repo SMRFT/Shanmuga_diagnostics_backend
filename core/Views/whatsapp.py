@@ -138,7 +138,7 @@ def send_whatsapp(request):
         # Sanitize pdf_name: remove dots/spaces in middle for Meta WhatsApp API compatibility
         pdf_name = clean_filename(pdf_name)
 
-        template_name = request.data.get("template_name", "diagnostics_direct_pdf_v4")
+        template_name = request.data.get("template_name", "diagnostics_report_main")
 
         if template_name in ["hms_diagnostics_template", "hms_diagnostics_direct_pdf", "hms_lab_pdf", "hms_report_pdf"]:
             template_name = "hms_report_pdf"
@@ -153,16 +153,10 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
-                "media_url": file_url,
-                "headerValues": [file_url],
-                "headerData": [file_url],
-                "header_params": [file_url],
-                "header_url": file_url,
-                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
-        elif template_name in ["diagnostics_direct_pdf_v4", "diagnostics_direct_pdf_v3", "diagnostics_report_direct_pdf", "diagnostics_report_main_new"]:
+        elif template_name in ["diagnostics_direct_pdf_v4", "diagnostics_direct_pdf_v3", "diagnostics_report_direct_pdf"]:
             template_params_list = [
                 patient_name,
                 collection_time,
@@ -174,22 +168,18 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
-                "media_url": file_url,
-                "headerValues": [file_url],
-                "headerData": [file_url],
-                "header_params": [file_url],
-                "header_url": file_url,
-                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
         else:
-            # Default Main LIS template: "diagnostics_direct_pdf_v4"
-            template_name = "diagnostics_direct_pdf_v4"
+            # Default Main LIS Link template: "diagnostics_report_main"
+            # Body expects 4 params: 1=Name, 2=Time, 3=Date, 4=PDF_URL
+            template_name = "diagnostics_report_main"
             template_params_list = [
                 patient_name,
                 collection_time,
-                collected_date
+                collected_date,
+                file_url
             ]
             payload = {
                 "to": phone,
@@ -197,12 +187,6 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
-                "media_url": file_url,
-                "headerValues": [file_url],
-                "headerData": [file_url],
-                "header_params": [file_url],
-                "header_url": file_url,
-                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
