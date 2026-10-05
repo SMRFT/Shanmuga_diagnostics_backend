@@ -153,16 +153,10 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
-                "media_url": file_url,
-                "headerValues": [file_url],
-                "headerData": [file_url],
-                "header_params": [file_url],
-                "header_url": file_url,
-                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
-        elif template_name == "diagnostics_report_direct_pdf":
+        elif template_name in ["diagnostics_direct_pdf_v4", "diagnostics_direct_pdf_v3", "diagnostics_report_direct_pdf"]:
             template_params_list = [
                 patient_name,
                 collection_time,
@@ -171,20 +165,14 @@ def send_whatsapp(request):
             payload = {
                 "to": phone,
                 "type": "template",
-                "templateName": "diagnostics_report_direct_pdf",
+                "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
-                "media_url": file_url,
-                "headerValues": [file_url],
-                "headerData": [file_url],
-                "header_params": [file_url],
-                "header_url": file_url,
-                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
         else:
-            # Default Main LIS template: "diagnostics_report_main_new" or "diagnostics_report_main"
+            # Default Main LIS Link template: "diagnostics_report_main_new"
             # Body expects 4 params: 1=Name, 2=Time, 3=Date, 4=PDF_URL
             template_name = request.data.get("template_name", "diagnostics_report_main_new")
             template_params_list = [
@@ -199,12 +187,6 @@ def send_whatsapp(request):
                 "templateName": template_name,
                 "templateData": template_params_list,
                 "mediaUrl": file_url,
-                "media_url": file_url,
-                "headerValues": [file_url],
-                "headerData": [file_url],
-                "header_params": [file_url],
-                "header_url": file_url,
-                "headerUrl": file_url,
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
