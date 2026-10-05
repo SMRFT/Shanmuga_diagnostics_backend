@@ -138,7 +138,7 @@ def send_whatsapp(request):
         # Sanitize pdf_name: remove dots/spaces in middle for Meta WhatsApp API compatibility
         pdf_name = clean_filename(pdf_name)
 
-        template_name = request.data.get("template_name", "diagnostics_direct_pdf_v3")
+        template_name = request.data.get("template_name", "diagnostics_direct_pdf_v4")
 
         if template_name in ["hms_diagnostics_template", "hms_diagnostics_direct_pdf", "hms_lab_pdf", "hms_report_pdf"]:
             template_name = "hms_report_pdf"
@@ -162,7 +162,7 @@ def send_whatsapp(request):
                 "filename": pdf_name,
                 "category": "UTILITY"
             }
-        elif template_name in ["diagnostics_direct_pdf_v3", "diagnostics_report_direct_pdf", "diagnostics_report_main_new"]:
+        elif template_name in ["diagnostics_direct_pdf_v4", "diagnostics_direct_pdf_v3", "diagnostics_report_direct_pdf", "diagnostics_report_main_new"]:
             template_params_list = [
                 patient_name,
                 collection_time,
@@ -184,8 +184,8 @@ def send_whatsapp(request):
                 "category": "UTILITY"
             }
         else:
-            # Default Main LIS template: "diagnostics_direct_pdf_v3"
-            template_name = "diagnostics_direct_pdf_v3"
+            # Default Main LIS template: "diagnostics_direct_pdf_v4"
+            template_name = "diagnostics_direct_pdf_v4"
             template_params_list = [
                 patient_name,
                 collection_time,
