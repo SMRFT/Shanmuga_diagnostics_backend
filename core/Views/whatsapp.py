@@ -140,12 +140,13 @@ def send_whatsapp(request):
 
         template_name = request.data.get("template_name", "diagnostics_report_main_new")
 
-        if template_name in ["hms_diagnostics_template", "hms_diagnostics_direct_pdf", "hms_lab_pdf", "hms_report_pdf"]:
-            template_name = "hms_report_pdf"
+        if template_name in ["hms_diagnostics_template", "hms_diagnostics_direct_pdf", "hms_lab_pdf", "hms_report_pdf", "hms_report_new"]:
+            template_name = request.data.get("template_name", "hms_report_new")
             template_params_list = [
                 patient_name,
                 collection_time,
-                collected_date
+                collected_date,
+                file_url
             ]
             payload = {
                 "to": phone,
@@ -160,7 +161,8 @@ def send_whatsapp(request):
             template_params_list = [
                 patient_name,
                 collection_time,
-                collected_date
+                collected_date,
+                file_url
             ]
             payload = {
                 "to": phone,
