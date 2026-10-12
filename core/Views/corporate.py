@@ -2022,17 +2022,22 @@ def corporate_health_report(request):
             raw_dynamic = franchise_investigation.get("dynamic_fields", [])
             if isinstance(raw_dynamic, list):
                 for field in raw_dynamic:
-                    field_name = field.get("field_name", "")
+                    field_id = field.get("field_id", "")
+                    field_name = field.get("field_name", "") or ""
                     field_values = field.get("field_values", [])
-                    if field_name and isinstance(field_values, list) and field_values:
-                        # Only include entries with non-empty values
-                        valid_pairs = [
-                            {"key": fv.get("key", ""), "value": fv.get("value", "")}
-                            for fv in field_values
-                            if isinstance(fv, dict) and (fv.get("key") or fv.get("value"))
-                        ]
+                    if isinstance(field_values, list) and field_values:
+                        valid_pairs = []
+                        for fv in field_values:
+                            if isinstance(fv, dict):
+                                val = str(fv.get("value", "") if fv.get("value") is not None else "").strip()
+                                if val != "":
+                                    valid_pairs.append({
+                                        "key": fv.get("key", "") or "",
+                                        "value": val,
+                                    })
                         if valid_pairs:
                             dynamic_fields_data.append({
+                                "field_id": field_id,
                                 "field_name": field_name,
                                 "field_values": valid_pairs,
                             })
@@ -2602,6 +2607,7 @@ def get_investigation_status(request):
             "chc_investigation_status": chc_overall_status,
             "vitals": vitals_data,
             "patient_history": patient_history,
+            "dynamic_fields": investigation.get("dynamic_fields", []),
         })
 
     except Exception as e:
@@ -3003,16 +3009,22 @@ def get_batch_corporate_health_reports(request):
                     raw_dynamic = franchise_investigation.get("dynamic_fields", [])
                     if isinstance(raw_dynamic, list):
                         for field in raw_dynamic:
-                            field_name = field.get("field_name", "")
+                            field_id = field.get("field_id", "")
+                            field_name = field.get("field_name", "") or ""
                             field_values = field.get("field_values", [])
-                            if field_name and isinstance(field_values, list) and field_values:
-                                valid_pairs = [
-                                    {"key": fv.get("key", ""), "value": fv.get("value", "")}
-                                    for fv in field_values
-                                    if isinstance(fv, dict) and (fv.get("key") or fv.get("value"))
-                                ]
+                            if isinstance(field_values, list) and field_values:
+                                valid_pairs = []
+                                for fv in field_values:
+                                    if isinstance(fv, dict):
+                                        val = str(fv.get("value", "") if fv.get("value") is not None else "").strip()
+                                        if val != "":
+                                            valid_pairs.append({
+                                                "key": fv.get("key", "") or "",
+                                                "value": val,
+                                            })
                                 if valid_pairs:
                                     dynamic_fields_data.append({
+                                        "field_id": field_id,
                                         "field_name": field_name,
                                         "field_values": valid_pairs,
                                     })
