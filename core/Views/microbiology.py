@@ -734,7 +734,7 @@ def mb_compare_test_details(request):
                     "specimen_type": test_detail.get("specimen_type", param.get("specimen_type")),
                     "NABL": test_detail.get("NABL", "N/A"),
                     "sub_title": param.get("sub_title"),
-                    "value_option": param.get("value_option"),
+                    "value_option": param.get("value_option") or test_detail.get("value_option") or [],
                 })
 
     client.close()

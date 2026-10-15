@@ -934,6 +934,15 @@ def process_test_data(
             return {"default": parameters}
         return {}
 
+    def to_bool_flag(val):
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.strip().lower() in ("true", "1")
+        if isinstance(val, (int, float)):
+            return bool(val)
+        return False
+
     # ── Pre-fetch all interface_testvalue records for this plain barcode ──────
     # This fetches records where Barcode starts with the plain barcode
     # e.g. "000759", "000759-F", "000759-P", "000759-R"
@@ -1106,6 +1115,7 @@ def process_test_data(
                     "interpretation":    test_detail.get("interpretation", ""),
                     "critical_range":    test_detail.get("critical_range", ""),
                     "lod":               test_detail.get("lod", ""),
+                    "is_value_edit":     to_bool_flag(test_detail.get("is_value_edit", False)),
                 }
                 final_test_data.append(test_info)
                 continue
@@ -1253,12 +1263,13 @@ def process_test_data(
                         "created_date":      created_date,
                         "received_date":     received_date,
                         "sub_title":         param.get("sub_title"),
-                        "value_option":      param.get("value_option"),
+                        "value_option":      param.get("value_option") or test_detail.get("value_option") or [],
                         "comment_options":   test_detail.get("comment_options", []),
                         "specimen_options":  test_detail.get("specimen_options", []),
                         "interpretation":    test_detail.get("interpretation", ""),
                         "critical_range":    test_detail.get("critical_range", ""),
                         "lod":               test_detail.get("lod", ""),
+                        "is_value_edit":     to_bool_flag(test_detail.get("is_value_edit", False)),
                     }
                     final_test_data.append(test_info)
 
@@ -1293,6 +1304,7 @@ def process_test_data(
                 "sub_title":         None,
                 "value_option":      None,
                 "comment_options":   [],
+                "is_value_edit":     False,
             })
 
     return {"test_data": final_test_data, "processed_records": processed_records}
