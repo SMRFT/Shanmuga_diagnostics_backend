@@ -288,49 +288,45 @@ def logistics_dashboard(request):
         
         # Build base query for logistics
         logistics_query = Q()
-        
+        billing_query = Q()
+
         if collector:
-            logistics_query &= Q(sample_collector__iexact=collector)
+            emp_name = get_employee_name(collector)
+            collector_q = Q(sample_collector__iexact=collector) | Q(sample_collector__icontains=collector)
+            if emp_name and emp_name != collector:
+                collector_q |= Q(sample_collector__iexact=emp_name) | Q(sample_collector__icontains=emp_name)
+            logistics_query &= collector_q
+            billing_query &= collector_q
         
         # Parse dates
         start_dt = None
         end_dt = None
-        
+
         if start_date:
             try:
                 start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
                 logistics_query &= Q(date__gte=start_dt)
+                billing_query &= Q(date__gte=start_dt)
             except ValueError:
                 return Response(
                     {'error': 'Invalid start_date format. Use YYYY-MM-DD'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-        
+
         if end_date:
             try:
                 end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
                 logistics_query &= Q(date__lte=end_dt)
+                billing_query &= Q(date__lte=end_dt)
             except ValueError:
                 return Response(
                     {'error': 'Invalid end_date format. Use YYYY-MM-DD'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-        
+
         # Get logistics tasks
         logistics_tasks = Logistics.objects.filter(logistics_query).order_by('-date', '-sampleordertime')
-        
-        # Build query for billing data
-        billing_query = Q()
-        
-        if collector:
-            billing_query &= Q(sample_collector__iexact=collector)
-        
-        if start_dt:
-            billing_query &= Q(date__gte=start_dt)
-        
-        if end_dt:
-            billing_query &= Q(date__lte=end_dt)
-        
+
         # Get billing data from core_billing collection
         billing_data = Billing.objects.filter(billing_query).order_by('-date', '-created_date')
         
@@ -732,8 +728,10 @@ def routesetup(request, route_id=None):
             return Response({"message": "Route deleted successfully"}, status=status.HTTP_200_OK)
 
         # GET — support optional filters
-        collector_id = request.query_params.get("collector_id")
-        date_str     = request.query_params.get("date")
+        collector_id  = request.query_params.get("collector_id")
+        date_str      = request.query_params.get("date")
+        from_date_str = request.query_params.get("from_date")
+        to_date_str   = request.query_params.get("to_date")
 
         routes = RouteSetup.objects.all().order_by('-created_date')
 
@@ -741,7 +739,21 @@ def routesetup(request, route_id=None):
             routes = routes.filter(id=route_id)
         if collector_id:
             routes = routes.filter(logistics_mapping=collector_id)
-        if date_str:
+        if from_date_str:
+            try:
+                target_from = datetime.strptime(from_date_str, "%Y-%m-%d")
+                start_of_day = timezone.make_aware(target_from.replace(hour=0, minute=0, second=0, microsecond=0))
+                routes = routes.filter(created_date__gte=start_of_day)
+            except ValueError:
+                pass
+        if to_date_str:
+            try:
+                target_to = datetime.strptime(to_date_str, "%Y-%m-%d")
+                end_of_day = timezone.make_aware(target_to.replace(hour=23, minute=59, second=59, microsecond=999999))
+                routes = routes.filter(created_date__lte=end_of_day)
+            except ValueError:
+                pass
+        if date_str and not from_date_str and not to_date_str:
             try:
                 target_date = datetime.strptime(date_str, "%Y-%m-%d")
                 start_of_day = timezone.make_aware(target_date.replace(hour=0, minute=0, second=0, microsecond=0))
@@ -870,7 +882,11 @@ def route_analysis_admin_report(request):
             created_date__lte=end_of_day
         )
         if collector_id:
-            route_qs = route_qs.filter(logistics_mapping=collector_id)
+            route_qs = route_qs.filter(
+                Q(logistics_mapping=collector_id) |
+                Q(logistics_mapping__iexact=collector_id) |
+                Q(logistics_mapping__icontains=collector_id)
+            )
 
         # ── Fetch analyses for that date range ───────────────────────────────
         analysis_qs = RouteAnalysis.objects.filter(
