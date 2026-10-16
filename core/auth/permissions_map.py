@@ -69,9 +69,9 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/clinical-names/[^/]+/reject/?(\?.*)?$':'SD-P-SCU',
  
     #Logistics
-    r'^/_b_a_c_k_e_n_d/LIS/logistics/?(\?.*)?$': 'SD-P-LTA',
+    r'^/_b_a_c_k_e_n_d/LIS/logistics/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/logistics_by_collector/?(\?.*)?$': 'SD-P-LBC',
-    r'^/_b_a_c_k_e_n_d/LIS/logistics-dashboard/?(\?.*)?$': 'SD-P-LD',
+    r'^/_b_a_c_k_e_n_d/LIS/logistics-dashboard/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/logistics-tat-report/?(\?.*)?$': 'SD-P-LTR',
     r'^/_b_a_c_k_e_n_d/LIS/logistics/.*$': 'SD-P-LTM',
     '/_b_a_c_k_e_n_d/LIS/sample-collector-location/': 'SD-P-LSL',
@@ -102,7 +102,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/image/[^/]+/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/active/[^/]+/?(\?.*)?$': 'SD-P-LTM',
     r'^/_b_a_c_k_e_n_d/LIS/route-analysis/today-status/?(\?.*)?$': 'SD-P-LTM',
-    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/admin-report/?(\?.*)?$': 'SD-P-LTA',
+    r'^/_b_a_c_k_e_n_d/LIS/route-analysis/admin-report/?(\?.*)?$': 'SD-P-LTM',
 
 
     #Sample Status: 

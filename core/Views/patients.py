@@ -691,6 +691,8 @@ def update_bill(request):
             "bill_date": bill_date.isoformat() if bill_date else None,
             "data": {
                 "bill_id": str(record_id),
+                "bill_no": bill_no,
+                "bill_date": bill_date.isoformat() if bill_date else None,
                 "patient_id": billing_record.get("patient_id"),
                 "totalAmount": update_data["totalAmount"],
                 "netAmount": update_data["netAmount"],
@@ -949,6 +951,14 @@ def get_patients_by_date(request):
                     patient_dict.pop('_id', None)
                 patient_dict['order_id'] = getattr(patient, 'order_id', '') or ''
                 patient_dict['status'] = getattr(patient, 'status', 'Registered') or 'Registered'
+                patient_dict['bill_no'] = getattr(patient, 'bill_no', '') or patient_dict.get('bill_no', '')
+                b_date = getattr(patient, 'bill_date', None) or patient_dict.get('bill_date')
+                if b_date and hasattr(b_date, 'isoformat'):
+                    patient_dict['bill_date'] = b_date.isoformat()
+                elif b_date:
+                    patient_dict['bill_date'] = str(b_date)
+                else:
+                    patient_dict['bill_date'] = None
 
                 # -------- Patient Model Data --------
                 try:
