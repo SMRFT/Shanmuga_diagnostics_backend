@@ -876,17 +876,37 @@ def route_analysis_admin_report(request):
             date_list.append(current_date.strftime("%Y-%m-%d"))
             current_date += timedelta(days=1)
 
-        # ── Fetch all routes assigned in this date range ──────────────────────────
-        route_qs = RouteSetup.objects.filter(
-            created_date__gte=start_of_day,
-            created_date__lte=end_of_day
-        )
+        # ── Fetch routes ─────────────────────────────────────────────────────────
+        route_qs = RouteSetup.objects.all()
+        matched_collector_ids = []
         if collector_id:
-            route_qs = route_qs.filter(
-                Q(logistics_mapping=collector_id) |
-                Q(logistics_mapping__iexact=collector_id) |
-                Q(logistics_mapping__icontains=collector_id)
-            )
+            c_str = str(collector_id).strip()
+            matched_collector_ids = [c_str]
+            try:
+                import re
+                from .dbcollection import profile_collection
+                profile = profile_collection.find_one({
+                    "$or": [
+                        {"employeeId": c_str},
+                        {"employeeName": {"$regex": f"^{re.escape(c_str)}", "$options": "i"}}
+                    ]
+                })
+                if profile:
+                    if profile.get("employeeId"):
+                        matched_collector_ids.append(str(profile["employeeId"]).strip())
+                    if profile.get("employeeName"):
+                        matched_collector_ids.append(str(profile["employeeName"]).strip())
+            except Exception:
+                pass
+
+            collector_filter = Q()
+            for mid in set(filter(None, matched_collector_ids)):
+                collector_filter |= (
+                    Q(logistics_mapping=mid) |
+                    Q(logistics_mapping__iexact=mid) |
+                    Q(logistics_mapping__icontains=mid)
+                )
+            route_qs = route_qs.filter(collector_filter)
 
         # ── Fetch analyses for that date range ───────────────────────────────
         analysis_qs = RouteAnalysis.objects.filter(
@@ -894,9 +914,11 @@ def route_analysis_admin_report(request):
             start_time__lte=end_of_day,
         )
         if collector_id:
-            analysis_qs = analysis_qs.filter(
-                route_id__in=list(route_qs.values_list("id", flat=True))
-            )
+            route_ids = list(route_qs.values_list("id", flat=True))
+            analysis_filter = Q(route_id__in=route_ids)
+            for mid in set(filter(None, matched_collector_ids)):
+                analysis_filter |= Q(logistics_mapping=mid) | Q(logistics_mapping__iexact=mid)
+            analysis_qs = analysis_qs.filter(analysis_filter)
 
         # Build analysis lookup: route_id -> date_str -> analysis obj
         analysis_by_route_and_date = {}
@@ -1579,7 +1601,7 @@ from django.utils import timezone
 
 from .dbcollection import profile_collection
 
-FULL_ACCESS_ROLES = {"SD-R-DOC","SD-R-GM", "SD-R-MAVP"}
+FULL_ACCESS_ROLES = {"SD-R-GM", "SD-R-SE"}
 
 
 def _has_full_access(employee_id):
@@ -1981,4 +2003,4 @@ def get_collector_profile(request, employee_id):
         }
         return Response({"success": True, "profile": profile_data}, status=status.HTTP_200_OK)
     except Exception as e:
-        return Response({"error": str(e), "success": False}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"error": str(e), "success": False}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
