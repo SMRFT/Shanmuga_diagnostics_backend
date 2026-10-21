@@ -58,24 +58,81 @@ def get_test_values(request):
     testname_filter = request.GET.get('testname')
     emergency_filter = request.GET.get('emergency')
 
-    # Date filters
-    patients = TestValue.objects.all()
-    if from_date and to_date:
+    scope = request.GET.get('scope')
+
+    def get_val(obj, field, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(field, default)
+        return getattr(obj, field, default)
+
+    selected_patient_data = []
+    backlog_patient_data = []
+
+    if scope == 'split':
+        # Delegate to get_samplestatus_testvalue to obtain active doctor-pending candidate barcodes.
+        # This guarantees PatientList.js displays the exact same active records as PatientDetails.js (Doctor's Pending tab).
+        from .testvalue import get_samplestatus_testvalue
+
+        sub_request = request._request if hasattr(request, '_request') else request
+        orig_get = sub_request.GET
+        sub_get = orig_get.copy()
+        sub_get['pending_type'] = 'doctor'
+        sub_get['scope'] = 'split'
+        sub_get['exclude_dispatched'] = 'true'
+        sub_request.GET = sub_get
+
         try:
-            parsed_from_date = datetime.strptime(from_date, '%Y-%m-%d').date()
-            parsed_to_date = datetime.strptime(to_date, '%Y-%m-%d').date()
-            patients = patients.filter(date__gte=parsed_from_date, date__lte=parsed_to_date)
-        except ValueError:
-            return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+            view_func = get_samplestatus_testvalue.cls.as_view(permission_classes=[])
+            res = view_func(sub_request)
+            res_data = getattr(res, 'data', {})
+        finally:
+            sub_request.GET = orig_get
 
-    patients = patients.order_by('-date')
-    patients_list = list(patients)
+        sel_barcodes = [str(p['barcode']) for p in res_data.get('selected_date', []) if p.get('barcode')]
+        bak_barcodes = [str(p['barcode']) for p in res_data.get('all_days', []) if p.get('barcode')]
 
-    if not patients_list:
-        return JsonResponse([], safe=False)
+        selected_docs = list(diagnostics.core_testvalue.find({
+            'barcode': {'$in': sel_barcodes}
+        }).sort('created_date', -1)) if sel_barcodes else []
+        for d in selected_docs:
+            d['_scope_group'] = 'selected'
+
+        backlog_docs = list(diagnostics.core_testvalue.find({
+            'barcode': {'$in': bak_barcodes}
+        }).sort('created_date', -1)) if bak_barcodes else []
+        for d in backlog_docs:
+            d['_scope_group'] = 'backlog'
+
+        patients_list = selected_docs + backlog_docs
+        if not patients_list:
+            return JsonResponse({
+                'success': True,
+                'selected_date': [],
+                'all_days': [],
+                'data': {'selected_date': [], 'all_days': []}
+            })
+    else:
+        # Date filters using direct MongoDB query (avoids Djongo SQLDecodeError on ORDER BY)
+        query = {}
+        if from_date and to_date:
+            try:
+                parsed_from_date = datetime.strptime(from_date, '%Y-%m-%d').date()
+                parsed_to_date = datetime.strptime(to_date, '%Y-%m-%d').date()
+                start_dt = datetime.combine(parsed_from_date, datetime.min.time())
+                end_dt = datetime.combine(parsed_to_date, datetime.max.time())
+                query['date'] = {'$gte': start_dt, '$lte': end_dt}
+            except ValueError:
+                return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+
+        patients_list = list(diagnostics.core_testvalue.find(query).sort('created_date', -1).limit(600 if not query else 0))
+
+        if not patients_list:
+            return JsonResponse([], safe=False)
 
     # Extract all barcodes upfront
-    barcodes = [str(p.barcode).zfill(0) for p in patients_list]
+    barcodes = [str(get_val(p, 'barcode')).zfill(0) for p in patients_list if get_val(p, 'barcode')]
 
     # ============================================
     # BULK FETCH ALL DATA SOURCES AT ONCE
@@ -189,8 +246,9 @@ def get_test_values(request):
     all_test_ids = set()
     for patient in patients_list:
         try:
-            test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails
-            for test in test_details:
+            raw_td = get_val(patient, 'testdetails')
+            test_details = json.loads(raw_td) if isinstance(raw_td, str) else raw_td
+            for test in (test_details or []):
                 if test.get('test_id'):
                     all_test_ids.add(test['test_id'])
         except (json.JSONDecodeError, TypeError):
@@ -297,10 +355,11 @@ def get_test_values(request):
     patient_data = []
 
     for patient in patients_list:
-        barcode_val = str(patient.barcode).zfill(0)
+        barcode_val = str(get_val(patient, 'barcode')).zfill(0)
 
         try:
-            test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails
+            raw_td = get_val(patient, 'testdetails')
+            test_details = json.loads(raw_td) if isinstance(raw_td, str) else raw_td
         except (json.JSONDecodeError, TypeError):
             test_details = []
 
@@ -504,7 +563,14 @@ def get_test_values(request):
         if not filtered_tests:
             continue
 
-        patient_data.append({
+        loc_val = get_val(patient, 'locationId') or get_val(patient, 'location_id')
+        if not loc_val:
+            if barcode_val in hms_barcodes_dict:
+                loc_val = hms_barcodes_dict[barcode_val].get('location_id') or 'hms'
+            else:
+                loc_val = 'Shanmuga Reference Lab'
+
+        item = {
             "patient_id":      current_patient_id,
             "patientname":     patient_name,
             "age":             patient_age,
@@ -512,13 +578,30 @@ def get_test_values(request):
             "gender":          gender,         # NEW
             "phone":           phone,          # NEW
             "ref_doctor":      ref_doctor,     # NEW
-            "locationId":      patient.locationId,
+            "locationId":      loc_val,
             "barcode":         barcode_val,
-            "date":            patient.date,
-            "created_date":    patient.created_date,
+            "date":            get_val(patient, 'date'),
+            "created_date":    get_val(patient, 'created_date'),
             "is_emergency":    is_emergency,
             "patient_history": patient_history,
             "testdetails":     filtered_tests,
+        }
+
+        patient_data.append(item)
+        if get_val(patient, '_scope_group') == 'selected':
+            selected_patient_data.append(item)
+        elif get_val(patient, '_scope_group') == 'backlog':
+            backlog_patient_data.append(item)
+
+    if scope == 'split':
+        return JsonResponse({
+            'success': True,
+            'selected_date': selected_patient_data,
+            'all_days': backlog_patient_data,
+            'data': {
+                'selected_date': selected_patient_data,
+                'all_days': backlog_patient_data
+            }
         })
 
     return JsonResponse(patient_data, safe=False)

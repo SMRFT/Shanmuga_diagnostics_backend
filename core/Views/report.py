@@ -612,7 +612,7 @@ def overall_report(request):
                         test_name = test.get('testname', 'N/A')
                         
                         # Get sample info
-                        sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
+                        sample_info = next((t for t in sample_tests if isinstance(t, dict) and str(t.get('test_id')) == str(test_id)), {})
                         
                         # Get test value info
                         test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
@@ -677,16 +677,19 @@ def overall_report(request):
                         
                         # Determine individual test status
                         test_status = "Registered"
+                        samplestatus = sample_info.get('samplestatus', '') if sample_info else ''
                         
                         if sample_info:
-                            if sample_info.get('samplestatus') == 'Sample Collected':
+                            if samplestatus in ('Sample Collected', 'Collected'):
                                 test_status = "Collected"
-                            if sample_info.get('samplestatus') == 'Received':
+                            elif samplestatus == 'Received':
                                 test_status = "Received"
-                            if sample_info.get('samplestatus') == 'Rejected':
+                            elif samplestatus == 'Rejected':
                                 test_status = "Rejected"
-                            if sample_info.get('samplestatus') == 'Outsource':
+                            elif samplestatus in ('Outsource', 'Outsourced'):
                                 test_status = "Outsourced"
+                            elif samplestatus in ('Pending', 'Sample Pending'):
+                                test_status = "Pending"
                         
                         parameters = []
                         has_values = False
@@ -725,6 +728,7 @@ def overall_report(request):
                             'test_id': test_id,
                             'test_name': test_name,
                             'status': test_status,
+                            'samplestatus': samplestatus,
                             'tat_time': tat_time,
                             'seconds_left': int(seconds_left) if seconds_left is not None else None,
                             'tat_status': tat_status,
@@ -749,12 +753,14 @@ def overall_report(request):
                 partially_tested = any(has_test_values(t) for t in valid_test_values)
                
                 # Get test_ids from billing/barcode rdispatch_test_idsecord
-                all_ordered_test_ids = {test.get("test_id") for test in test_list if test.get("test_id")}
+                all_ordered_test_ids = {
+                    str(test.get("test_id")) for test in test_list 
+                    if test.get("test_id") and not test.get("refund", False) and not test.get("cancellation", False)
+                }
                
                 # Get approved and dispatch test_ids from test value records
-                approved_test_ids = {t.get("test_id") for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
-                dispatch_test_ids = {t.get("test_id") for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")}
-               
+                approved_test_ids = {str(t.get("test_id")) for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
+                dispatch_test_ids = {str(t.get("test_id")) for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")}
                
                 # Check approval status
                 all_approved = False
@@ -762,15 +768,15 @@ def overall_report(request):
                
                 if len(all_ordered_test_ids) > 0:
                     # Compare test_ids
-                    if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
+                    if all_ordered_test_ids.issubset(approved_test_ids) and len(all_ordered_test_ids) > 0:
                         all_approved = True
-                    elif len(approved_test_ids) > 0:
+                    elif len(all_ordered_test_ids.intersection(approved_test_ids)) > 0:
                         partially_approved = True
                    
                     # Fallback - check if all individual tests are approved
                     if not all_approved and valid_test_values:
                         approved_count = sum(1 for t in valid_test_values if t.get("approve", False))
-                        total_expected = record.get("no_of_tests", 0)
+                        total_expected = len(all_ordered_test_ids) or record.get("no_of_tests", 0)
                        
                         if approved_count == total_expected and approved_count > 0:
                             all_approved = True
@@ -784,15 +790,15 @@ def overall_report(request):
                
                 if len(all_ordered_test_ids) > 0:
                     # Compare test_ids for dispatch
-                    if all_ordered_test_ids.issubset(dispatch_test_ids) and len(dispatch_test_ids) == len(all_ordered_test_ids):
+                    if all_ordered_test_ids.issubset(dispatch_test_ids) and len(all_ordered_test_ids) > 0:
                         all_dispatched = True
-                    elif len(dispatch_test_ids) > 0:
+                    elif len(all_ordered_test_ids.intersection(dispatch_test_ids)) > 0:
                         partially_dispatched = True
                    
                     # Fallback - check if all individual tests are dispatched
                     if not all_dispatched and valid_test_values:
                         dispatch_count = sum(1 for t in valid_test_values if t.get("dispatch", False))
-                        total_expected = record.get("no_of_tests", 0)
+                        total_expected = len(all_ordered_test_ids) or record.get("no_of_tests", 0)
                        
                         if dispatch_count == total_expected and dispatch_count > 0:
                             all_dispatched = True
@@ -863,6 +869,7 @@ def overall_report(request):
                 "department": department,  
                 "department_statuses": department_statuses,
                 "test_statuses": individual_test_statuses,
+                "sample_status": sample_tests,
                 "no_of_tests": no_of_tests,
                 "bill_no": bill_no,
                 "registeredby": registeredby,
@@ -1278,8 +1285,8 @@ def shanmuga360_overall_report(request):
                 for test in test_list:
                     test_id = test.get('test_id')
                     test_name = test.get('testname', 'N/A')
-                    sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
-                    test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
+                    sample_info = next((t for t in sample_tests if isinstance(t, dict) and str(t.get('test_id')) == str(test_id)), {})
+                    test_value_info = next((t for t in valid_test_values if isinstance(t, dict) and str(t.get('test_id')) == str(test_id)), {})
                     test_detail = test_details_collection.find_one({"test_id": test_id}, {"_id": 0, "TAT_Time": 1})
                     tat_time = test_detail.get("TAT_Time") if test_detail else None
                     
@@ -1322,10 +1329,31 @@ def shanmuga360_overall_report(request):
                     else: tat_status = None
 
                     test_status = "Registered"
-                    if sample_info.get('samplestatus') == "Sample Collected": test_status = "Sample Collected"
-                    elif sample_info.get('samplestatus') == "Received": test_status = "Received"
+                    samplestatus = sample_info.get('samplestatus', '') if sample_info else ''
+                    if sample_info:
+                        if samplestatus in ('Sample Collected', 'Collected'):
+                            test_status = "Sample Collected"
+                        elif samplestatus == 'Received':
+                            test_status = "Received"
+                        elif samplestatus == 'Rejected':
+                            test_status = "Rejected"
+                        elif samplestatus in ('Outsource', 'Outsourced'):
+                            test_status = "Outsourced"
+                        elif samplestatus in ('Pending', 'Sample Pending'):
+                            test_status = "Pending"
                     
-                    has_val = bool(test_value_info.get('test_value') or test_value_info.get('test_values'))
+                    has_val = False
+                    if test_value_info:
+                        if test_value_info.get('test_value') or test_value_info.get('test_values'):
+                            has_val = True
+                        elif test_value_info.get('value') is not None and str(test_value_info.get('value')).strip() != '':
+                            has_val = True
+                        params = test_value_info.get('parameters', [])
+                        if params and any(p.get('value') is not None and str(p.get('value')).strip() != '' for p in params):
+                            has_val = True
+                        if test_value_info.get('remarks') or test_value_info.get('parameter_type'):
+                            has_val = True
+
                     is_appr = test_value_info.get('approve', False)
                     is_disp = test_value_info.get('dispatch', False)
                     
@@ -1337,6 +1365,9 @@ def shanmuga360_overall_report(request):
                         "test_id": test_id,
                         "test_name": test_name,
                         "status": test_status,
+                        "samplestatus": samplestatus,
+                        "cancellation": test.get("cancellation", False),
+                        "refund": test.get("refund", False),
                         "department": test.get('department', 'General'),
                         "tat_time": tat_time,
                         "tat_status": tat_status,
@@ -1346,39 +1377,47 @@ def shanmuga360_overall_report(request):
                         "approve_time": approve_time.strftime("%d-%m-%Y %I:%M %p") if approve_time else None
                     })
 
-            has_test_values = lambda t: bool(t.get("test_value") or t.get("test_values"))
-            all_tested = all(has_test_values(t) for t in valid_test_values)
-            partially_tested = any(has_test_values(t) for t in valid_test_values)
-            all_ordered_test_ids = {test.get("test_id") for test in test_list if test.get("test_id")}
-            approved_test_ids = {t.get("test_id") for t in valid_test_values if t.get("approve", False) and t.get("test_id")}
-            dispatch_test_ids = {t.get("test_id") for t in valid_test_values if t.get("dispatch", False) and t.get("test_id")}
+            # Derive overall patient status from active individual test statuses
+            active_tests = [
+                t for t in individual_test_statuses
+                if not t.get("cancellation") and not t.get("refund")
+            ]
+            total_active_tests = len(active_tests) if active_tests else len(test_list)
 
-            all_approved = False
-            partially_approved = False
-            if len(all_ordered_test_ids) > 0:
-                if all_ordered_test_ids.issubset(approved_test_ids) and len(approved_test_ids) == len(all_ordered_test_ids):
-                    all_approved = True
-                elif len(approved_test_ids) > 0:
-                    partially_approved = True
-                if not all_approved and valid_test_values:
-                    approved_count = sum(1 for t in valid_test_values if t.get("approve", False))
-                    if approved_count == len(valid_test_values): all_approved = True
-                    elif approved_count > 0: partially_approved = True
+            if total_active_tests > 0:
+                dispatched_count = sum(1 for t in active_tests if t.get("status") == "Dispatched")
+                approved_count = sum(1 for t in active_tests if t.get("status") in ("Approved", "Dispatched"))
+                tested_count = sum(1 for t in active_tests if t.get("status") in ("Tested", "Approved", "Dispatched"))
+                received_count = sum(1 for t in active_tests if t.get("status") in ("Received", "Tested", "Approved", "Dispatched"))
+                collected_count = sum(1 for t in active_tests if t.get("status") in ("Sample Collected", "Collected", "Received", "Tested", "Approved", "Dispatched"))
 
-            all_dispatched = False
-            partially_dispatched = False
-            if len(all_ordered_test_ids) > 0:
-                if all_ordered_test_ids.issubset(dispatch_test_ids) and len(dispatch_test_ids) == len(all_ordered_test_ids):
-                    all_dispatched = True
-                elif len(dispatch_test_ids) > 0:
-                    partially_dispatched = True
-
-            if all_dispatched: status = "Dispatched"
-            elif partially_dispatched: status = "Partially Dispatched"
-            elif all_approved: status = "Approved"
-            elif partially_approved: status = "Partially Approved"
-            elif all_tested: status = "Tested"
-            elif partially_tested: status = "Partially Tested"
+                if dispatched_count == total_active_tests:
+                    status = "Dispatched"
+                elif dispatched_count > 0:
+                    status = "Partially Dispatched"
+                elif approved_count == total_active_tests:
+                    status = "Approved"
+                elif approved_count > 0:
+                    status = "Partially Approved"
+                elif tested_count == total_active_tests:
+                    status = "Tested"
+                elif tested_count > 0:
+                    status = "Partially Tested"
+                elif received_count == total_active_tests:
+                    status = "Received"
+                elif received_count > 0:
+                    status = "Partially Received"
+                elif collected_count == total_active_tests:
+                    status = "Collected"
+                elif collected_count > 0:
+                    status = "Partially Collected"
+                else:
+                    status = "Registered"
+            else:
+                if all_collected: status = "Collected"
+                elif partially_collected: status = "Partially Collected"
+                if all_received: status = "Received"
+                elif partially_received: status = "Partially Received"
 
             no_of_tests = len(test_list)
 
@@ -1428,6 +1467,7 @@ def shanmuga360_overall_report(request):
                 "department": department,  
                 "department_statuses": department_statuses,
                 "test_statuses": individual_test_statuses,
+                "sample_status": sample_tests,
                 "no_of_tests": no_of_tests,
                 "bill_no": bill_no,
                 "order_id": order_id,
@@ -1514,7 +1554,7 @@ def patient_test_sorting(request):
                         
                         core_test = core_testdetails_collection.find_one(
                             query,
-                            {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "parameters": 1, "_id": 0}
+                            {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "parameters": 1, "order_id": 1, "_id": 0}
                         )
                         
                         if core_test:
@@ -1523,11 +1563,12 @@ def patient_test_sorting(request):
                             test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
                             test_item['NABL'] = core_test.get('NABL', 'N/A')
                             test_item['department'] = core_test.get('department', 'N/A')
+                            test_item['order_id'] = core_test.get('order_id', '')
                         else:
                             # If no match found, try with just test_id
                             core_test = core_testdetails_collection.find_one(
                                 {"test_id": test_id},
-                                {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "parameters": 1, "_id": 0}
+                                {"test_code": 1, "test_name": 1, "NABL": 1, "department": 1, "parameters": 1, "order_id": 1, "_id": 0}
                             )
                             
                             if core_test:
@@ -1535,11 +1576,13 @@ def patient_test_sorting(request):
                                 test_item['test_name'] = core_test.get('test_name', test_item.get('test_name', 'N/A'))
                                 test_item['NABL'] = core_test.get('NABL', 'N/A')
                                 test_item['department'] = core_test.get('department', 'N/A')
+                                test_item['order_id'] = core_test.get('order_id', '')
                             else:
                                 test_item['test_code'] = test_item.get('test_code', 'N/A')
                                 test_item['test_name'] = test_item.get('test_name', 'N/A')
                                 test_item['NABL'] = test_item.get('NABL', 'N/A')
                                 test_item['department'] = test_item.get('department', 'N/A')
+                                test_item['order_id'] = test_item.get('order_id', '')
 
                         # Enrich parameter list with test names from core_test details if available
                         params = test_item.get('parameters', [])
@@ -1610,7 +1653,7 @@ def get_patient_test_details(request):
         return JsonResponse({'error': 'Barcode is required'}, status=400)
 
     try:
-        barcode_details = BarcodeTestDetails.objects.filter(barcode=barcode).first()
+        barcode_details = next(iter(BarcodeTestDetails.objects.filter(barcode=barcode)), None)
         if not barcode_details:
             return JsonResponse({'error': 'No barcode details found for the given barcode'}, status=404)
 
@@ -1621,9 +1664,20 @@ def get_patient_test_details(request):
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
 
-        patient = Patient.objects.filter(patient_id=patient_id).first()
-        billing = Billing.objects.filter(bill_no=bill_no).first()
+        patient = next(iter(Patient.objects.filter(patient_id=patient_id)), None) if patient_id else None
+        billing = next(iter(Billing.objects.filter(bill_no=bill_no)), None) if bill_no else None
         sample_status = SampleStatus.objects.filter(patient_id=patient_id)
+        sample_status_list = []
+        if sample_status.exists():
+            for s in sample_status:
+                s_details = s.testdetails
+                if isinstance(s_details, str):
+                    try:
+                        s_details = json.loads(s_details.strip('"'))
+                    except Exception:
+                        s_details = []
+                if isinstance(s_details, list):
+                    sample_status_list.extend(s_details)
 
         barcodes = []
         try:
@@ -1800,6 +1854,7 @@ def get_patient_test_details(request):
 
                 test_detail = {
                     "test_id":             test_id,
+                    "order_id":            core_test.get("order_id", "") if core_test else test.get("order_id", ""),
                     "department":          department,
                     "NABL":                NABL,
                     "critical_range":      critical_range,
@@ -1923,6 +1978,7 @@ def get_patient_test_details(request):
                     "order_id":    order_id_val,
                     "barcodes":    barcodes,
                     "testdetails": approved_tests,
+                    "sample_status": sample_status_list,
                     "refby":       billing.refby   if billing else "N/A",
                     "B2B":         billing.B2B     if billing else False,
                     "branch":      billing.branch  if billing else "N/A",

@@ -1008,8 +1008,8 @@ def franchise_overall_report(request):
                 test_id   = test.get('test_id')
                 test_name = test.get('testname') or test.get('test_name', 'N/A')
 
-                sample_info     = next((t for t in sample_tests      if t.get('test_id') == test_id), {})
-                test_value_info = next((t for t in valid_test_values  if t.get('test_id') == test_id), {})
+                sample_info     = next((t for t in sample_tests      if isinstance(t, dict) and str(t.get('test_id')) == str(test_id)), {})
+                test_value_info = next((t for t in valid_test_values  if isinstance(t, dict) and str(t.get('test_id')) == str(test_id)), {})
 
                 # TAT_Time from MongoDB
                 test_detail_tat = test_details_collection.find_one(
@@ -1067,13 +1067,14 @@ def franchise_overall_report(request):
 
                 # Individual test status
                 test_status = "Registered"
+                ss = sample_info.get('samplestatus', '') if sample_info else ''
                 if sample_info:
-                    ss = sample_info.get('samplestatus', '')
                     if ss in ('Sample Collected', 'Collected'): test_status = "Collected"
-                    if ss == 'Transferred':                     test_status = "Transferred"
-                    if ss == 'Received':                        test_status = "Received"
-                    if ss == 'Rejected':                        test_status = "Rejected"
-                    if ss in ('Outsource', 'Outsourced'):       test_status = "Outsourced"
+                    elif ss == 'Transferred':                   test_status = "Transferred"
+                    elif ss == 'Received':                      test_status = "Received"
+                    elif ss == 'Rejected':                      test_status = "Rejected"
+                    elif ss in ('Outsource', 'Outsourced'):     test_status = "Outsourced"
+                    elif ss in ('Pending', 'Sample Pending'):   test_status = "Pending"
 
                 if test_value_info:
                     has_values = False
@@ -1099,6 +1100,7 @@ def franchise_overall_report(request):
                     'test_id':               test_id,
                     'test_name':             test_name,
                     'status':                test_status,
+                    'samplestatus':          ss,
                     'tat_time':              tat_time,
                     'seconds_left':          int(seconds_left) if seconds_left is not None else None,
                     'tat_status':            tat_status,
@@ -1220,6 +1222,7 @@ def franchise_overall_report(request):
                 "department":          department,
                 "department_statuses": department_statuses,
                 "test_statuses":       individual_test_statuses,
+                "sample_status":       sample_tests,
                 "no_of_tests":         no_of_tests,
                 "bill_no":             patient.get("bill_no", "N/A"),
                 "registeredby":        patient.get("registeredBy", "N/A"),
@@ -1391,6 +1394,7 @@ def franchise_patient_test_details(request):
             "refby":       franchise_billing.get("referredDoctor", "N/A"),
             "branch":      franchise_billing.get("franchise_id", "N/A"),
             "testdetails": [],
+            "sample_status": sample_testdetails,
         }
 
         all_approvers = set()
@@ -1439,6 +1443,7 @@ def franchise_patient_test_details(request):
 
             test_detail = {
                 "test_id":               test_id,
+                "order_id":              core_test.get("order_id", "") if core_test else billing_test.get("order_id", ""),
                 "testname":              core_test.get("test_name", testname),
                 "department":            department,
                 "NABL":                  NABL,

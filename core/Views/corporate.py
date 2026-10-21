@@ -1000,13 +1000,23 @@ def corporate_overall_report(request):
             for test in test_list:
                 test_id = test.get("test_id")
                 test_name = test.get("testname") or test.get("test_name", "N/A")
-                sample_info = next((t for t in sample_tests if t.get("test_id") == test_id), {})
-                test_value_info = next((t for t in valid_test_values if t.get("test_id") == test_id), {})
+                sample_info = next((t for t in sample_tests if isinstance(t, dict) and str(t.get("test_id")) == str(test_id)), {})
+                test_value_info = next((t for t in valid_test_values if isinstance(t, dict) and str(t.get("test_id")) == str(test_id)), {})
                 test_status = "Registered"
+                samplestatus = sample_info.get("samplestatus", "") if sample_info else ""
                 if sample_info:
-                    ss = sample_info.get("samplestatus", "")
-                    if ss in ("Collected", "Transferred", "Received", "Rejected", "Outsourced"):
-                        test_status = ss
+                    if samplestatus in ("Collected", "Sample Collected"):
+                        test_status = "Collected"
+                    elif samplestatus == "Transferred":
+                        test_status = "Transferred"
+                    elif samplestatus == "Received":
+                        test_status = "Received"
+                    elif samplestatus == "Rejected":
+                        test_status = "Rejected"
+                    elif samplestatus in ("Outsourced", "Outsource"):
+                        test_status = "Outsourced"
+                    elif samplestatus in ("Pending", "Sample Pending"):
+                        test_status = "Pending"
                 if test_value_info:
                     parameters = test_value_info.get("parameters", [])
                     has_values = (
@@ -1023,6 +1033,7 @@ def corporate_overall_report(request):
                     "test_id": test_id,
                     "test_name": test_name,
                     "status": test_status,
+                    "samplestatus": samplestatus,
                 })
 
             # Approval / dispatch status
@@ -1106,6 +1117,7 @@ def corporate_overall_report(request):
                 "department": department,
                 "department_statuses": department_statuses,
                 "test_statuses": individual_test_statuses,
+                "sample_status": sample_tests,
                 "no_of_tests": no_of_tests,
                 "barcode": bc,
                 "status": status,
@@ -1273,6 +1285,7 @@ def corporate_patient_test_details(request):
             "branch":      franchise_billing.get("company_id", ""),
             "refby":       "SELF",
             "testdetails": [],
+            "sample_status": sample_testdetails,
         }
 
         all_approvers = set()
@@ -1332,6 +1345,7 @@ def corporate_patient_test_details(request):
 
                     test_response = {
                         "test_id":              test_id,
+                        "order_id":             core_test.get("order_id", "") if core_test else test_detail.get("order_id", ""),
                         "testname":             testname,
                         "department":           department,
                         "NABL":                 NABL,                       

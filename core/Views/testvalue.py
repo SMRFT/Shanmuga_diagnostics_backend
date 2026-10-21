@@ -147,9 +147,10 @@ def get_samplestatus_testvalue(request):
         db = client.Diagnostics
         test_details_cache = get_cached_test_details(db)
 
-        # Track overall pending barcodes for both tabs
+        # Track overall pending barcodes for all tabs
         all_tech_barcodes = set()
         all_doc_barcodes = set()
+        all_dispatch_barcodes = set()
 
         def get_test_details(test_id):
             """Fetch test details from cache or MongoDB"""
@@ -246,7 +247,7 @@ def get_samplestatus_testvalue(request):
                         }
 
         # ============================================
-        # OPTIMIZATION 2: Bulk fetch TestValues (only needed fields)
+        # OPTIMIZATION 2: Bulk fetch TestValues (only needed fields, newest first)
         # ============================================
         test_values_by_barcode = {}
         if all_barcodes:
@@ -254,14 +255,20 @@ def get_samplestatus_testvalue(request):
             all_test_values = list(db.core_testvalue.find(
                 {'barcode': {'$in': list(all_barcodes)}},
                 tv_projection
-            ))
+            ).sort('created_date', -1))
 
-            # Group by barcode for O(1) lookup
+            # Group by barcode for O(1) lookup, ensuring latest records come first
             for tv in all_test_values:
                 b = tv.get('barcode')
                 if b not in test_values_by_barcode:
                     test_values_by_barcode[b] = []
                 test_values_by_barcode[b].append(tv)
+
+            for b in test_values_by_barcode:
+                test_values_by_barcode[b].sort(
+                    key=lambda x: x.get('created_date') or datetime.min,
+                    reverse=True
+                )
 
         # ============================================
         # OPTIMIZATION 3: Process with cached data
@@ -320,16 +327,23 @@ def get_samplestatus_testvalue(request):
                 for tv_test in tv_details:
                     tv_test_id = tv_test.get('test_id')
 
-                    # Match based on test_id
-                    if tv_test_id == test_id:
+                    # Match based on test_id (str-safe)
+                    if str(tv_test_id) == str(test_id):
+                        raw_appr = tv_test.get('approve_time')
+                        raw_rr = tv_test.get('rerun_time')
+                        raw_disp = tv_test.get('dispatch_time')
+                        appr_time = None if raw_appr in ['null', 'undefined', 'None', '', None] else raw_appr
+                        rr_time = None if raw_rr in ['null', 'undefined', 'None', '', None] else raw_rr
+                        disp_time = None if raw_disp in ['null', 'undefined', 'None', '', None] else raw_disp
+
                         test.update({
                             'test_value_exists': True,
                             'approve': bool(tv_test.get('approve', False)),
                             'rerun': bool(tv_test.get('rerun', False)),
                             'dispatch': bool(tv_test.get('dispatch', False)),
-                            'approve_time': tv_test.get('approve_time'),
-                            'rerun_time': tv_test.get('rerun_time'),
-                            'dispatch_time': tv_test.get('dispatch_time'),
+                            'approve_time': appr_time,
+                            'rerun_time': rr_time,
+                            'dispatch_time': disp_time,
                             'approve_by': tv_test.get('approve_by'),
                             'dispatch_by': tv_test.get('dispatched_by'),
                             'value': tv_test.get('value'),
@@ -375,17 +389,22 @@ def get_samplestatus_testvalue(request):
                     if matched_test.get('dispatch') or (exclude_dispatched and matched_test.get('dispatch')):
                         continue
 
-                    # Dual count tracking for both tabs
+                    # Multi-tab count tracking
                     if not matched_test.get('test_value_exists') or matched_test.get('rerun'):
                         all_tech_barcodes.add(barcode)
                     elif not matched_test.get('approve'):
                         all_doc_barcodes.add(barcode)
+                    elif not matched_test.get('dispatch'):
+                        all_dispatch_barcodes.add(barcode)
 
                     if pending_type == 'technician':
                         if not (not matched_test.get('test_value_exists') or matched_test.get('rerun')):
                             continue
                     elif pending_type == 'doctor':
                         if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
+                            continue
+                    elif pending_type == 'dispatch':
+                        if not (matched_test.get('approve') and not matched_test.get('dispatch') and not matched_test.get('rerun')):
                             continue
 
                     updated_tests.append(matched_test)
@@ -425,17 +444,22 @@ def get_samplestatus_testvalue(request):
                     if matched_test.get('dispatch') or (exclude_dispatched and matched_test.get('dispatch')):
                         continue
 
-                    # Dual count tracking for both tabs
+                    # Multi-tab count tracking
                     if not matched_test.get('test_value_exists') or matched_test.get('rerun'):
                         all_tech_barcodes.add(barcode)
                     elif not matched_test.get('approve'):
                         all_doc_barcodes.add(barcode)
+                    elif not matched_test.get('dispatch'):
+                        all_dispatch_barcodes.add(barcode)
 
                     if pending_type == 'technician':
                         if not (not matched_test.get('test_value_exists') or matched_test.get('rerun')):
                             continue
                     elif pending_type == 'doctor':
                         if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
+                            continue
+                    elif pending_type == 'dispatch':
+                        if not (matched_test.get('approve') and not matched_test.get('dispatch') and not matched_test.get('rerun')):
                             continue
 
                     updated_tests.append(matched_test)
@@ -483,6 +507,12 @@ def get_samplestatus_testvalue(request):
             elif get_sample_field(sample_status, 'patient_id'):
                 patient_id = get_sample_field(sample_status, 'patient_id')
 
+            # Dispatch details are restricted strictly to HMS and Shanmuga Reference Lab
+            if pending_type == 'dispatch':
+                loc_lower = str(location_id or '').lower()
+                if not ('hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower):
+                    continue
+
             combined_results.append({
                 'id': str(get_sample_field(sample_status, 'id') or get_sample_field(sample_status, '_id')),
                 'created_by': get_sample_field(sample_status, 'created_by'),
@@ -507,6 +537,12 @@ def get_samplestatus_testvalue(request):
 
         # Assemble Regular Results
         for sample_status, barcode, updated_tests in qualifying_regular:
+            # Dispatch details are restricted strictly to HMS and Shanmuga Reference Lab
+            if pending_type == 'dispatch':
+                loc_lower = str(get_sample_field(sample_status, 'location_id') or get_sample_field(sample_status, 'locationId') or 'shanmuga reference lab').lower()
+                if not ('hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower):
+                    continue
+
             barcode_details = regular_barcodes_dict.get(barcode)
             is_emergency = False
             patient_history = ""
@@ -542,6 +578,7 @@ def get_samplestatus_testvalue(request):
                 'barcode': barcode,
                 'barcode_by': barcode_by,
                 'barcode_date': safe_datetime_to_string(barcode_date),
+                'location_id': 'Shanmuga Reference Lab',
                 'date': safe_datetime_to_string(get_sample_field(sample_status, 'date')),
                 'testdetails': updated_tests,
                 'data_source': 'regular_django_model'
@@ -549,6 +586,7 @@ def get_samplestatus_testvalue(request):
 
         # ============================================
         # CHC MongoDB Processing (Targeted & Optimized)
+        # Dispatch details restricted to HMS & Shanmuga Reference Lab
         # ============================================
         if source in ['chc', 'all']:
             try:
@@ -574,14 +612,23 @@ def get_samplestatus_testvalue(request):
 
                 chc_barcodes = [s.get('barcode') for s in chc_samples if s.get('barcode')]
 
-                # Bulk fetch TestValues for CHC barcodes
+                # Bulk fetch TestValues for CHC barcodes (newest first)
                 chc_test_values_by_barcode = {}
                 if chc_barcodes:
-                    for tv in db.core_testvalue.find({'barcode': {'$in': chc_barcodes}}, {'barcode': 1, 'testdetails': 1}):
+                    for tv in db.core_testvalue.find(
+                        {'barcode': {'$in': chc_barcodes}},
+                        {'barcode': 1, 'testdetails': 1, 'created_date': 1}
+                    ).sort('created_date', -1):
                         b = tv.get('barcode')
                         if b not in chc_test_values_by_barcode:
                             chc_test_values_by_barcode[b] = []
                         chc_test_values_by_barcode[b].append(tv)
+
+                    for b in chc_test_values_by_barcode:
+                        chc_test_values_by_barcode[b].sort(
+                            key=lambda x: x.get('created_date') or datetime.min,
+                            reverse=True
+                        )
 
                 # Find qualifying CHC samples first
                 qualifying_chc = []
@@ -611,7 +658,7 @@ def get_samplestatus_testvalue(request):
                         if matched_test.get('dispatch') or (exclude_dispatched and matched_test.get('dispatch')):
                             continue
 
-                        # Dual count tracking for both tabs
+                        # Multi-tab count tracking (Dispatch only for HMS & Shanmuga Ref Lab)
                         if not matched_test.get('test_value_exists') or matched_test.get('rerun'):
                             all_tech_barcodes.add(barcode)
                         elif not matched_test.get('approve'):
@@ -623,6 +670,9 @@ def get_samplestatus_testvalue(request):
                         elif pending_type == 'doctor':
                             if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
                                 continue
+                        elif pending_type == 'dispatch':
+                            # Dispatch details are restricted strictly to HMS & Shanmuga Reference Lab
+                            continue
 
                         updated_tests.append(matched_test)
 
@@ -664,6 +714,7 @@ def get_samplestatus_testvalue(request):
 
         # ============================================
         # Regular MongoDB Processing (Optimized)
+        # Dispatch details restricted to HMS & Shanmuga Reference Lab
         # ============================================
         if source in ['regular', 'all']:
             try:
@@ -693,14 +744,23 @@ def get_samplestatus_testvalue(request):
                 patient_ids = [b.get('patient_id') for b in billing_map.values() if b.get('patient_id')]
                 patient_map = {p['patient_id']: p for p in patient_collection.find({"patient_id": {"$in": patient_ids}})}
 
-                # Bulk fetch TestValues
+                # Bulk fetch TestValues (newest first)
                 mongo_test_values_by_barcode = {}
                 if mongo_barcodes:
-                    for tv in db.core_testvalue.find({'barcode': {'$in': mongo_barcodes}}).sort([('created_date', -1)]):
+                    for tv in db.core_testvalue.find(
+                        {'barcode': {'$in': mongo_barcodes}},
+                        {'barcode': 1, 'testdetails': 1, 'created_date': 1}
+                    ).sort('created_date', -1):
                         b = tv.get('barcode')
                         if b not in mongo_test_values_by_barcode:
                             mongo_test_values_by_barcode[b] = []
                         mongo_test_values_by_barcode[b].append(tv)
+
+                    for b in mongo_test_values_by_barcode:
+                        mongo_test_values_by_barcode[b].sort(
+                            key=lambda x: x.get('created_date') or datetime.min,
+                            reverse=True
+                        )
 
                 mongo_processed = {}
                 for record in mongodb_samples:
@@ -730,7 +790,7 @@ def get_samplestatus_testvalue(request):
                         if matched_test.get('dispatch') or (exclude_dispatched and matched_test.get('dispatch')):
                             continue
 
-                        # Dual count tracking for both tabs
+                        # Multi-tab count tracking (Dispatch only for HMS & Shanmuga Ref Lab)
                         if not matched_test.get('test_value_exists') or matched_test.get('rerun'):
                             all_tech_barcodes.add(barcode)
                         elif not matched_test.get('approve'):
@@ -742,6 +802,9 @@ def get_samplestatus_testvalue(request):
                         elif pending_type == 'doctor':
                             if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
                                 continue
+                        elif pending_type == 'dispatch':
+                            # Dispatch details are restricted strictly to HMS & Shanmuga Reference Lab
+                            continue
 
                         updated_tests.append(matched_test)
 
@@ -810,7 +873,8 @@ def get_samplestatus_testvalue(request):
                 'all_days': all_days_results,
                 'counts': {
                     'technician': len(all_tech_barcodes),
-                    'doctor': len(all_doc_barcodes)
+                    'doctor': len(all_doc_barcodes),
+                    'dispatch': len(all_dispatch_barcodes)
                 }
             }, status=status.HTTP_200_OK)
 
