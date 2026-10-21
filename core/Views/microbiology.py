@@ -33,35 +33,91 @@ TIME_ZONE = 'Asia/Kolkata'
 IST = pytz.timezone(TIME_ZONE)
 
 
+# Module-level connection and catalogue cache for Microbiology
+_mb_mongo_client = None
+_mb_test_details_cache = None
+_mb_test_details_cache_time = 0
+
+def get_mb_mongo_client():
+    global _mb_mongo_client
+    if _mb_mongo_client is None:
+        _mb_mongo_client = MongoClient(
+            os.getenv('GLOBAL_DB_HOST'),
+            maxPoolSize=50,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=10000
+        )
+    return _mb_mongo_client
+
+def get_cached_mb_test_details(db):
+    global _mb_test_details_cache, _mb_test_details_cache_time
+    import time as pytime
+    now = pytime.time()
+    if _mb_test_details_cache is None or (now - _mb_test_details_cache_time > 1800):
+        cache = {}
+        for td_doc in db.core_testdetails.find({}, {"_id": 0, "test_id": 1, "test_name": 1, "department": 1, "collection_container": 1, "TAT_Time": 1}):
+            tid = td_doc.get('test_id')
+            cache[tid] = td_doc
+            cache[str(tid)] = td_doc
+            if str(tid).isdigit():
+                cache[int(tid)] = td_doc
+        _mb_test_details_cache = cache
+        _mb_test_details_cache_time = now
+    return _mb_test_details_cache
+
+
 @api_view(['GET'])
 @permission_classes([HasRoleAndDataPermission])
 def micro_biology_testvalue(request):
     try:
+        from datetime import date
         # Get query parameters
         from_date_str = request.query_params.get('from_date', None)
         to_date_str = request.query_params.get('to_date', None)
         date_str = request.query_params.get('date', None)
         source = request.query_params.get('source', 'all')
-        
-        # Determine date range
-        if from_date_str and to_date_str:
-            from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
-            to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
-            
-            if from_date > to_date:
-                return Response({"error": "From date cannot be after to date."}, status=status.HTTP_400_BAD_REQUEST)
-                
-            start_of_range = datetime.combine(from_date, datetime.min.time())
-            end_of_range = datetime.combine(to_date, datetime.max.time())
-            
-        elif date_str:
-            selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            start_of_range = datetime.combine(selected_date, datetime.min.time())
-            end_of_range = start_of_range + timedelta(days=1)
-            
+        pending_type = request.query_params.get('pending_type', None)  # 'technician', 'doctor', 'dispatch', or None
+        scope = request.query_params.get('scope', 'date_range')        # 'date_range', 'all_days', or 'split'
+        exclude_from_date_str = request.query_params.get('exclude_from_date', None)
+        exclude_to_date_str = request.query_params.get('exclude_to_date', None)
+        exclude_dispatched = request.query_params.get('exclude_dispatched', 'true' if pending_type else 'false').lower() == 'true'
+
+        start_of_range = None
+        end_of_range = None
+        exclude_start = None
+        exclude_end = None
+
+        # Determine date range or exclusions
+        if scope == 'all_days':
+            if exclude_from_date_str and exclude_to_date_str:
+                ex_from = datetime.strptime(exclude_from_date_str, '%Y-%m-%d').date()
+                ex_to = datetime.strptime(exclude_to_date_str, '%Y-%m-%d').date()
+                exclude_start = datetime.combine(ex_from, datetime.min.time())
+                exclude_end = datetime.combine(ex_to, datetime.max.time())
         else:
-            return Response({"error": "Either 'date' or both 'from_date' and 'to_date' parameters are required."}, status=status.HTTP_400_BAD_REQUEST)
-        
+            if from_date_str and to_date_str:
+                from_date = datetime.strptime(from_date_str, '%Y-%m-%d').date()
+                to_date = datetime.strptime(to_date_str, '%Y-%m-%d').date()
+
+                if from_date > to_date:
+                    return Response({"error": "From date cannot be after to date."}, status=status.HTTP_400_BAD_REQUEST)
+
+                start_of_range = datetime.combine(from_date, datetime.min.time())
+                end_of_range = datetime.combine(to_date, datetime.max.time())
+
+            elif date_str:
+                selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                start_of_range = datetime.combine(selected_date, datetime.min.time())
+                end_of_range = datetime.combine(selected_date, datetime.max.time())
+
+            elif scope == 'split':
+                today_d = date.today()
+                start_of_range = datetime.combine(today_d, datetime.min.time())
+                end_of_range = datetime.combine(today_d, datetime.max.time())
+
+            else:
+                return Response({"error": "Either 'date' or both 'from_date' and 'to_date' parameters are required."}, status=status.HTTP_400_BAD_REQUEST)
+
         # Helper function to safely convert datetime to string
         def safe_datetime_to_string(dt_obj):
             if dt_obj is None:
@@ -71,21 +127,27 @@ def micro_biology_testvalue(request):
             if hasattr(dt_obj, 'isoformat'):
                 return dt_obj.isoformat()
             return str(dt_obj)
-        
-        # ============================================
-        # Connect to MongoDB for test details
-        # ============================================
-        client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+
+        def get_sample_field(obj, field, default=None):
+            if obj is None:
+                return default
+            if isinstance(obj, dict):
+                return obj.get(field, default)
+            return getattr(obj, field, default)
+
+        # Connect to MongoDB for test details (Cached)
+        client = get_mb_mongo_client()
         db = client.Diagnostics
-        test_details_collection = db.core_testdetails
-        
-        # Cache test details by test_id
-        test_details_cache = {}
-        
+        test_details_cache = get_cached_mb_test_details(db)
+
+        # Multi-tab pending counts
+        all_tech_barcodes = set()
+        all_doc_barcodes = set()
+        all_dispatch_barcodes = set()
+
         def get_test_details(test_id):
-            """Fetch test details from MongoDB and cache"""
             if test_id not in test_details_cache:
-                test_detail = test_details_collection.find_one(
+                td = db.core_testdetails.find_one(
                     {"test_id": test_id},
                     {
                         "_id": 0,
@@ -96,96 +158,113 @@ def micro_biology_testvalue(request):
                         "TAT_Time": 1,
                     }
                 )
-                test_details_cache[test_id] = test_detail
-            return test_details_cache[test_id]
-        
-        # ============================================
-        # OPTIMIZATION 1: Collect all barcodes first
-        # ============================================
+                if td:
+                    test_details_cache[test_id] = td
+                    test_details_cache[str(test_id)] = td
+            return test_details_cache.get(test_id) or test_details_cache.get(str(test_id))
+
+        # Build mongo date filter for HMS & Regular
+        sample_date_filter = {}
+        if scope == 'all_days':
+            if exclude_start and exclude_end:
+                sample_date_filter['$or'] = [
+                    {'date': {'$lt': exclude_start}},
+                    {'date': {'$gt': exclude_end}}
+                ]
+        else:
+            sample_date_filter['date'] = {'$gte': start_of_range, '$lte': end_of_range}
+
+        sample_projection = {
+            '_id': 1,
+            'barcode': 1,
+            'testdetails': 1,
+            'date': 1,
+            'created_date': 1,
+            'created_by': 1,
+            'lastmodified_by': 1,
+            'lastmodified_date': 1,
+            'patient_id': 1,
+            'location_id': 1
+        }
+
         all_barcodes = set()
         sample_data_by_barcode = {}
-        
-        # Collect barcodes from HMS
+
+        # 1. Collect barcodes from HMS
         if source in ['hms', 'all']:
-            hms_samples = Hmssamplestatus.objects.filter(
-                date__gte=start_of_range,
-                date__lte=end_of_range
-            ).select_related().order_by('-created_date')
-            
-            for sample in hms_samples:
-                barcode = sample.barcode
-                all_barcodes.add(barcode)
-                if barcode not in sample_data_by_barcode:
-                    sample_data_by_barcode[barcode] = {
-                        'source': 'hms',
-                        'sample': sample,
-                        'created_date': sample.created_date
-                    }
-        
-        # Collect barcodes from Regular
+            if scope == 'split':
+                hms_selected = list(db.core_hmssamplestatus.find({'date': {'$gte': start_of_range, '$lte': end_of_range}}, sample_projection))
+                hms_backlog = list(db.core_hmssamplestatus.find({'$or': [{'date': {'$lt': start_of_range}}, {'date': {'$gt': end_of_range}}]}, sample_projection).sort('created_date', -1).limit(600))
+                hms_samples_iter = hms_selected + hms_backlog
+            else:
+                hms_query = db.core_hmssamplestatus.find(sample_date_filter, sample_projection).sort('created_date', -1)
+                if scope == 'all_days':
+                    hms_query = hms_query.limit(600)
+                hms_samples_iter = list(hms_query)
+
+            for sample in hms_samples_iter:
+                barcode = sample.get('barcode')
+                if barcode:
+                    all_barcodes.add(barcode)
+                    if barcode not in sample_data_by_barcode:
+                        sample_data_by_barcode[barcode] = {
+                            'source': 'hms',
+                            'sample': sample,
+                            'created_date': sample.get('created_date')
+                        }
+
+        # 2. Collect barcodes from Regular
         if source in ['regular', 'all']:
-            regular_samples = SampleStatus.objects.filter(
-                date__gte=start_of_range, 
-                date__lte=end_of_range
-            ).select_related().order_by('-created_date')
-            
-            for sample in regular_samples:
-                barcode = sample.barcode
-                all_barcodes.add(barcode)
-                if barcode not in sample_data_by_barcode or sample.created_date > sample_data_by_barcode[barcode]['created_date']:
-                    sample_data_by_barcode[barcode] = {
-                        'source': 'regular',
-                        'sample': sample,
-                        'created_date': sample.created_date
-                    }
-        
-        # ============================================
-        # OPTIMIZATION 2: Bulk fetch all related data
-        # ============================================
-        
-        # Fetch ALL TestValues for all barcodes in ONE query
+            if scope == 'split':
+                reg_selected = list(db.core_samplestatus.find({'date': {'$gte': start_of_range, '$lte': end_of_range}}, sample_projection))
+                reg_backlog = list(db.core_samplestatus.find({'$or': [{'date': {'$lt': start_of_range}}, {'date': {'$gt': end_of_range}}]}, sample_projection).sort('created_date', -1).limit(600))
+                reg_samples_iter = reg_selected + reg_backlog
+            else:
+                regular_query = db.core_samplestatus.find(sample_date_filter, sample_projection).sort('created_date', -1)
+                if scope == 'all_days':
+                    regular_query = regular_query.limit(600)
+                reg_samples_iter = list(regular_query)
+
+            for sample in reg_samples_iter:
+                barcode = sample.get('barcode')
+                if barcode:
+                    all_barcodes.add(barcode)
+                    s_created = sample.get('created_date')
+                    if barcode not in sample_data_by_barcode or (s_created and s_created > sample_data_by_barcode[barcode]['created_date']):
+                        sample_data_by_barcode[barcode] = {
+                            'source': 'regular',
+                            'sample': sample,
+                            'created_date': s_created
+                        }
+
+        # 3. Bulk fetch MBTestValues
         test_values_by_barcode = {}
         if all_barcodes:
-            all_test_values = MBTestValue.objects.filter(
-                barcode__in=all_barcodes
-            ).order_by('barcode', '-created_date', '-lastmodified_date')
-            
-            # Group by barcode for O(1) lookup
+            tv_projection = {'barcode': 1, 'testdetails': 1, 'created_date': 1, 'lastmodified_date': 1, 'is_preliminary': 1}
+            all_test_values = list(db.core_mbtestvalue.find(
+                {'barcode': {'$in': list(all_barcodes)}},
+                tv_projection
+            ).sort('created_date', -1))
+
             for tv in all_test_values:
-                if tv.barcode not in test_values_by_barcode:
-                    test_values_by_barcode[tv.barcode] = []
-                test_values_by_barcode[tv.barcode].append(tv)
-        
-        # Fetch all HMS barcode details in one query
-        hms_barcodes_dict = {}
-        if source in ['hms', 'all'] and all_barcodes:
-            hms_barcodes = Hmsbarcode.objects.filter(
-                barcode__in=all_barcodes
-            ).select_related()
-            hms_barcodes_dict = {hb.barcode: hb for hb in hms_barcodes}
-        
-               
-        # Fetch all regular barcode details in one query
-        regular_barcodes_dict = {}
-        if source in ['regular', 'all'] and all_barcodes:
-            regular_barcodes = BarcodeTestDetails.objects.filter(
-                barcode__in=all_barcodes
-            )
-            regular_barcodes_dict = {rb.barcode: rb for rb in regular_barcodes}
-        
-        # ============================================
-        # OPTIMIZATION 3: Process with cached data
-        # ============================================
-        
+                b = tv.get('barcode')
+                if b not in test_values_by_barcode:
+                    test_values_by_barcode[b] = []
+                test_values_by_barcode[b].append(tv)
+
+            for b in test_values_by_barcode:
+                test_values_by_barcode[b].sort(
+                    key=lambda x: x.get('created_date') or datetime.min,
+                    reverse=True
+                )
+
         def parse_testdetails(testdetails_raw):
-            """Cache-friendly test details parser"""
             try:
-                return json.loads(testdetails_raw) if isinstance(testdetails_raw, str) else testdetails_raw
+                return json.loads(testdetails_raw) if isinstance(testdetails_raw, str) else (testdetails_raw or [])
             except (json.JSONDecodeError, TypeError):
                 return []
-        
+
         def enrich_test_with_details(test, sample_status=None):
-            """Enrich test with details from MongoDB"""
             test_id = test.get('test_id')
             if test_id:
                 test_detail = get_test_details(test_id)
@@ -193,26 +272,20 @@ def micro_biology_testvalue(request):
                     test['testname'] = test_detail.get('test_name', test.get('testname', 'N/A'))
                     test['department'] = test_detail.get('department', test.get('department', 'N/A'))
                     test['container'] = test_detail.get('collection_container', test.get('container', 'N/A'))
-                    tat_val = test_detail.get('TAT_Time') or test.get('TAT_Time') 
-                    test['tat_time'] = tat_val
-                    test['TAT_Time'] = tat_val
-            
-            # Ensure samplecollected_time exists on test
+                    test['tat_time'] = test_detail.get('TAT_Time') or test.get('TAT_Time')
+
             if not test.get('samplecollected_time') and not test.get('sample_collected_time'):
                 coll_time = (
                     test.get('collected_time') or
-                    (safe_datetime_to_string(getattr(sample_status, 'created_date', None)) if sample_status else None) or
-                    (safe_datetime_to_string(getattr(sample_status, 'date', None)) if sample_status else None)
+                    (safe_datetime_to_string(get_sample_field(sample_status, 'created_date')) if sample_status else None) or
+                    (safe_datetime_to_string(get_sample_field(sample_status, 'date')) if sample_status else None)
                 )
                 if coll_time:
                     test['samplecollected_time'] = coll_time
             return test
-        
+
         def match_test_values(test, barcode, test_values_by_barcode):
-            """Optimized test value matching with pre-fetched data using test_id"""
             test_id = test.get('test_id')
-            
-            # Initialize default values
             test.update({
                 'rerun': False,
                 'approve': False,
@@ -230,181 +303,283 @@ def micro_biology_testvalue(request):
                 'verified_by': None,
                 'is_preliminary': False
             })
-            
-            # If no test_id, cannot match
+
             if not test_id:
                 return test
-            
-            # Use cached test values for this barcode
+
             test_values = test_values_by_barcode.get(barcode, [])
-            
             for tv in test_values:
-                tv_details = parse_testdetails(tv.testdetails)
-                
+                tv_details = parse_testdetails(tv.get('testdetails') if isinstance(tv, dict) else tv.testdetails)
                 for tv_test in tv_details:
                     tv_test_id = tv_test.get('test_id')
-                    
-                    # Match based on test_id
-                    if tv_test_id == test_id:
+                    if str(tv_test_id) == str(test_id):
                         is_dispatched_val = bool(tv_test.get('dispatch', False) or tv_test.get('is_dispatched', False))
+                        is_prelim = bool(tv.get('is_preliminary', False) or tv_test.get('is_preliminary', False) or tv_test.get('parameter_type') == 'Preliminary')
+                        raw_appr = tv_test.get('approve_time')
+                        raw_rr = tv_test.get('rerun_time')
+                        raw_disp = tv_test.get('dispatch_time')
+                        appr_time = None if raw_appr in ['null', 'undefined', 'None', '', None] else raw_appr
+                        rr_time = None if raw_rr in ['null', 'undefined', 'None', '', None] else raw_rr
+                        disp_time = None if raw_disp in ['null', 'undefined', 'None', '', None] else raw_disp
+
                         test.update({
                             'test_value_exists': True,
                             'approve': bool(tv_test.get('approve', False)),
                             'rerun': bool(tv_test.get('rerun', False)),
                             'dispatch': is_dispatched_val,
                             'is_dispatched': is_dispatched_val,
-                            'approve_time': tv_test.get('approve_time'),
-                            'rerun_time': tv_test.get('rerun_time'),
-                            'dispatch_time': tv_test.get('dispatch_time'),
+                            'is_preliminary': is_prelim,
+                            'approve_time': appr_time,
+                            'rerun_time': rr_time,
+                            'dispatch_time': disp_time,
                             'approve_by': tv_test.get('approve_by'),
                             'dispatch_by': tv_test.get('dispatched_by') or tv_test.get('dispatch_by'),
                             'value': tv_test.get('value'),
                             'remarks': tv_test.get('remarks'),
                             'comment': tv_test.get('comment'),
-                            'verified_by': tv_test.get('verified_by'),
-                            'is_preliminary': getattr(tv, 'is_preliminary', False)
+                            'verified_by': tv_test.get('verified_by')
                         })
                         return test
-
             return test
+
         combined_results = []
-        # Process HMS samples
+
+        # Process HMS Samples
+        qualifying_hms = []
+        needed_hms_barcodes = []
         if source in ['hms', 'all']:
             for barcode, data in sample_data_by_barcode.items():
                 if data['source'] != 'hms':
                     continue
-                
+
                 sample_status = data['sample']
-                testdetails = parse_testdetails(sample_status.testdetails)
-                
-                filtered_tests = [
-                    test for test in testdetails
-                    if test.get('samplestatus') in ['Received']
-                ]
-                
+                testdetails = parse_testdetails(get_sample_field(sample_status, 'testdetails'))
+                filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received']]
                 if not filtered_tests:
                     continue
-                
-                # Use cached barcode and billing data
-                patient_name = "Unknown Patient"
-                patient_id = "Unknown ID"
-                age = "Unknown"
-                gender = "Unknown"
-                IPOPType = "Unknown"
-                
-                barcode_details = hms_barcodes_dict.get(barcode)
-                if barcode_details:                    
-                        patient_name = barcode_details.patientname
-                        patient_id = barcode_details.patient_id
-                        age = barcode_details.age
-                        gender = barcode_details.gender
-                        location_id = barcode_details.location_id
-                        IPOPType = barcode_details.IPOPType
-                elif hasattr(sample_status, 'patient_id'):
-                    patient_id = sample_status.patient_id
-                
-                # Enrich tests with MongoDB details and match test values
+
                 updated_tests = []
                 for test in filtered_tests:
                     enriched_test = enrich_test_with_details(test, sample_status)
-
-                    # FILTER: Only allow Microbiology
                     if enriched_test.get('department') != 'Microbiology':
                         continue
 
                     matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
-                    updated_tests.append(matched_test)
-                # Skip patient if no microbiology
-                if not updated_tests:
-                    continue
+                    if matched_test.get('dispatch') or matched_test.get('is_dispatched'):
+                        continue
 
-                
-                combined_results.append({
-                    'id': sample_status.id,
-                    'created_by': sample_status.created_by,
-                    'created_date': safe_datetime_to_string(sample_status.created_date),
-                    'lastmodified_by': sample_status.lastmodified_by,
-                    'lastmodified_date': safe_datetime_to_string(sample_status.lastmodified_date),
-                    'patient_id': patient_id,
-                    'patientname': patient_name,
-                    'age': age,
-                    'gender': gender,
-                    'location_id': location_id,
-                    'opiptype': IPOPType,
-                    'barcode': barcode,
-                    'date': safe_datetime_to_string(sample_status.date),
-                    'testdetails': updated_tests,
-                    'data_source': 'hms_django_model'
-                })
-        
-        # Process Regular samples
+                    location_id = get_sample_field(sample_status, 'location_id') or "Shanmuga Reference Lab"
+
+                    # Multi-tab count tracking
+                    if not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve')):
+                        all_tech_barcodes.add(barcode)
+                    elif not matched_test.get('approve'):
+                        all_doc_barcodes.add(barcode)
+                    elif not matched_test.get('is_preliminary') and not matched_test.get('dispatch'):
+                        loc_lower = str(location_id).lower()
+                        if 'hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower:
+                            all_dispatch_barcodes.add(barcode)
+
+                    # Tab filtering
+                    if pending_type == 'technician':
+                        if not (not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve'))):
+                            continue
+                    elif pending_type == 'doctor':
+                        if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
+                            continue
+                    elif pending_type == 'dispatch':
+                        if not (matched_test.get('approve') and not matched_test.get('is_preliminary') and not matched_test.get('dispatch') and not matched_test.get('rerun')):
+                            continue
+                        loc_lower = str(location_id).lower()
+                        if not ('hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower):
+                            continue
+
+                    updated_tests.append(matched_test)
+
+                if updated_tests:
+                    qualifying_hms.append((sample_status, barcode, updated_tests))
+                    needed_hms_barcodes.append(barcode)
+
+        # Process Regular Samples
+        qualifying_regular = []
+        needed_regular_barcodes = []
         if source in ['regular', 'all']:
             for barcode, data in sample_data_by_barcode.items():
                 if data['source'] != 'regular':
                     continue
-                
+
                 sample_status = data['sample']
-                testdetails = parse_testdetails(sample_status.testdetails)
-                
-                filtered_tests = [
-                    test for test in testdetails
-                    if test.get('samplestatus') in ['Received']
-                ]
-                
+                testdetails = parse_testdetails(get_sample_field(sample_status, 'testdetails'))
+                filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received']]
                 if not filtered_tests:
                     continue
-                
-                # Use cached barcode data
-                barcode_details = regular_barcodes_dict.get(barcode)
-                if barcode_details:
-                    patient_name = barcode_details.patientname
-                    patient_id = barcode_details.patient_id
-                    age = barcode_details.age
-                    gender = barcode_details.gender
-                    is_emergency = barcode_details.is_emergency
-                    patient_history = barcode_details.patient_history
-                else:
-                    patient_name = "Unknown Patient"
-                    patient_id = sample_status.patient_id if hasattr(sample_status, 'patient_id') else "Unknown ID"
-                    age = "Unknown"
-                    gender = "Unknown"
-                
-                # Enrich tests with MongoDB details and match test values
+
                 updated_tests = []
                 for test in filtered_tests:
                     enriched_test = enrich_test_with_details(test, sample_status)
-
-                    # FILTER: Only allow Microbiology
                     if enriched_test.get('department') != 'Microbiology':
                         continue
-                   
+
                     matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
+                    if matched_test.get('dispatch') or matched_test.get('is_dispatched'):
+                        continue
+
+                    location_id = get_sample_field(sample_status, 'location_id') or "Shanmuga Reference Lab"
+
+                    # Multi-tab count tracking
+                    if not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve')):
+                        all_tech_barcodes.add(barcode)
+                    elif not matched_test.get('approve'):
+                        all_doc_barcodes.add(barcode)
+                    elif not matched_test.get('is_preliminary') and not matched_test.get('dispatch'):
+                        loc_lower = str(location_id).lower()
+                        if 'hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower:
+                            all_dispatch_barcodes.add(barcode)
+
+                    # Tab filtering
+                    if pending_type == 'technician':
+                        if not (not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve'))):
+                            continue
+                    elif pending_type == 'doctor':
+                        if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
+                            continue
+                    elif pending_type == 'dispatch':
+                        if not (matched_test.get('approve') and not matched_test.get('is_preliminary') and not matched_test.get('dispatch') and not matched_test.get('rerun')):
+                            continue
+                        loc_lower = str(location_id).lower()
+                        if not ('hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower):
+                            continue
+
                     updated_tests.append(matched_test)
-                # Skip patient if no microbiology
-                if not updated_tests:
+
+                if updated_tests:
+                    qualifying_regular.append((sample_status, barcode, updated_tests))
+                    needed_regular_barcodes.append(barcode)
+
+        # Demographics bulk lookup
+        hms_barcodes_dict = {}
+        if needed_hms_barcodes:
+            for hb in db.core_hmsbarcode.find({'barcode': {'$in': needed_hms_barcodes}}):
+                hms_barcodes_dict[hb.get('barcode')] = hb
+
+        regular_barcodes_dict = {}
+        if needed_regular_barcodes:
+            for rb in db.core_barcodetestdetails.find({'barcode': {'$in': needed_regular_barcodes}}):
+                regular_barcodes_dict[rb.get('barcode')] = rb
+
+        # Assemble HMS Results
+        for sample_status, barcode, updated_tests in qualifying_hms:
+            patient_name = "Unknown Patient"
+            patient_id = "Unknown ID"
+            age = "Unknown"
+            gender = "Unknown"
+            location_id = "Shanmuga Reference Lab"
+            IPOPType = "Unknown"
+            phone = "Unknown"
+            ref_doctor = "Unknown"
+            barcode_by = "Unknown"
+            barcode_date = "Unknown"
+
+            barcode_details = hms_barcodes_dict.get(barcode)
+            if barcode_details:
+                patient_name = get_sample_field(barcode_details, 'patientname') or "Unknown Patient"
+                patient_id = get_sample_field(barcode_details, 'patient_id') or "Unknown ID"
+                age = get_sample_field(barcode_details, 'age') or "Unknown"
+                gender = get_sample_field(barcode_details, 'gender') or "Unknown"
+                location_id = get_sample_field(barcode_details, 'location_id') or "Shanmuga Reference Lab"
+                IPOPType = get_sample_field(barcode_details, 'IPOPType') or get_sample_field(barcode_details, 'opiptype') or ("IP" if get_sample_field(barcode_details, 'ipnumber') else "OP")
+                phone = get_sample_field(barcode_details, 'phone') or "Unknown"
+                ref_doctor = get_sample_field(barcode_details, 'ref_doctor') or "Unknown"
+                barcode_by = get_sample_field(barcode_details, 'created_by') or "Unknown"
+                barcode_date = get_sample_field(barcode_details, 'created_date') or "Unknown"
+            elif get_sample_field(sample_status, 'patient_id'):
+                patient_id = get_sample_field(sample_status, 'patient_id')
+
+            if pending_type == 'dispatch':
+                loc_lower = str(location_id or '').lower()
+                if not ('hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower):
                     continue
-                
-                combined_results.append({
-                    'id': sample_status.id,
-                    'created_by': sample_status.created_by,
-                    'created_date': safe_datetime_to_string(sample_status.created_date),
-                    'lastmodified_by': sample_status.lastmodified_by,
-                    'lastmodified_date': safe_datetime_to_string(sample_status.lastmodified_date),
-                    'patient_id': patient_id,
-                    'patientname': patient_name,
-                    'age': age,
-                    'gender': gender,
-                    'is_emergency': is_emergency,
-                    'patient_history': patient_history,
-                    'barcode': barcode,
-                    'date': safe_datetime_to_string(sample_status.date),
-                    'testdetails': updated_tests,
-                    'data_source': 'regular_django_model'
-                })
-        
-        # ============================================
-        # CHC MongoDB Processing (Optimized)
-        # ============================================
+
+            combined_results.append({
+                'id': str(get_sample_field(sample_status, 'id') or get_sample_field(sample_status, '_id')),
+                'created_by': get_sample_field(sample_status, 'created_by'),
+                'created_date': safe_datetime_to_string(get_sample_field(sample_status, 'created_date')),
+                'barcode_by': barcode_by,
+                'barcode_date': safe_datetime_to_string(barcode_date),
+                'lastmodified_by': get_sample_field(sample_status, 'lastmodified_by'),
+                'lastmodified_date': safe_datetime_to_string(get_sample_field(sample_status, 'lastmodified_date')),
+                'patient_id': patient_id,
+                'patientname': patient_name,
+                'age': age,
+                'gender': gender,
+                'phone': phone,
+                'ref_doctor': ref_doctor,
+                'location_id': location_id,
+                'opiptype': IPOPType,
+                'barcode': barcode,
+                'date': safe_datetime_to_string(get_sample_field(sample_status, 'date')),
+                'testdetails': updated_tests,
+                'data_source': 'hms_django_model'
+            })
+
+        # Assemble Regular Results
+        for sample_status, barcode, updated_tests in qualifying_regular:
+            patient_name = "Unknown Patient"
+            patient_id = "Unknown ID"
+            age = "Unknown"
+            gender = "Unknown"
+            location_id = "Shanmuga Reference Lab"
+            is_emergency = False
+            patient_history = ""
+            phone = "Unknown"
+            ref_doctor = "Unknown"
+            barcode_by = "Unknown"
+            barcode_date = "Unknown"
+
+            barcode_details = regular_barcodes_dict.get(barcode)
+            if barcode_details:
+                patient_name = get_sample_field(barcode_details, 'patientname') or "Unknown Patient"
+                patient_id = get_sample_field(barcode_details, 'patient_id') or "Unknown ID"
+                age = get_sample_field(barcode_details, 'age') or "Unknown"
+                gender = get_sample_field(barcode_details, 'gender') or "Unknown"
+                is_emergency = bool(get_sample_field(barcode_details, 'is_emergency', False))
+                patient_history = get_sample_field(barcode_details, 'patient_history') or ""
+                phone = get_sample_field(barcode_details, 'phone') or "Unknown"
+                ref_doctor = get_sample_field(barcode_details, 'ref_doctor') or "Unknown"
+                barcode_by = get_sample_field(barcode_details, 'created_by') or "Unknown"
+                barcode_date = get_sample_field(barcode_details, 'created_date') or "Unknown"
+            elif get_sample_field(sample_status, 'patient_id'):
+                patient_id = get_sample_field(sample_status, 'patient_id')
+
+            if pending_type == 'dispatch':
+                loc_lower = str(location_id or '').lower()
+                if not ('hms' in loc_lower or 'shanmuga' in loc_lower or 'reference' in loc_lower):
+                    continue
+
+            combined_results.append({
+                'id': str(get_sample_field(sample_status, 'id') or get_sample_field(sample_status, '_id')),
+                'created_by': get_sample_field(sample_status, 'created_by'),
+                'created_date': safe_datetime_to_string(get_sample_field(sample_status, 'created_date')),
+                'barcode_by': barcode_by,
+                'barcode_date': safe_datetime_to_string(barcode_date),
+                'lastmodified_by': get_sample_field(sample_status, 'lastmodified_by'),
+                'lastmodified_date': safe_datetime_to_string(get_sample_field(sample_status, 'lastmodified_date')),
+                'patient_id': patient_id,
+                'patientname': patient_name,
+                'age': age,
+                'gender': gender,
+                'phone': phone,
+                'ref_doctor': ref_doctor,
+                'is_emergency': is_emergency,
+                'patient_history': patient_history,
+                'barcode': barcode,
+                'location_id': location_id,
+                'date': safe_datetime_to_string(get_sample_field(sample_status, 'date')),
+                'testdetails': updated_tests,
+                'data_source': 'regular_django_model'
+            })
+
+        # Process CHC Samples (if requested)
         if source in ['chc', 'all']:
             try:
                 corp = client.Corporatehealthcheckup
@@ -412,59 +587,78 @@ def micro_biology_testvalue(request):
                 billing_collection = corp.core_billing
                 patient_collection = corp.core_chcregistration
 
-                chc_query = {
-                    "created_date": {"$gte": start_of_range, "$lt": end_of_range}
-                }
-                chc_samples = list(sample_collection.find(chc_query).sort("created_date", -1))
-                
-                # Bulk fetch CHC barcodes
+                if scope == 'split':
+                    chc_s = list(sample_collection.find({'created_date': {'$gte': start_of_range, '$lte': end_of_range}}))
+                    chc_b = list(sample_collection.find({'$or': [{'created_date': {'$lt': start_of_range}}, {'created_date': {'$gt': end_of_range}}]}).sort('created_date', -1).limit(200))
+                    chc_samples = chc_s + chc_b
+                elif scope == 'all_days':
+                    chc_query = {}
+                    if exclude_start and exclude_end:
+                        chc_query['$or'] = [
+                            {'created_date': {'$lt': exclude_start}},
+                            {'created_date': {'$gt': exclude_end}}
+                        ]
+                    chc_samples = list(sample_collection.find(chc_query).sort("created_date", -1).limit(300))
+                else:
+                    chc_samples = list(sample_collection.find({'created_date': {"$gte": start_of_range, "$lt": end_of_range}}).sort("created_date", -1))
+
                 chc_barcodes = [s.get('barcode') for s in chc_samples if s.get('barcode')]
-                
-                # Bulk fetch billing and patient data
+                chc_test_values_by_barcode = {}
+                if chc_barcodes:
+                    for tv in db.core_mbtestvalue.find({'barcode': {'$in': chc_barcodes}}, {'barcode': 1, 'testdetails': 1, 'created_date': 1, 'is_preliminary': 1}).sort('created_date', -1):
+                        b = tv.get('barcode')
+                        if b not in chc_test_values_by_barcode:
+                            chc_test_values_by_barcode[b] = []
+                        chc_test_values_by_barcode[b].append(tv)
+
                 billing_map = {b['barcode']: b for b in billing_collection.find({"barcode": {"$in": chc_barcodes}})}
                 employee_ids = [b.get('employee_id') for b in billing_map.values() if b.get('employee_id')]
                 patient_map = {p['employee_id']: p for p in patient_collection.find({"employee_id": {"$in": employee_ids}})}
-                
-                # Bulk fetch TestValues for CHC barcodes
-                chc_test_values_by_barcode = {}
-                if chc_barcodes:
-                    chc_tvs = MBTestValue.objects.filter(barcode__in=chc_barcodes).order_by('barcode', '-created_date')
-                    for tv in chc_tvs:
-                        if tv.barcode not in chc_test_values_by_barcode:
-                            chc_test_values_by_barcode[tv.barcode] = []
-                        chc_test_values_by_barcode[tv.barcode].append(tv)
-                
-                chc_processed = {}
+
+                chc_processed = set()
                 for record in chc_samples:
                     barcode = record.get('barcode', '')
                     if not barcode or barcode in chc_processed:
                         continue
-                    
+
                     testdetails = parse_testdetails(record.get('testdetails'))
                     filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received']]
-                    
                     if not filtered_tests:
                         continue
-                    
-                    billing = billing_map.get(barcode, {})
-                    employee_id = billing.get("employee_id")
-                    patient = patient_map.get(employee_id, {})
-                    
-                    # Enrich tests with MongoDB details and match test values
+
                     updated_tests = []
                     for test in filtered_tests:
                         enriched_test = enrich_test_with_details(test, record)
-
-                        # FILTER: Only allow Microbiology
                         if enriched_test.get('department') != 'Microbiology':
                             continue
 
-                        matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
+                        matched_test = match_test_values(enriched_test, barcode, chc_test_values_by_barcode)
+                        if matched_test.get('dispatch') or matched_test.get('is_dispatched'):
+                            continue
+
+                        if not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve')):
+                            all_tech_barcodes.add(barcode)
+                        elif not matched_test.get('approve'):
+                            all_doc_barcodes.add(barcode)
+
+                        if pending_type == 'technician':
+                            if not (not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve'))):
+                                continue
+                        elif pending_type == 'doctor':
+                            if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
+                                continue
+                        elif pending_type == 'dispatch':
+                            continue
+
                         updated_tests.append(matched_test)
-                    # Skip patient if no microbiology
+
                     if not updated_tests:
                         continue
-                    
+
+                    billing = billing_map.get(barcode, {})
+                    employee_id = billing.get("employee_id")
+                    patient = patient_map.get(employee_id, {})
+
                     combined_results.append({
                         'id': str(record.get('_id')),
                         'created_by': record.get('created_by', ''),
@@ -482,71 +676,89 @@ def micro_biology_testvalue(request):
                         'testdetails': updated_tests,
                         'data_source': 'chc_mongodb'
                     })
-                    chc_processed[barcode] = True
-                
+                    chc_processed.add(barcode)
             except Exception as e:
-                print(f"CHC MongoDB error: {str(e)}")
-        
-        # ============================================
-        # Regular MongoDB Processing (Optimized)
-        # ============================================
+                print(f"CHC MongoDB error in MB: {str(e)}")
+
+        # Process Franchise Samples (if requested)
         if source in ['regular', 'all']:
             try:
                 franchise_db = client.franchise
                 sample_collection = franchise_db.franchise_sample
                 billing_collection = franchise_db.franchise_billing
                 patient_collection = franchise_db.franchise_patient
-                
-                mongo_query = {
-                    "created_date": {"$gte": start_of_range, "$lt": end_of_range}
-                }
-                mongodb_samples = list(sample_collection.find(mongo_query).sort("created_date", -1))
-                
-                # Bulk fetch billing and patient data
+
+                if scope == 'split':
+                    fran_s = list(sample_collection.find({'created_date': {'$gte': start_of_range, '$lte': end_of_range}}))
+                    fran_b = list(sample_collection.find({'$or': [{'created_date': {'$lt': start_of_range}}, {'created_date': {'$gt': end_of_range}}]}).sort('created_date', -1).limit(50))
+                    mongodb_samples = fran_s + fran_b
+                elif scope == 'all_days':
+                    mongo_query = {}
+                    if exclude_start and exclude_end:
+                        mongo_query['$or'] = [
+                            {'created_date': {'$lt': exclude_start}},
+                            {'created_date': {'$gt': exclude_end}}
+                        ]
+                    mongodb_samples = list(sample_collection.find(mongo_query).sort("created_date", -1).limit(500))
+                else:
+                    mongodb_samples = list(sample_collection.find({'created_date': {"$gte": start_of_range, "$lt": end_of_range}}).sort("created_date", -1))
+
                 mongo_barcodes = [s.get('barcode') for s in mongodb_samples if s.get('barcode')]
+                mongo_test_values_by_barcode = {}
+                if mongo_barcodes:
+                    for tv in db.core_mbtestvalue.find({'barcode': {'$in': mongo_barcodes}}, {'barcode': 1, 'testdetails': 1, 'created_date': 1, 'is_preliminary': 1}).sort('created_date', -1):
+                        b = tv.get('barcode')
+                        if b not in mongo_test_values_by_barcode:
+                            mongo_test_values_by_barcode[b] = []
+                        mongo_test_values_by_barcode[b].append(tv)
+
                 billing_map = {b['barcode']: b for b in billing_collection.find({"barcode": {"$in": mongo_barcodes}})}
                 patient_ids = [b.get('patient_id') for b in billing_map.values() if b.get('patient_id')]
                 patient_map = {p['patient_id']: p for p in patient_collection.find({"patient_id": {"$in": patient_ids}})}
-                
-                # Bulk fetch TestValues
-                mongo_test_values_by_barcode = {}
-                if mongo_barcodes:
-                    mongo_tvs = MBTestValue.objects.filter(barcode__in=mongo_barcodes).order_by('barcode', '-created_date')
-                    for tv in mongo_tvs:
-                        if tv.barcode not in mongo_test_values_by_barcode:
-                            mongo_test_values_by_barcode[tv.barcode] = []
-                        mongo_test_values_by_barcode[tv.barcode].append(tv)
-                
-                mongo_processed = {}
+
+                mongo_processed = set()
                 for record in mongodb_samples:
                     barcode = record.get('barcode', '')
                     if not barcode or barcode in all_barcodes or barcode in mongo_processed:
                         continue
-                    
+
                     testdetails = parse_testdetails(record.get('testdetails'))
                     filtered_tests = [t for t in testdetails if t.get('samplestatus') in ['Received']]
-                    
                     if not filtered_tests:
                         continue
-                    
-                    patient_id = billing_map.get(barcode, {}).get('patient_id')
-                    patient = patient_map.get(patient_id, {})
-                    
-                    # Enrich tests with MongoDB details and match test values
+
                     updated_tests = []
                     for test in filtered_tests:
                         enriched_test = enrich_test_with_details(test)
-
-                        # FILTER: Only allow Microbiology
                         if enriched_test.get('department') != 'Microbiology':
                             continue
 
-                        matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
+                        matched_test = match_test_values(enriched_test, barcode, mongo_test_values_by_barcode)
+                        if matched_test.get('dispatch') or matched_test.get('is_dispatched'):
+                            continue
+
+                        if not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve')):
+                            all_tech_barcodes.add(barcode)
+                        elif not matched_test.get('approve'):
+                            all_doc_barcodes.add(barcode)
+
+                        if pending_type == 'technician':
+                            if not (not matched_test.get('test_value_exists') or matched_test.get('rerun') or (matched_test.get('is_preliminary') and matched_test.get('approve'))):
+                                continue
+                        elif pending_type == 'doctor':
+                            if not (matched_test.get('test_value_exists') and not matched_test.get('approve') and not matched_test.get('rerun')):
+                                continue
+                        elif pending_type == 'dispatch':
+                            continue
+
                         updated_tests.append(matched_test)
-                    # Skip patient if no microbiology
+
                     if not updated_tests:
                         continue
-                    
+
+                    patient_id = billing_map.get(barcode, {}).get('patient_id')
+                    patient = patient_map.get(patient_id, {})
+
                     combined_results.append({
                         'id': str(record.get('_id', '')),
                         'created_by': record.get('created_by', ''),
@@ -559,10 +771,6 @@ def micro_biology_testvalue(request):
                         'gender': patient.get('gender', 'Unknown'),
                         'phoneNumber': patient.get('phoneNumber', ''),
                         'email': patient.get('email', ''),
-                        'city': patient.get('city', ''),
-                        'area': patient.get('area', ''),
-                        'pincode': patient.get('pincode', ''),
-                        'dateOfBirth': patient.get('dateOfBirth', ''),
                         'barcode': barcode,
                         'location_id': record.get('franchise_id', ''),
                         'is_preliminary': record.get('is_preliminary', False),
@@ -570,17 +778,50 @@ def micro_biology_testvalue(request):
                         'testdetails': updated_tests,
                         'data_source': 'mongodb'
                     })
-                    mongo_processed[barcode] = True
-                
+                    mongo_processed.add(barcode)
             except Exception as e:
-                print(f"MongoDB error: {str(e)}")
-        
-        # Close MongoDB connection
-        client.close()
-        
+                print(f"Franchise MongoDB error in MB: {str(e)}")
+
         # Sort results
-        combined_results.sort(key=lambda x: x.get('date', ''), reverse=True)
-        
+        combined_results.sort(key=lambda x: x.get('date') or x.get('created_date') or '', reverse=True)
+
+        if scope == 'split':
+            selected_date_results = []
+            all_days_results = []
+
+            for r in combined_results:
+                r_date_raw = r.get('date') or r.get('created_date')
+                is_selected = False
+                if r_date_raw:
+                    try:
+                        if isinstance(r_date_raw, str):
+                            clean_str = r_date_raw.replace("T", " ")[:19]
+                            r_dt = datetime.strptime(clean_str, "%Y-%m-%d %H:%M:%S")
+                        elif isinstance(r_date_raw, datetime):
+                            r_dt = r_date_raw.replace(tzinfo=None) if r_date_raw.tzinfo else r_date_raw
+                        else:
+                            r_dt = None
+
+                        if r_dt and start_of_range <= r_dt <= end_of_range:
+                            is_selected = True
+                    except Exception:
+                        is_selected = False
+
+                if is_selected:
+                    selected_date_results.append(r)
+                else:
+                    all_days_results.append(r)
+
+            return Response({
+                'selected_date': selected_date_results,
+                'all_days': all_days_results,
+                'counts': {
+                    'technician': len(all_tech_barcodes),
+                    'doctor': len(all_doc_barcodes),
+                    'dispatch': len(all_dispatch_barcodes)
+                }
+            }, status=status.HTTP_200_OK)
+
         return Response(combined_results, status=status.HTTP_200_OK)
         
     except ValueError:
@@ -832,24 +1073,84 @@ def mb_get_test_values(request):
     testname_filter = request.GET.get('testname')
     emergency_filter = request.GET.get('emergency')
 
-    # Date filters - apply early
-    patients = MBTestValue.objects.all()
-    if from_date and to_date:
-        try:
-            parsed_from_date = datetime.strptime(from_date, '%Y-%m-%d').date()
-            parsed_to_date = datetime.strptime(to_date, '%Y-%m-%d').date()
-            patients = patients.filter(date__gte=parsed_from_date, date__lte=parsed_to_date)
-        except ValueError:
-            return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+    scope = request.GET.get('scope')
 
-    patients = patients.order_by('-date')
-    patients_list = list(patients)
-    
-    if not patients_list:
-        return JsonResponse([], safe=False)
+    def get_val(obj, field, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(field, default)
+        return getattr(obj, field, default)
+
+    selected_patient_data = []
+    backlog_patient_data = []
+
+    if scope == 'split':
+        # Delegate to micro_biology_testvalue to obtain active doctor-pending candidate barcodes.
+        # This guarantees MBPatientList.js displays the exact same active records as MBPatientDetails.js (Doctor's Pending tab).
+        from .microbiology import micro_biology_testvalue
+
+        sub_request = request._request if hasattr(request, '_request') else request
+        orig_get = sub_request.GET
+        sub_get = orig_get.copy()
+        sub_get['pending_type'] = 'doctor'
+        sub_get['scope'] = 'split'
+        sub_get['exclude_dispatched'] = 'true'
+        sub_request.GET = sub_get
+
+        try:
+            view_func = micro_biology_testvalue.cls.as_view(permission_classes=[])
+            res = view_func(sub_request)
+            res_data = getattr(res, 'data', {})
+        finally:
+            sub_request.GET = orig_get
+
+        sel_barcodes = [str(p['barcode']) for p in res_data.get('selected_date', []) if p.get('barcode')]
+        bak_barcodes = [str(p['barcode']) for p in res_data.get('all_days', []) if p.get('barcode')]
+
+        selected_docs = list(diagnostics.core_mbtestvalue.find({
+            'barcode': {'$in': sel_barcodes}
+        }).sort('created_date', -1)) if sel_barcodes else []
+        for d in selected_docs:
+            d['_scope_group'] = 'selected'
+
+        backlog_docs = list(diagnostics.core_mbtestvalue.find({
+            'barcode': {'$in': bak_barcodes}
+        }).sort('created_date', -1)) if bak_barcodes else []
+        for d in backlog_docs:
+            d['_scope_group'] = 'backlog'
+
+        patients_list = selected_docs + backlog_docs
+        if not patients_list:
+            return JsonResponse({
+                'success': True,
+                'selected_date': [],
+                'all_days': [],
+                'data': {'selected_date': [], 'all_days': []}
+            })
+    else:
+        # Date filters using direct MongoDB query (avoids Djongo SQLDecodeError on ORDER BY)
+        query = {}
+        date_param = request.GET.get('date')
+        from_date = request.GET.get('from_date') or date_param
+        to_date = request.GET.get('to_date') or date_param
+        if from_date and to_date:
+            try:
+                parsed_from_date = datetime.strptime(from_date, '%Y-%m-%d').date()
+                parsed_to_date = datetime.strptime(to_date, '%Y-%m-%d').date()
+                start_dt = datetime.combine(parsed_from_date, datetime.min.time())
+                end_dt = datetime.combine(parsed_to_date, datetime.max.time())
+                query['date'] = {'$gte': start_dt, '$lte': end_dt}
+            except ValueError:
+                return JsonResponse({'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+
+        patients_list = list(diagnostics.core_mbtestvalue.find(query).sort('created_date', -1).limit(600 if not query else 0))
+
+        if not patients_list:
+            return JsonResponse([], safe=False)
 
     # Extract all barcodes upfront
-    barcodes = [str(p.barcode).zfill(0) for p in patients_list]
+    barcodes = [str(get_val(p, 'barcode')).zfill(0) for p in patients_list if get_val(p, 'barcode')]
     
     # ============================================
     # BULK FETCH ALL DATA SOURCES AT ONCE
@@ -878,20 +1179,23 @@ def mb_get_test_values(request):
         for p in Patient.objects.filter(patient_id__in=barcode_patient_ids).only('patient_id', 'patientname', 'age')
     }
     
-    # 2. NEW: Fetch patient details from Hmsbarcode (PRIMARY SOURCE)
+    # 2. NEW: Fetch patient details from core_hmsbarcode (PRIMARY SOURCE)
+    hms_barcodes_docs = list(diagnostics.core_hmsbarcode.find(
+        {"barcode": {"$in": barcodes}},
+        {"barcode": 1, "patient_id": 1, "patientname": 1, "age": 1, "billnumber": 1, "gender": 1, "ref_doctor": 1, "phone": 1, "location_id": 1, "_id": 0}
+    ))
     hms_barcodes_dict = {
-        b.barcode: {
-            'patient_id': b.patient_id,
-            'name': b.patientname,
-            'age': b.age,
-            'billnumber': b.billnumber,
-            'gender': b.gender,
-            'ref_doctor': b.ref_doctor,
-            'testdetails': b.testdetails
+        doc['barcode']: {
+            'patient_id': doc.get('patient_id'),
+            'name': doc.get('patientname'),
+            'age': doc.get('age'),
+            'billnumber': doc.get('billnumber'),
+            'gender': doc.get('gender'),
+            'ref_doctor': doc.get('ref_doctor'),
+            'phone': doc.get('phone'),
+            'location_id': doc.get('location_id')
         }
-        for b in Hmsbarcode.objects.filter(barcode__in=barcodes).only(
-            'barcode', 'patient_id', 'patientname', 'age', 'billnumber', 'gender', 'ref_doctor', 'testdetails'
-        )
+        for doc in hms_barcodes_docs
     }
     
     # 3. MongoDB franchise - bulk fetch (fallback)
@@ -932,7 +1236,8 @@ def mb_get_test_values(request):
     all_test_ids = set()
     for patient in patients_list:
         try:
-            test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails
+            raw_td = get_val(patient, 'testdetails')
+            test_details = json.loads(raw_td) if isinstance(raw_td, str) else (raw_td or [])
             for test in test_details:
                 if test.get('test_id'):
                     all_test_ids.add(test['test_id'])
@@ -1030,10 +1335,11 @@ def mb_get_test_values(request):
     patient_data = []
     
     for patient in patients_list:
-        barcode_val = str(patient.barcode).zfill(0)
+        barcode_val = str(get_val(patient, 'barcode')).zfill(0)
         
         try:
-            test_details = json.loads(patient.testdetails) if isinstance(patient.testdetails, str) else patient.testdetails
+            raw_td = get_val(patient, 'testdetails')
+            test_details = json.loads(raw_td) if isinstance(raw_td, str) else (raw_td or [])
         except (json.JSONDecodeError, TypeError):
             test_details = []
         
@@ -1218,18 +1524,43 @@ def mb_get_test_values(request):
         if not filtered_tests:
             continue
         
-        patient_data.append({
+        loc_val = get_val(patient, 'locationId') or get_val(patient, 'location_id')
+        if not loc_val:
+            if barcode_val in hms_barcodes_dict:
+                loc_val = hms_barcodes_dict[barcode_val].get('location_id') or 'hms'
+            else:
+                loc_val = 'Shanmuga Reference Lab'
+
+        item = {
             "patient_id": current_patient_id,
             "patientname": patient_name,
             "age": patient_age,
+            "locationId": loc_val,
             "barcode": barcode_val,
-            "date": patient.date,
-            "created_date": patient.created_date,
+            "date": get_val(patient, 'date'),
+            "created_date": get_val(patient, 'created_date'),
             "is_emergency": is_emergency,
             "patient_history": patient_history,
             "testdetails": filtered_tests
+        }
+
+        patient_data.append(item)
+        if get_val(patient, '_scope_group') == 'selected':
+            selected_patient_data.append(item)
+        elif get_val(patient, '_scope_group') == 'backlog':
+            backlog_patient_data.append(item)
+
+    if scope == 'split':
+        return JsonResponse({
+            'success': True,
+            'selected_date': selected_patient_data,
+            'all_days': backlog_patient_data,
+            'data': {
+                'selected_date': selected_patient_data,
+                'all_days': backlog_patient_data
+            }
         })
-    
+
     return JsonResponse(patient_data, safe=False)
 
 
@@ -1404,15 +1735,18 @@ def mb_patient_test_sorting(request):
                     if test_id:
                         core_test = core_testdetails_collection.find_one(
                             {"test_id": test_id},
-                            {"test_name": 1, "_id": 0}
+                            {"test_name": 1, "order_id": 1, "_id": 0}
                         )
                         
                         if core_test:
                             test_item['test_name'] = core_test.get('test_name', 'N/A')
+                            test_item['order_id'] = core_test.get('order_id', '')
                         else:
                             test_item['test_name'] = 'N/A'
+                            test_item['order_id'] = ''
                     else:
                         test_item['test_name'] = 'N/A'
+                        test_item['order_id'] = ''
 
                     # Add created_date to each test item
                     test_item['is_preliminary'] = is_preliminary

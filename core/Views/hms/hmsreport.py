@@ -232,7 +232,14 @@ def hms_overall_report(request):
         # Organize status data
         sample_status_map = {}
         for record in sample_status_records:
-            sample_status_map.setdefault(record["barcode"], []).extend(record["testdetails"] or [])
+            td = record.get("testdetails", [])
+            if isinstance(td, str):
+                try:
+                    td = json.loads(td.strip('"'))
+                except json.JSONDecodeError:
+                    td = []
+            if isinstance(td, list):
+                sample_status_map.setdefault(record["barcode"], []).extend(td)
 
         # Organize test value data - COMBINE ALL RECORDS FOR SAME BARCODE
         test_value_map = {}
@@ -433,7 +440,7 @@ def hms_overall_report(request):
                     test_name = test.get('testname', 'N/A')
                     
                     # Get sample info
-                    sample_info = next((t for t in sample_tests if t.get('test_id') == test_id), {})
+                    sample_info = next((t for t in sample_tests if isinstance(t, dict) and str(t.get('test_id')) == str(test_id)), {})
                     
                     # Get test value info
                     test_value_info = next((t for t in valid_test_values if t.get('test_id') == test_id), {})
@@ -498,16 +505,19 @@ def hms_overall_report(request):
                     
                     # Determine individual test status
                     test_status = "Registered"
+                    samplestatus = sample_info.get('samplestatus', '') if sample_info else ''
                     
                     if sample_info:
-                        if sample_info.get('samplestatus') == 'Sample Collected':
+                        if samplestatus in ('Sample Collected', 'Collected'):
                             test_status = "Collected"
-                        if sample_info.get('samplestatus') == 'Received':
+                        elif samplestatus == 'Received':
                             test_status = "Received"
-                        if sample_info.get('samplestatus') == 'Rejected':
+                        elif samplestatus == 'Rejected':
                             test_status = "Rejected"
-                        if sample_info.get('samplestatus') == 'Outsource':
+                        elif samplestatus in ('Outsource', 'Outsourced'):
                             test_status = "Outsourced"
+                        elif samplestatus in ('Pending', 'Sample Pending'):
+                            test_status = "Pending"
                     
                     if test_value_info:
                         # Check if test has values
@@ -546,6 +556,7 @@ def hms_overall_report(request):
                         'test_id': test_id,
                         'test_name': test_name,
                         'status': test_status,
+                        'samplestatus': samplestatus,
                         'printed': bool(test_value_info.get('printed', False)),
                         'printed_status': "Printed" if test_value_info.get('printed', False) else "Not Printed",
                         'tat_time': tat_time,
@@ -714,6 +725,7 @@ def hms_overall_report(request):
                 "department": department,
                 "department_statuses": department_statuses,
                 "test_statuses": individual_test_statuses,  # NOW INCLUDES TAT & PRINTED INFO
+                "sample_status": sample_tests,
                 "no_of_tests": no_of_tests,
                 "billnumber": billnumber,
                 "barcode": barcode,
@@ -743,11 +755,22 @@ def get_hms_patient_test_details(request):
         if not test_values.exists():
             return JsonResponse({'error': 'No test records found for the given barcode'}, status=404)
 
-        barcode_details = Hmsbarcode.objects.filter(barcode=barcode).first()
+        barcode_details = next(iter(Hmsbarcode.objects.filter(barcode=barcode)), None)
         if not barcode_details:
             return JsonResponse({'error': 'No patient details found for the given barcode'}, status=404)
 
         sample_status = Hmssamplestatus.objects.filter(barcode=barcode)
+        sample_status_list = []
+        if sample_status.exists():
+            for sample_status_record in sample_status:
+                status_details_list = sample_status_record.testdetails
+                if isinstance(status_details_list, str):
+                    try:
+                        status_details_list = json.loads(status_details_list.strip('"'))
+                    except Exception:
+                        status_details_list = []
+                if isinstance(status_details_list, list):
+                    sample_status_list.extend(status_details_list)
 
         mongo_client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         mongo_db = mongo_client.Diagnostics
@@ -899,7 +922,7 @@ def get_hms_patient_test_details(request):
                                 status_details_list = []
                         if isinstance(status_details_list, list):
                             status = next(
-                                (s for s in status_details_list if s.get("test_id") == test_id),
+                                (s for s in status_details_list if isinstance(s, dict) and str(s.get("test_id")) == str(test_id)),
                                 None,
                             )
                             if status:
@@ -910,6 +933,7 @@ def get_hms_patient_test_details(request):
 
                 test_detail = {
                     "test_id":             test_id,
+                    "order_id":            core_test.get("order_id", "") if core_test else test.get("order_id", ""),
                     "department":          department,
                     "NABL":                NABL,
                     "outsourced":          outsourced,
@@ -1009,6 +1033,7 @@ def get_hms_patient_test_details(request):
                     "bill_no":     barcode_details.billnumber,
                     "barcodes":    [barcode],
                     "testdetails": approved_tests,
+                    "sample_status": sample_status_list,
                     "refby":       barcode_details.ref_doctor  if hasattr(barcode_details, 'ref_doctor')  else "SELF",
                     "branch":      barcode_details.location_id if hasattr(barcode_details, 'location_id') else "N/A",
                 }
