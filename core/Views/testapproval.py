@@ -617,27 +617,37 @@ def approve_test_detail(request, barcode):
     collection = db.core_testvalue
     try:
         update_data = request.data
-        barcode = update_data.get("barcode")
+        barcode = update_data.get("barcode") or barcode
         created_date_str = update_data.get("created_date")
         test_id = update_data.get("test_id")
         approve_time = update_data.get("approve_time")
         status = update_data.get("status")  # "Normal" or "Abnormal" — sent only for CHC locations
 
-        if not (barcode and created_date_str and test_id):
+        if not (barcode and test_id):
             return JsonResponse({
-                "error": "barcode, created_date, and test_id required"
+                "error": "barcode and test_id required"
             }, status=400)
-
-        created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
         return JsonResponse({"error": f"Invalid request format: {str(e)}"}, status=400)
 
-    # Query with barcode and created_date
-    query = {"barcode": barcode, "created_date": created_date}
-    test_value = collection.find_one(query)
+    # Query with barcode and created_date if available
+    query = {"barcode": barcode}
+    if created_date_str:
+        try:
+            created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
+            query["created_date"] = created_date
+        except Exception:
+            pass
+
+    test_value = collection.find_one(query, sort=[("created_date", -1)])
+    if not test_value and "created_date" in query:
+        # Fallback to query by barcode only
+        query.pop("created_date", None)
+        test_value = collection.find_one(query, sort=[("created_date", -1)])
+
     if not test_value:
         return JsonResponse({
-            "error": "Patient record not found for given barcode & created_date."
+            "error": "Patient record not found for given barcode."
         }, status=404)
 
     try:
@@ -669,9 +679,9 @@ def approve_test_detail(request, barcode):
     if not test_found:
         return JsonResponse({"error": "Test not found with given test_id."}, status=404)
 
-    # Persist the updated test details
+    # Persist the updated test details by _id
     result = collection.update_one(
-        query,
+        {"_id": test_value["_id"]},
         {"$set": {"testdetails": json.dumps(test_details)}}
     )
     if result.modified_count > 0:
@@ -688,28 +698,42 @@ def rerun_test_detail(request, barcode):
     collection = db.core_testvalue
     try:
         update_data = request.data
-        barcode = update_data.get("barcode")
+        barcode = update_data.get("barcode") or barcode
         created_date_str = update_data.get("created_date")
         test_id = update_data.get("test_id")
         rerun_time = update_data.get("rerun_time")  # Get from frontend
-        if not (barcode and created_date_str and test_id):
+        if not (barcode and test_id):
             return JsonResponse({
-                "error": "barcode, created_date, and test_id required"
+                "error": "barcode and test_id required"
             }, status=400)
-        created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
     except Exception as e:
         return JsonResponse({"error": f"Invalid request format: {str(e)}"}, status=400)
-    # Query with barcode and created_date
-    query = {"barcode": barcode, "created_date": created_date}
-    test_value = collection.find_one(query)
+
+    # Query with barcode and created_date if available
+    query = {"barcode": barcode}
+    if created_date_str:
+        try:
+            created_date = datetime.fromisoformat(created_date_str.replace("Z", "+00:00"))
+            query["created_date"] = created_date
+        except Exception:
+            pass
+
+    test_value = collection.find_one(query, sort=[("created_date", -1)])
+    if not test_value and "created_date" in query:
+        # Fallback to query by barcode only
+        query.pop("created_date", None)
+        test_value = collection.find_one(query, sort=[("created_date", -1)])
+
     if not test_value:
         return JsonResponse({
-            "error": "Patient record not found for given barcode & created_date."
+            "error": "Patient record not found for given barcode."
         }, status=404)
+
     try:
         test_details = json.loads(test_value.get("testdetails", "[]"))
     except json.JSONDecodeError:
         return JsonResponse({"error": "Failed to decode test details."}, status=500)
+
     # Find the test by test_id
     test_found = False
     for test_detail in test_details:
@@ -728,11 +752,13 @@ def rerun_test_detail(request, barcode):
                     test_detail["rerun_by"] = update_data["rerun_by"]
             test_found = True
             break
+
     if not test_found:
         return JsonResponse({"error": "Test not found with given test_id."}, status=404)
-    # Update the document
+
+    # Update the document by _id
     result = collection.update_one(
-        query,
+        {"_id": test_value["_id"]},
         {"$set": {"testdetails": json.dumps(test_details)}}
     )
     if result.modified_count > 0:
