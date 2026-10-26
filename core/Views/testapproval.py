@@ -271,6 +271,7 @@ def get_test_values(request):
             "unit": 1,
             "method": 1,
             "reference_range": 1,
+            "is_pathology": 1,
             "_id": 0
         }
     ))
@@ -505,6 +506,7 @@ def get_test_values(request):
                     'interpretation':       test_meta.get('interpretation', test.get('interpretation', '')),
                     'critical_range':       test_meta.get('critical_range', test.get('critical_range', '')),
                     'lod':                  test_meta.get('lod', test.get('lod', '')),
+                    'is_pathology':         bool(test_meta.get('is_pathology', test.get('is_pathology', False))),
                     'parameters':           enriched_parameters,
                 }
 
@@ -521,6 +523,7 @@ def get_test_values(request):
                     'interpretation':       test_meta.get('interpretation', test.get('interpretation', '')),
                     'critical_range':       test_meta.get('critical_range', test.get('critical_range', '')),
                     'lod':                  test_meta.get('lod', test.get('lod', '')),
+                    'is_pathology':         bool(test_meta.get('is_pathology', test.get('is_pathology', False))),
                 }
 
                 if test_code and test_code != 'N/A' and test_meta.get('parameters'):
@@ -554,10 +557,10 @@ def get_test_values(request):
                     filtered_test_details.append(test)
             test_details = filtered_test_details
 
-        # Only pending tests
+        # Only pending tests, excluding pathology tests
         filtered_tests = [
             test for test in test_details
-            if not test.get('approve', False) and not test.get('rerun', False)
+            if not test.get('approve', False) and not test.get('rerun', False) and not test.get('is_pathology', False)
         ]
 
         if not filtered_tests:

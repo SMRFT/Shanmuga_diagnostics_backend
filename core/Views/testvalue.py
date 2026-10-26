@@ -65,7 +65,7 @@ def get_cached_test_details(db):
     now = pytime.time()
     if _test_details_cache is None or (now - _test_details_cache_time > 1800):
         cache = {}
-        for td_doc in db.core_testdetails.find({}, {"_id": 0, "test_id": 1, "test_name": 1, "department": 1, "collection_container": 1, "TAT_Time": 1}):
+        for td_doc in db.core_testdetails.find({}, {"_id": 0, "test_id": 1, "test_name": 1, "department": 1, "collection_container": 1, "TAT_Time": 1, "is_pathology": 1}):
             cache[td_doc.get('test_id')] = td_doc
         _test_details_cache = cache
         _test_details_cache_time = now
@@ -164,6 +164,7 @@ def get_samplestatus_testvalue(request):
                         "department": 1,
                         "collection_container": 1,
                         "TAT_Time": 1,
+                        "is_pathology": 1,
                     }
                 )
                 if test_detail:
@@ -291,6 +292,7 @@ def get_samplestatus_testvalue(request):
                     test['department'] = test_detail.get('department', test.get('department', 'N/A'))
                     test['container'] = test_detail.get('collection_container', test.get('container', 'N/A'))
                     test['tat_time'] = test_detail.get('TAT_Time') or test.get('TAT_Time')
+                    test['is_pathology'] = bool(test_detail.get('is_pathology', test.get('is_pathology', False)))
             return test
 
         def match_test_values(test, barcode, test_values_by_barcode):
@@ -384,6 +386,9 @@ def get_samplestatus_testvalue(request):
                     if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
                         continue
 
+                    if enriched_test.get('is_pathology'):
+                        continue
+
                     matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
 
                     if matched_test.get('dispatch') or (exclude_dispatched and matched_test.get('dispatch')):
@@ -437,6 +442,9 @@ def get_samplestatus_testvalue(request):
                     enriched_test = enrich_test_with_details(test)
 
                     if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
+                        continue
+
+                    if enriched_test.get('is_pathology'):
                         continue
 
                     matched_test = match_test_values(enriched_test, barcode, test_values_by_barcode)
@@ -653,6 +661,9 @@ def get_samplestatus_testvalue(request):
                         if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
                             continue
 
+                        if enriched_test.get('is_pathology'):
+                            continue
+
                         matched_test = match_test_values(enriched_test, barcode, chc_test_values_by_barcode)
 
                         if matched_test.get('dispatch') or (exclude_dispatched and matched_test.get('dispatch')):
@@ -783,6 +794,9 @@ def get_samplestatus_testvalue(request):
                         enriched_test = enrich_test_with_details(test)
 
                         if enriched_test.get('department') not in ALLOWED_DEPARTMENTS:
+                            continue
+
+                        if enriched_test.get('is_pathology'):
                             continue
 
                         matched_test = match_test_values(enriched_test, barcode, mongo_test_values_by_barcode)
