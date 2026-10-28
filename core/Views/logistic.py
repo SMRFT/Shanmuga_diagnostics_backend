@@ -1336,6 +1336,10 @@ def bus_fare(request):
             if collectedby_filter:
                 queryset = queryset.filter(collectedby=collectedby_filter)
 
+            pickedupby_filter = request.query_params.get('pickedupby')
+            if pickedupby_filter:
+                queryset = queryset.filter(pickedupby=pickedupby_filter)
+
             serializer = BusfareSerializer(queryset, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
