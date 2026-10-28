@@ -3,7 +3,7 @@ from django.urls import path
 from core import views
 from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
 from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology,franchiseentrollment, expo_notifications, testdirectory
-from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report
+from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,pathology
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
 from core.Views.refundandcancellation import search_cancellation,verify_and_process_refund,search_refund,verify_and_process_cancellation,generate_otp_cancellation,generate_otp_refund,logs_api
 from .Views import clinical_hospital_report
@@ -163,6 +163,18 @@ urlpatterns = [
     path('test-rerun/<str:barcode>/rerun/', testapproval.rerun_test_detail, name='rerun_test_detail'),
     path('test-approved-values/', testapproval.get_approved_values, name='get_approved_values'),
     path('test-edit/<str:barcode>/edit/', testapproval.edit_test_value, name='edit_test_value'),
+
+    #Pathology Test Values & Approval:
+    path('pathology_testvalue/', pathology.pathology_testvalue, name='pathology_testvalue'),
+    path('pathology-test-values/', pathology.pathology_get_test_values, name='pathology_get_test_values'),
+    path('pathology-compare-test-details/', pathology.pathology_compare_test_details, name='pathology_compare_test_details'),
+    path('pathology-test-value/save/', pathology.pathology_save_test_value, name='pathology_save_test_value'),
+    path('pathology-test-approval/<str:barcode>/approve/', pathology.pathology_approve_test_detail, name='pathology_approve_test_detail'),
+    path('pathology-test-rerun/<str:barcode>/rerun/', pathology.pathology_rerun_test_detail, name='pathology_rerun_test_detail'),
+    #Pathology Reports:
+    path('pathology_patient_test_sorting/', pathology.pathology_patient_test_sorting, name='pathology_patient_test_sorting'),
+    path('pathology_get_patient_test_details/', pathology.pathology_get_patient_test_details, name='pathology_get_patient_test_details'),
+    path('pathology_update_dispatch_status/<str:barcode>/', pathology.pathology_update_dispatch_status, name='pathology_update_dispatch_status'),
 
 
     #Diagnostics Reports:
