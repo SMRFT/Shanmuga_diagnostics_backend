@@ -154,6 +154,15 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/mb-test-approval(?:/[^/]+)+/$':'SD-P-MBDF',
     r'^/_b_a_c_k_e_n_d/LIS/mb-test-rerun(?:/[^/]+)+/$':'SD-P-MBDF',
 
+    #Pathology Test Values & Approval:
+    r'^/_b_a_c_k_e_n_d/LIS/pathology_testvalue/?(\?.*)?$':'SD-P-MBPD',       
+    r'^/_b_a_c_k_e_n_d/LIS/pathology-test-values/?(\?.*)?$':'SD-P-MBTV',
+    r'^/_b_a_c_k_e_n_d/LIS/pathology-compare-test-details/?(\?.*)?$':'SD-API-MBTD',
+    '/_b_a_c_k_e_n_d/LIS/pathology-test-value/save/':'SD-API-MBTD',
+    r'^/_b_a_c_k_e_n_d/LIS/pathology-test-value/save/?(\?.*)?$':'SD-API-MBTD',
+    r'^/_b_a_c_k_e_n_d/LIS/pathology-test-approval(?:/[^/]+)+/$':'SD-P-MBDF',
+    r'^/_b_a_c_k_e_n_d/LIS/pathology-test-rerun(?:/[^/]+)+/$':'SD-P-MBDF',
+
     #Mole/Bio Test Values:
     r'^/_b_a_c_k_e_n_d/LIS/mol_biology_testvalue/?(\?.*)?$':'SD-P-MOLPD',       
     r'^/_b_a_c_k_e_n_d/LIS/mol_biology-compare_test_details/?(\?.*)?$':'SD-P-MOLPD',  
@@ -181,6 +190,9 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/hms_mb_get_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/franchise_mb_get_patient_test_details/?(\?.*)?$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/mb_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/pathology_patient_test_sorting/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/pathology_get_patient_test_details/?(\?.*)?$':'SD-P-POV',
+    r'^/_b_a_c_k_e_n_d/LIS/pathology_update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update_dispatch_status(?:/[^/]+)+/$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/update_printed_status(?:/[^/]+)+/$':'SD-P-POV',
     r'^/_b_a_c_k_e_n_d/LIS/upload-pdf/?(\?.*)?$':'SD-P-POV',
