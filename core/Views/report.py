@@ -914,6 +914,22 @@ def overall_report(request):
                 else:
                     pathology_status = 'Pending'
 
+            path_tests = [t for t in individual_test_statuses if t.get('is_pathology')]
+            pathology_status = None
+            if path_tests:
+                if any(t.get('status') == 'Dispatched' for t in path_tests):
+                    pathology_status = 'Dispatched'
+                elif any(t.get('status') == 'Approved' for t in path_tests):
+                    pathology_status = 'Approved'
+                elif any(t.get('status') == 'Tested' for t in path_tests):
+                    pathology_status = 'Tested'
+                elif any(t.get('status') == 'Received' for t in path_tests):
+                    pathology_status = 'Received'
+                elif any(t.get('status') == 'Collected' for t in path_tests):
+                    pathology_status = 'Collected'
+                else:
+                    pathology_status = 'Pending'
+
             formatted_data.append({
                 "date": formatted_date,
                 "registration_date": registration_date,
@@ -938,6 +954,8 @@ def overall_report(request):
                 "test_names": testnames,
                 "department": department,  
                 "department_statuses": department_statuses,
+                "pathology_status": pathology_status,
+                "has_pathology": bool(path_tests),
                 "test_statuses": individual_test_statuses,
                 "pathology_status": pathology_status,
                 "has_pathology": bool(path_tests),
@@ -1115,6 +1133,16 @@ def shanmuga360_overall_report(request):
             chunk_size=50
         )
 
+        # Fetch PathologyTestValue records in shanmuga360_overall_report
+        pathology_test_value_collection = db.core_pathologytestvalue
+        pathology_test_value_records = fetch_in_chunks(
+            collection=pathology_test_value_collection,
+            query_field="barcode",
+            param_list=barcodes,
+            additional_query={"date": date_query},
+            chunk_size=50
+        )
+
         sample_status_map = {}
         for record in sample_status_records:
             td = record.get("testdetails", [])
@@ -1153,6 +1181,22 @@ def shanmuga360_overall_report(request):
                 mb_test_value_map[barcode]["testdetails"].extend(testdetails)
             if created_date and (not mb_test_value_map[barcode]["created_date"] or created_date > mb_test_value_map[barcode]["created_date"]):
                 mb_test_value_map[barcode]["created_date"] = created_date
+
+        pathology_test_value_map = {}
+        for record in pathology_test_value_records:
+            bc = record.get("barcode")
+            if not bc: continue
+            created_date = record.get("created_date")
+            testdetails = record.get("testdetails")
+            if isinstance(testdetails, str):
+                try: testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError: testdetails = []
+            if bc not in pathology_test_value_map:
+                pathology_test_value_map[bc] = {"barcode": bc, "testdetails": [], "created_date": created_date}
+            if isinstance(testdetails, list):
+                pathology_test_value_map[bc]["testdetails"].extend(testdetails)
+            if created_date and (not pathology_test_value_map[bc]["created_date"] or created_date > pathology_test_value_map[bc]["created_date"]):
+                pathology_test_value_map[bc]["created_date"] = created_date
 
         formatted_data = []
         for record in billing_records:
@@ -1248,7 +1292,7 @@ def shanmuga360_overall_report(request):
             if test_ids:
                 mongo_tests = list(test_details_collection.find(
                     {"test_id": {"$in": test_ids}},
-                    {"_id": 0, "test_id": 1, "testname": 1, "department": 1, "shortcut": 1}
+                    {"_id": 0, "test_id": 1, "testname": 1, "department": 1, "shortcut": 1, "is_pathology": 1}
                 ))
                 mongo_test_map = {t["test_id"]: t for t in mongo_tests}
                 for item in test_field:
@@ -1263,7 +1307,8 @@ def shanmuga360_overall_report(request):
                             "refund": item.get("refund", False),
                             "cancellation": item.get("cancellation", False),
                             "shortcut": item.get("shortcut") or mongo_info.get("shortcut", ""),
-                            "suffix": item.get("suffix", "")
+                            "suffix": item.get("suffix", ""),
+                            "is_pathology": bool(mongo_info.get("is_pathology", False))
                         })
                         if mongo_info.get("department"):
                             departments_set.add(mongo_info.get("department"))
@@ -1311,6 +1356,15 @@ def shanmuga360_overall_report(request):
                 if mb_created_date:
                     if not test_created_date or mb_created_date > test_created_date:
                         test_created_date = mb_created_date
+
+            path_test_data = pathology_test_value_map.get(barcode, {}) if barcode else {}
+            path_test_values = path_test_data.get("testdetails", [])
+            path_created_date = path_test_data.get("created_date", None)
+            if path_test_values:
+                all_test_values.extend(path_test_values)
+                if path_created_date:
+                    if not test_created_date or path_created_date > test_created_date:
+                        test_created_date = path_created_date
 
             valid_test_values = []
             unapproved_tests = []
@@ -1441,6 +1495,7 @@ def shanmuga360_overall_report(request):
                         "cancellation": test.get("cancellation", False),
                         "refund": test.get("refund", False),
                         "department": test.get('department', 'General'),
+                        "is_pathology": bool(test.get("is_pathology", False)),
                         "tat_time": tat_time,
                         "tat_status": tat_status,
                         "seconds_left": seconds_left,
@@ -1511,7 +1566,8 @@ def shanmuga360_overall_report(request):
                     barcode=barcode,
                     sample_status_map=sample_status_map,
                     test_value_map=test_value_map,
-                    mb_test_value_map=mb_test_value_map
+                    mb_test_value_map=mb_test_value_map,
+                    pathology_test_value_map=pathology_test_value_map
                 )
 
             formatted_data.append({

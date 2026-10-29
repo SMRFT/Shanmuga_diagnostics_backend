@@ -9,7 +9,7 @@ import logging
 from datetime import datetime, timedelta
 import os, json, traceback
 from django.utils.timezone import make_aware
-from ..models import  TestValue, MBTestValue
+from ..models import TestValue, MBTestValue, PathologyTestValue
 load_dotenv()
 logger = logging.getLogger(__name__)
 import gridfs
@@ -501,7 +501,7 @@ def update_batch_received_status(request, batch_no):
             client.close()
             
 
-def get_department_status_franchise(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map):
+def get_department_status_franchise(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map, pathology_test_value_map=None):
     """
     Determine status for each department based on test details
     Returns dict: {department_name: status}
@@ -531,6 +531,8 @@ def get_department_status_franchise(test_list, barcode, sample_status_map, test_
             all_test_values.extend(test_value_map[barcode].get('testdetails', []))
         if barcode in mb_test_value_map:
             all_test_values.extend(mb_test_value_map[barcode].get('testdetails', []))
+        if pathology_test_value_map and barcode in pathology_test_value_map:
+            all_test_values.extend(pathology_test_value_map[barcode].get('testdetails', []))
         
         # Filter test values for this department - match by test_id
         dept_test_values = [
@@ -817,6 +819,40 @@ def franchise_overall_report(request):
                 if not existing or created_date > existing:
                     mb_test_value_map[rec_barcode]["created_date"] = created_date
 
+        # ── PathologyTestValue records keyed by barcode ──────────────────────────────
+        pathology_test_value_records = list(PathologyTestValue.objects.filter(
+            barcode__in=barcodes,
+            date__range=(from_date.date(), to_date.date()),
+        ).values("barcode", "testdetails", "created_date"))
+        if not pathology_test_value_records:
+            client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+            pathology_test_value_records = list(client.Diagnostics.core_pathologytestvalue.find({
+                "barcode": {"$in": barcodes}
+            }, {"barcode": 1, "testdetails": 1, "created_date": 1}))
+
+        pathology_test_value_map = {}
+        for record in pathology_test_value_records:
+            if not isinstance(record, dict):
+                continue
+            rec_barcode = record.get("barcode")
+            created_date = record.get("created_date")
+            testdetails = record.get("testdetails")
+            if not rec_barcode:
+                continue
+            if isinstance(testdetails, str):
+                try:
+                    testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError:
+                    testdetails = []
+            if rec_barcode not in pathology_test_value_map:
+                pathology_test_value_map[rec_barcode] = {"testdetails": [], "created_date": created_date}
+            if isinstance(testdetails, list):
+                pathology_test_value_map[rec_barcode]["testdetails"].extend(testdetails)
+            if created_date:
+                existing = pathology_test_value_map[rec_barcode]["created_date"]
+                if not existing or created_date > existing:
+                    pathology_test_value_map[rec_barcode]["created_date"] = created_date
+
         # ── Build response ────────────────────────────────────────────────────
 
         formatted_data = []
@@ -878,7 +914,7 @@ def franchise_overall_report(request):
                 for test_id in test_ids:
                     test_detail_doc = test_details_collection.find_one(
                         {"test_id": test_id},
-                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1},
+                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1, "is_pathology": 1},
                     )
                     if test_detail_doc:
                         dept = test_detail_doc.get("department", "N/A")
@@ -887,6 +923,7 @@ def franchise_overall_report(request):
                             "testname":   test_detail_doc.get("test_name", "N/A"),
                             "test_name":  test_detail_doc.get("test_name", "N/A"),
                             "department": dept,
+                            "is_pathology": bool(test_detail.get("is_pathology", False))
                         })
                         if dept and dept != "N/A":
                             departments_set.add(dept)
@@ -950,6 +987,14 @@ def franchise_overall_report(request):
                 all_test_values.extend(mb_test_values)
                 if mb_created_date and (not test_created_date or mb_created_date > test_created_date):
                     test_created_date = mb_created_date
+
+            path_test_data = pathology_test_value_map.get(barcode, {})
+            path_test_values = path_test_data.get("testdetails", [])
+            if path_test_values:
+                all_test_values.extend(path_test_values)
+                path_created = path_test_data.get("created_date")
+                if path_created and (not test_created_date or path_created > test_created_date):
+                    test_created_date = path_created
 
             valid_test_values = []
             unapproved_tests  = []
@@ -1202,6 +1247,22 @@ def franchise_overall_report(request):
                     else str(test_created_date)
                 )
 
+            path_tests = [t for t in individual_test_statuses if t.get('is_pathology')]
+            pathology_status = None
+            if path_tests:
+                if any(t.get('status') == 'Dispatched' for t in path_tests):
+                    pathology_status = 'Dispatched'
+                elif any(t.get('status') == 'Approved' for t in path_tests):
+                    pathology_status = 'Approved'
+                elif any(t.get('status') == 'Tested' for t in path_tests):
+                    pathology_status = 'Tested'
+                elif any(t.get('status') == 'Received' for t in path_tests):
+                    pathology_status = 'Received'
+                elif any(t.get('status') == 'Collected' for t in path_tests):
+                    pathology_status = 'Collected'
+                else:
+                    pathology_status = 'Pending'
+
             formatted_data.append({
                 "date":                formatted_date,
                 "registration_date":   registration_date,
@@ -1222,6 +1283,8 @@ def franchise_overall_report(request):
                 "department":          department,
                 "department_statuses": department_statuses,
                 "test_statuses":       individual_test_statuses,
+                "pathology_status":    pathology_status,
+                "has_pathology":       bool(path_tests),
                 "sample_status":       sample_tests,
                 "no_of_tests":         no_of_tests,
                 "bill_no":             patient.get("bill_no", "N/A"),

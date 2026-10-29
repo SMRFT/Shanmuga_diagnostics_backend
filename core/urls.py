@@ -233,6 +233,7 @@ urlpatterns = [
     path('hms_overall_report/', hmsreport.hms_overall_report, name='overall_report'),   
     path('get_hms_patient_test_details/', hmsreport.get_hms_patient_test_details, name='get_hms_patient_test_details'),
     path("test-summary/", dashboard.test_summary, name="test-summary"),
+    path("chc-test-summary/", dashboard.chc_test_summary, name="chc-test-summary"),
     path("m-dashboard-stats/", m_dashboard.m_dashboard_stats, name="m_dashboard_stats"),
     
     #HMS Billing:
@@ -315,6 +316,7 @@ urlpatterns = [
     path('clinical_hospital_ledger/', clinical_hospital_report.clinical_hospital_ledger, name='clinical_hospital_ledger'),
     
     path("test-summary/", dashboard.test_summary, name="test-summary"),
+    path("chc-test-summary/", dashboard.chc_test_summary, name="chc-test-summary"),
 
     # Franchise Enrollment & Management URLs
     path('franchiseregister/', franchiseentrollment.register_franchise, name='register_franchise'),
