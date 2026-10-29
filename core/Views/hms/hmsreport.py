@@ -22,7 +22,7 @@ import json
 from rest_framework.decorators import api_view, permission_classes
 from pyauth.auth import HasRoleAndDataPermission
 from ...models import Hmssamplestatus,HmspatientBilling
-from ...models import TestValue, MBTestValue
+from ...models import TestValue, MBTestValue, PathologyTestValue
 from ...models import Hmsbarcode
 from django.http import JsonResponse
 from pymongo import MongoClient
@@ -38,7 +38,7 @@ import pytz
 import gridfs
 load_dotenv()
 
-def get_department_status(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map):
+def get_department_status(test_list, barcode, sample_status_map, test_value_map, mb_test_value_map, pathology_test_value_map=None):
     """
     Determine status for each department based on test details
     Returns dict: {department_name: status}
@@ -68,6 +68,8 @@ def get_department_status(test_list, barcode, sample_status_map, test_value_map,
             all_test_values.extend(test_value_map[barcode].get('testdetails', []))
         if barcode in mb_test_value_map:
             all_test_values.extend(mb_test_value_map[barcode].get('testdetails', []))
+        if pathology_test_value_map and barcode in pathology_test_value_map:
+            all_test_values.extend(pathology_test_value_map[barcode].get('testdetails', []))
         
         # Filter test values for this department - match by test_id
         dept_test_values = [
@@ -229,6 +231,16 @@ def hms_overall_report(request):
             date__range=(make_aware(from_date), make_aware(to_date))
         ).values("barcode", "testdetails", "created_date")
 
+        # Fetch PathologyTestValue records using Django ORM
+        pathology_test_value_records = list(PathologyTestValue.objects.filter(
+            barcode__in=barcodes,
+            date__range=(from_date.date(), to_date.date())
+        ).values("barcode", "testdetails", "created_date"))
+        if not pathology_test_value_records:
+            pathology_test_value_records = list(db.core_pathologytestvalue.find({
+                "barcode": {"$in": barcodes}
+            }, {"barcode": 1, "testdetails": 1, "created_date": 1}))
+
         # Organize status data
         sample_status_map = {}
         for record in sample_status_records:
@@ -299,6 +311,29 @@ def hms_overall_report(request):
             if created_date and (not mb_test_value_map[barcode]["created_date"] or created_date > mb_test_value_map[barcode]["created_date"]):
                 mb_test_value_map[barcode]["created_date"] = created_date
 
+        # Organize PathologyTestValue data - COMBINE ALL RECORDS FOR SAME BARCODE
+        pathology_test_value_map = {}
+        for record in pathology_test_value_records:
+            bc = record.get("barcode")
+            if not bc: continue
+            created_date = record.get("created_date")
+            testdetails = record.get("testdetails")
+            if isinstance(testdetails, str):
+                try:
+                    testdetails = json.loads(testdetails.strip('"'))
+                except json.JSONDecodeError:
+                    testdetails = []
+            if bc not in pathology_test_value_map:
+                pathology_test_value_map[bc] = {
+                    "barcode": bc,
+                    "testdetails": [],
+                    "created_date": created_date
+                }
+            if isinstance(testdetails, list):
+                pathology_test_value_map[bc]["testdetails"].extend(testdetails)
+            if created_date and (not pathology_test_value_map[bc]["created_date"] or created_date > pathology_test_value_map[bc]["created_date"]):
+                pathology_test_value_map[bc]["created_date"] = created_date
+
         # Format response
         formatted_data = []
         for record in barcode_records:
@@ -345,14 +380,15 @@ def hms_overall_report(request):
                 for test_id in test_ids:
                     test_detail = test_details_collection.find_one(
                         {"test_id": test_id},
-                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1}
+                        {"_id": 0, "test_id": 1, "test_name": 1, "department": 1, "is_pathology": 1}
                     )
                     if test_detail:
                         dept = test_detail.get("department", "N/A")
                         test_list.append({
                             "test_id": test_id,
                             "testname": test_detail.get("test_name", "N/A"),
-                            "department": dept
+                            "department": dept,
+                            "is_pathology": bool(test_detail.get("is_pathology", False))
                         })
                         # Collect department
                         if dept and dept != "N/A":
@@ -380,7 +416,8 @@ def hms_overall_report(request):
                     barcode, 
                     sample_status_map, 
                     test_value_map,
-                    mb_test_value_map  # Include MBTestValue data
+                    mb_test_value_map,
+                    pathology_test_value_map
                 )
 
             # STATUS DETERMINATION (using test_id instead of test_name)
@@ -405,6 +442,16 @@ def hms_overall_report(request):
                 if mb_created_date:
                     if not test_created_date or mb_created_date > test_created_date:
                         test_created_date = mb_created_date
+
+            # Add PathologyTestValue data
+            path_test_data = pathology_test_value_map.get(barcode, {}) if barcode else {}
+            path_test_values = path_test_data.get("testdetails", [])
+            path_created_date = path_test_data.get("created_date", None)
+            if path_test_values:
+                all_test_values.extend(path_test_values)
+                if path_created_date:
+                    if not test_created_date or path_created_date > test_created_date:
+                        test_created_date = path_created_date
 
             # Filter out rerun records
             valid_test_values = []
@@ -448,9 +495,10 @@ def hms_overall_report(request):
                     # **NEW: Get TAT from core_testdetails**
                     test_detail = test_details_collection.find_one(
                         {"test_id": test_id},
-                        {"_id": 0, "TAT_Time": 1}
+                        {"_id": 0, "TAT_Time": 1, "is_pathology": 1}
                     )
                     tat_time = test_detail.get("TAT_Time") if test_detail else None
+                    is_pathology = bool(test_detail.get("is_pathology", False)) if test_detail else bool(test.get("is_pathology", False))
                     
                     # **NEW: Get timestamps**
                     sample_collected_time = None
@@ -559,6 +607,7 @@ def hms_overall_report(request):
                         'samplestatus': samplestatus,
                         'printed': bool(test_value_info.get('printed', False)),
                         'printed_status': "Printed" if test_value_info.get('printed', False) else "Not Printed",
+                        'is_pathology': is_pathology,
                         'tat_time': tat_time,
                         'seconds_left': int(seconds_left) if seconds_left is not None else None,
                         'tat_status': tat_status,
@@ -708,6 +757,23 @@ def hms_overall_report(request):
                 else:
                     barcode_created_date_formatted = str(barcode_created_date)
 
+            # Calculate pathology_status based on tests where is_pathology is True
+            path_tests = [t for t in individual_test_statuses if t.get('is_pathology')]
+            pathology_status = None
+            if path_tests:
+                if any(t.get('status') == 'Dispatched' for t in path_tests):
+                    pathology_status = 'Dispatched'
+                elif any(t.get('status') == 'Approved' for t in path_tests):
+                    pathology_status = 'Approved'
+                elif any(t.get('status') == 'Tested' for t in path_tests):
+                    pathology_status = 'Tested'
+                elif any(t.get('status') == 'Received' for t in path_tests):
+                    pathology_status = 'Received'
+                elif any(t.get('status') == 'Collected' for t in path_tests):
+                    pathology_status = 'Collected'
+                else:
+                    pathology_status = 'Pending'
+
             formatted_data.append({
                 "date": formatted_date,
                 "registration_date": registration_date,
@@ -724,7 +790,9 @@ def hms_overall_report(request):
                 "test_names": testnames,
                 "department": department,
                 "department_statuses": department_statuses,
-                "test_statuses": individual_test_statuses,  # NOW INCLUDES TAT & PRINTED INFO
+                "test_statuses": individual_test_statuses,
+                "pathology_status": pathology_status,
+                "has_pathology": bool(path_tests),
                 "sample_status": sample_tests,
                 "no_of_tests": no_of_tests,
                 "billnumber": billnumber,

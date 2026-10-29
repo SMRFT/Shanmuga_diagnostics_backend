@@ -2,6 +2,7 @@ PAGE_MAPPING = {
 
     #Registration, Billing and Forms
     r'^/_b_a_c_k_e_n_d/LIS/test-summary/?(\?.*)?$':'SD-P-TS',
+    r'^/_b_a_c_k_e_n_d/LIS/chc-test-summary/?(\?.*)?$':'SD-P-TS',
     r'^/_b_a_c_k_e_n_d/LIS/communication_logs/?(\?.*)?$': 'SD-P-CL',
     '/_b_a_c_k_e_n_d/LIS/create_patient/': 'SD-P-PF',
     r'^/_b_a_c_k_e_n_d/LIS/create_patient/?(\?.*)?$': 'SD-P-PG',
@@ -201,6 +202,7 @@ PAGE_MAPPING = {
     r'^/_b_a_c_k_e_n_d/LIS/get_batch_investigation_status/?(\?.*)?$':'SD-P-CHC',
     '/_b_a_c_k_e_n_d/LIS/communication_logs/':'SD-API-MIS',
     '/_b_a_c_k_e_n_d/LIS/test-summary/':'SD-API-MIS',
+    '/_b_a_c_k_e_n_d/LIS/chc-test-summary/':'SD-API-MIS',
     '/_b_a_c_k_e_n_d/LIS/communication_logs/':'SD-API-MIS',
     '/_b_a_c_k_e_n_d/LIS/m-dashboard-stats/':'SD-API-MIS',
     '/_b_a_c_k_e_n_d/LIS/get_rejected_samples/': 'SD-API-MIS',
