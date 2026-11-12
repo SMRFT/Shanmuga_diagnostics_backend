@@ -1,7 +1,7 @@
 #urls.py
 from django.urls import path
 from core import views
-from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus
+from .Views.hms import hmsbarcode,hmsbilling,hmsreport,hmssamplestatus,shhmsbarcode
 from .Views import whatsapp,franchise,sales,mis,dashboard,corporate,logistic,location,m_dashboard,os_management,microbiology,franchiseentrollment, expo_notifications, testdirectory
 from .Views import patients,clinicalname,form,testdetails,barcode,sample,testvalue,testapproval,report,pathology
 from core.Views.invoice import generate_invoice,get_invoices,delete_invoice,update_invoice,get_clinicalname_invoice,get_all_patients,patient_report
@@ -277,6 +277,11 @@ urlpatterns = [
     #HMS Barcode:
     path('hms_patients_get_barcode/', hmsbarcode.get_hms_barcode_by_date, name='get_barcode_by_date'),    
     path('save-hms-barcodes/', hmsbarcode.save_hms_barcodes, name='save_barcodes'),
+
+    #SH HMS Barcode:
+    path('sh_hms_patients_get_barcode/', shhmsbarcode.get_sh_hms_barcode_by_date, name='get_sh_hms_barcode_by_date'),
+    path('save-sh-hms-barcodes/', shhmsbarcode.save_sh_hms_barcodes, name='save_sh_hms_barcodes'),
+    path('get-sh-hms-existing-barcode/', shhmsbarcode.get_sh_hms_existing_barcode, name='get_sh_hms_existing_barcode'),
 
     #HMS Sample:
     path('hms_sample_patient/', hmssamplestatus.hms_get_samplepatients_by_date, name='hms_get_samplepatients_by_date'),

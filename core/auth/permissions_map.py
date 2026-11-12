@@ -231,7 +231,12 @@ PAGE_MAPPING = {
 
     #HMS barcode:
     r'^/_b_a_c_k_e_n_d/LIS/hms_patients_get_barcode/?(\?.*)?$': 'SD-P-HMSLD',
+    r'^/_b_a_c_k_e_n_d/LIS/sh_hms_patients_get_barcode/?(\?.*)?$': 'SD-P-HMSLD',
+
     r'^/_b_a_c_k_e_n_d/LIS/save-hms-barcodes/?(\?.*)?$': 'SD-P-HMSPB',
+    r'^/_b_a_c_k_e_n_d/LIS/save-sh-hms-barcodes/?(\?.*)?$': 'SD-P-HMSPB',
+    r'^/_b_a_c_k_e_n_d/LIS/get-sh-hms-existing-barcode/?(\?.*)?$': 'SD-P-HMSPB',
+
 
     # HMS Sample Status 
     r'^/_b_a_c_k_e_n_d/LIS/hms_sample_patient/?(\?.*)?$':'SD-P-HMSSP',
