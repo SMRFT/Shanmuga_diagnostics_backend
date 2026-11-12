@@ -2480,123 +2480,186 @@ def update_dispatch_status(request, barcode):
         client.close()
 
 
+
 @api_view(['PATCH'])
 @permission_classes([HasRoleAndDataPermission])
 def update_printed_status(request, barcode):
     """
-    Update printed status for a specific test in core_testvalue collection.
-    Uses barcode, test_id, and created_date for accurate targeting.
+    Update printed status for a specific test in core_testvalue
+    and synchronize the status with HMS.hospital_investbilling.
     """
     client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client.Diagnostics  # Database name
+    db = client.Diagnostics
     collection = db.core_testvalue
-    
+
     try:
-        # Get parameters from request data
         auth_user_id = request.data.get('auth-user-id')
         auth_user_name = request.data.get('auth-user-name')
         test_id = request.data.get('test_id')
         created_date_str = request.data.get('created_date')
-        
+        billnumber = request.data.get('billnumber')
+
         if not auth_user_id:
             return Response(
-                {"error": "auth-user-id parameter is required"}, 
+                {"error": "auth-user-id parameter is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         if not test_id:
             return Response(
-                {"error": "test_id parameter is required"}, 
+                {"error": "test_id parameter is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         if not created_date_str:
             return Response(
-                {"error": "created_date parameter is required"}, 
+                {"error": "created_date parameter is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Parse the created_date string to datetime object
+
+        # Parse created date
         try:
             created_date = parse_datetime(created_date_str)
             if not created_date:
-                created_date = datetime.fromisoformat(created_date_str.replace('Z', '+00:00'))
-        except (ValueError, AttributeError) as e:
+                created_date = datetime.fromisoformat(
+                    created_date_str.replace('Z', '+00:00')
+                )
+        except (ValueError, AttributeError):
             return Response(
-                {"error": f"Invalid created_date format: {created_date_str}. Expected ISO format."}, 
+                {
+                    "error": f"Invalid created_date format: {created_date_str}. Expected ISO format."
+                },
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Build the query filter with barcode and created_date
+
+        # Find specific test value record
         query_filter = {
             "barcode": barcode,
             "created_date": created_date
         }
-        
-        # Find the specific document
+
         test_value_record = collection.find_one(query_filter)
-        
+
         if not test_value_record:
             return Response({
-                "error": f"No TestValue record found for barcode: {barcode} and created_date: {created_date}",
+                "error": (
+                    f"No TestValue record found for barcode: "
+                    f"{barcode} and created_date: {created_date}"
+                ),
                 "debug_info": {
                     "barcode": barcode,
                     "created_date_str": created_date_str,
                     "parsed_created_date": str(created_date)
                 }
             }, status=status.HTTP_404_NOT_FOUND)
-        
-        # Parse the testdetails field
+
+        # Parse testdetails
         test_details = test_value_record.get("testdetails")
-        
+
         if isinstance(test_details, str):
             test_details = json.loads(test_details)
         elif not isinstance(test_details, list):
             return Response({
                 "error": "Invalid testdetails format"
             }, status=status.HTTP_400_BAD_REQUEST)
-        
+
         # Find and update the specific test
         test_found = False
         tests_updated = 0
-        
+
         for test in test_details:
-            if test.get("test_id") == test_id:
+            if str(test.get("test_id")) == str(test_id):
                 test_found = True
+
                 if not test.get("printed", False):
                     test["printed"] = True
                     test["printed_by"] = auth_user_name
-                    test["printed_time"] = datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
+                    test["printed_time"] = datetime.now(IST).strftime(
+                        '%Y-%m-%d %H:%M:%S'
+                    )
                     tests_updated += 1
+
                 break
-        
+
         if not test_found:
             return Response({
                 "error": f"Test with test_id {test_id} not found in the document"
             }, status=status.HTTP_404_NOT_FOUND)
-        
+
         if tests_updated == 0:
             return Response({
-                "message": f"Test is already printed",
+                "message": "Test is already printed",
                 "test_id": test_id,
                 "barcode": barcode,
                 "created_date": created_date_str
             }, status=status.HTTP_200_OK)
-        
-        # Convert the updated testdetails back to a JSON string
+
+        # Convert updated testdetails to JSON string
         updated_test_details = json.dumps(test_details)
-        
-        # Update the document in MongoDB
+
+        # Update core_testvalue
         result = collection.update_one(
             {"_id": test_value_record["_id"]},
-            {"$set": {
-                "testdetails": updated_test_details,
-                "lastmodified_by": auth_user_id,
-                "lastmodified_date": datetime.now(IST)
-            }}
+            {
+                "$set": {
+                    "testdetails": updated_test_details,
+                    "lastmodified_by": auth_user_id,
+                    "lastmodified_date": datetime.now(IST)
+                }
+            }
         )
-        
+
         if result.matched_count > 0:
+
+            # ===== Mirror Printed status into HMS billing =====
+            billing_updated = 0
+            billing_error = None
+
+            try:
+                # Fallback: Get bill number using barcode
+                if not billnumber:
+                    sample_rec = db.core_hmssamplestatus.find_one(
+                        {"barcode": barcode},
+                        {"billnumber": 1}
+                    )
+
+                    billnumber = (
+                        sample_rec.get("billnumber")
+                        if sample_rec else None
+                    )
+
+                if billnumber:
+
+                    # HMS billing stores test_id as integer
+                    try:
+                        tid = int(test_id)
+                    except (TypeError, ValueError):
+                        tid = test_id
+
+                    bill_result = client.HMS.hospital_investbilling.update_one(
+                        {
+                            "investBillNo": billnumber,
+                            "item.test_id": tid
+                        },
+                        {
+                            "$set": {
+                                "item.$[elem].status": "Printed"
+                            }
+                        },
+                        array_filters=[
+                            {"elem.test_id": tid}
+                        ]
+                    )
+
+                    billing_updated = bill_result.modified_count
+
+                else:
+                    billing_error = "Bill number not found"
+
+            except Exception as billing_err:
+                billing_error = str(billing_err)
+                print(f"Billing status update failed: {billing_err}")
+
             return Response({
                 "message": "Printed status updated successfully",
                 "barcode": barcode,
@@ -2604,19 +2667,24 @@ def update_printed_status(request, barcode):
                 "test_id": test_id,
                 "tests_updated": tests_updated,
                 "modified_by": auth_user_id,
-                "document_id": str(test_value_record["_id"])
+                "document_id": str(test_value_record["_id"]),
+                "billing_items_updated": billing_updated,
+                "billing_error": billing_error
             }, status=status.HTTP_200_OK)
+
         else:
             return Response({
-                "error": "Failed to update the document"
+                "error": "Failed to update the core_testvalue document"
             }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
     except Exception as e:
         import traceback
+
         return Response({
             "error": str(e),
             "traceback": traceback.format_exc()
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
     finally:
         client.close()
 

@@ -572,47 +572,49 @@ def hms_get_sample_collected(request):
         except Exception as e:
             return JsonResponse({"error": str(e)}, status=500)
 
+from pymongo import MongoClient, UpdateOne
+
 @api_view(['PUT'])
 @csrf_exempt
 @permission_classes([HasRoleAndDataPermission])
 def hms_update_sample_collected(request, barcode):
-    """
-    Update sample status in MongoDB:
-    - Find record by barcode
-    - Find correct test within testdetails using test_id
-    - Update only that test entry
-    """
     try:
-        # MongoDB connection
         client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
         db = client.Diagnostics
         collection = db.core_hmssamplestatus
-        
-        # Parse body
+
+        # HMS database / billing collection
+        hms_db = client.HMS
+        billing_collection = hms_db.hospital_investbilling
+
         body = request.data if hasattr(request, 'data') else json.loads(request.body)
         updates = body.get("updates", [])
         barcode = body.get("barcode")
-        
+        billnumber = body.get("billnumber")
+
         if not updates:
             return JsonResponse({"error": "Updates are required"}, status=400)
         if not barcode:
             return JsonResponse({"error": "barcode is required"}, status=400)
-        
-        # ===== Find the correct patient record =====
+        if not billnumber:
+            return JsonResponse({"error": "billnumber is required"}, status=400)
+
         record = collection.find_one({"barcode": barcode})
         if not record:
             return JsonResponse({"error": "Sample not found"}, status=404)
-        
+
         record_id = record["_id"]
         testdetails = json.loads(record.get("testdetails", "[]"))
-        
-        # ===== Apply updates =====
+
         from django.utils import timezone
         import pytz
         ist_timezone = pytz.timezone('Asia/Kolkata')
         current_time = timezone.now().astimezone(ist_timezone)
         formatted_time = current_time.strftime('%Y-%m-%d %H:%M:%S')
-        
+
+        # collect (test_id, status) pairs to mirror into billing
+        billing_updates = []
+
         for update in updates:
             test_id = update.get("test_id")
             new_status = update.get("samplestatus")
@@ -621,20 +623,14 @@ def hms_update_sample_collected(request, barcode):
             outsourced_by = update.get("outsourced_by")
             outsource_lab = update.get("outsource_lab")
             remarks = update.get("remarks")
-            
+
             if test_id is None or new_status is None:
                 return JsonResponse({"error": "test_id and samplestatus are required"}, status=400)
-            
-            # Find the test by test_id only
-            test_entry = next(
-                (t for t in testdetails if t.get("test_id") == test_id),
-                None
-            )
-            
+
+            test_entry = next((t for t in testdetails if t.get("test_id") == test_id), None)
             if not test_entry:
                 return JsonResponse({"error": f"Test with id {test_id} not found"}, status=404)
-            
-            # Update sample status and timestamps
+
             test_entry['samplestatus'] = new_status
             if new_status == "Received":
                 test_entry['received_time'] = formatted_time
@@ -647,15 +643,44 @@ def hms_update_sample_collected(request, barcode):
                 test_entry['outsourced_time'] = formatted_time
                 test_entry['outsourced_by'] = outsourced_by
                 test_entry['outsource_lab'] = outsource_lab
-        
-        # ===== Save back to DB =====
+
+            billing_updates.append((test_id, new_status))
+
+        # ===== Save sample status =====
         collection.update_one(
             {"_id": record_id},
             {"$set": {"testdetails": json.dumps(testdetails)}}
         )
-        
-        return JsonResponse({"message": "Sample status updated successfully"}, status=200)
-        
+
+        # ===== Mirror status into HMS.hospital_investbilling =====
+        # Only "Outsource" is stored differently in billing
+        BILLING_STATUS_MAP = {"Outsource": "Outsourced"}
+
+        ops = []
+        for test_id, status in billing_updates:
+            try:
+                tid = int(test_id)
+            except (TypeError, ValueError):
+                tid = test_id
+
+            billing_status = BILLING_STATUS_MAP.get(status, status)
+
+            ops.append(UpdateOne(
+                {"investBillNo": billnumber, "item.test_id": tid},
+                {"$set": {"item.$[elem].status": billing_status}},
+                array_filters=[{"elem.test_id": tid}]
+            ))
+
+        billing_modified = 0
+        if ops:
+            result = billing_collection.bulk_write(ops, ordered=False)
+            billing_modified = result.modified_count
+
+        return JsonResponse({
+            "message": "Sample status updated successfully",
+            "billing_items_updated": billing_modified
+        }, status=200)
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
     
