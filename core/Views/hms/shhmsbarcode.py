@@ -55,7 +55,7 @@ def get_sh_hms_barcode_by_date(request):
                 "$gte": start_utc,
                 "$lte": end_utc
             },
-            "item.billTypeNo": {"$in": ["LAB01", "LAB"]}
+            "item.billTypeNo": {"$in": ["LAB01", "LAB","LAB02","LAB03"]}
         }
 
         bills = list(invest_col.find(query).sort("investBillDate", -1))
