@@ -73,7 +73,7 @@ def get_sh_hms_barcode_by_date(request):
             if bill_no:
                 bill_numbers.append(bill_no)
             for item in b.get("item", []):
-                if item.get("billTypeNo") in ["LAB01", "LAB"] and item.get("test_id") is not None:
+                if item.get("billTypeNo") in ["LAB01", "LAB","LAB02","LAB03"] and item.get("test_id") is not None:
                     test_ids.add(item.get("test_id"))
 
         # Batch lookup patients
@@ -149,7 +149,7 @@ def get_sh_hms_barcode_by_date(request):
             # Filter items with billTypeNo: "LAB01" or "LAB"
             bill_testdetails = []
             for item in b.get("item", []):
-                if item.get("billTypeNo") in ["LAB01", "LAB"]:
+                if item.get("billTypeNo") in ["LAB01", "LAB","LAB02","LAB03"]:
                     tid = item.get("test_id")
                     t_master = test_map.get(tid, {})
                     bill_testdetails.append({
