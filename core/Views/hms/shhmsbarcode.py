@@ -125,6 +125,31 @@ def get_sh_hms_barcode_by_date(request):
                 except (ValueError, TypeError):
                     pass
 
+        # Batch lookup doctors from backend_diagnostics_profile
+        doctor_ids = set()
+        for b in bills:
+            doc_id = b.get("doctor")
+            if doc_id:
+                doctor_ids.add(doc_id)
+                doctor_ids.add(str(doc_id).strip())
+                try:
+                    doctor_ids.add(int(doc_id))
+                except (ValueError, TypeError):
+                    pass
+
+        profile_col = client.Global.backend_diagnostics_profile
+        doc_profiles = list(profile_col.find({"employeeId": {"$in": list(doctor_ids)}})) if doctor_ids else []
+        doctor_map = {}
+        for dp in doc_profiles:
+            eid = dp.get("employeeId")
+            if eid is not None:
+                doctor_map[eid] = dp
+                doctor_map[str(eid).strip()] = dp
+                try:
+                    doctor_map[int(eid)] = dp
+                except (ValueError, TypeError):
+                    pass
+
         # Check existing barcodes in Diagnostics database
         existing_barcodes = set(
             Hmsbarcode.objects.filter(
@@ -215,6 +240,11 @@ def get_sh_hms_barcode_by_date(request):
                 else:
                     date_ist_str = str(invest_date)
 
+            raw_doc = b.get("doctor", "SELF")
+            matched_dp = doctor_map.get(raw_doc)
+            ref_doctor_name = matched_dp.get("employeeName") if matched_dp else raw_doc
+            ref_doctor_id = str(matched_dp.get("employeeId")) if matched_dp else (str(raw_doc) if raw_doc != "SELF" else "")
+
             patient_data.append({
                 "patient_id": uhid,
                 "patientname": patient_name,
@@ -227,7 +257,8 @@ def get_sh_hms_barcode_by_date(request):
                 "BillType": b.get("bill_type"),
                 "ipnumber": ip_number,
                 "date": date_ist_str,
-                "ref_doctor": b.get("doctor", "SELF"),
+                "ref_doctor": ref_doctor_name,
+                "ref_doctor_id": ref_doctor_id,
                 "testdetails": bill_testdetails,
                 "barcode_status": status,
                 "is_barcode": is_generated,
@@ -305,7 +336,9 @@ def get_sh_hms_existing_barcode(request):
                 'date': barcode_record.date.strftime('%Y-%m-%d') if barcode_record.date else '',
                 'bill_no': barcode_record.billnumber,
                 'testdetails': testdetails,
-                'barcode': barcode_record.barcode
+                'barcode': barcode_record.barcode,
+                'ref_doctor': barcode_record.ref_doctor,
+                'ref_doctor_id': getattr(barcode_record, 'ref_doctor_id', '') or ''
             }, status=200)
 
         return JsonResponse({'message': 'No barcode found for the given details.'}, status=404)
@@ -361,9 +394,48 @@ def save_sh_hms_barcodes(request):
             barcode = data.get('barcode')
             date = data.get('date')
             testdetails = data.get('testdetails')
-            ref_doctor = data.get('ref_doctor', '')
+            ref_doctor_raw = data.get('ref_doctor', '')
+            ref_doctor_id_raw = data.get('ref_doctor_id', '')
             ipnumber = data.get('ipnumber', '')
             IPOPType = data.get('IPOPType', '')
+
+            # Resolve doctor against Global.backend_diagnostics_profile
+            client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
+            db_hms = client.HMS
+            db_global = client.Global
+            profile_col = db_global.backend_diagnostics_profile
+
+            # Determine doctor identifier candidate
+            doc_candidate = ref_doctor_id_raw or ref_doctor_raw
+            if not doc_candidate or doc_candidate == "SELF":
+                bill_doc = db_hms.hospital_investbilling.find_one({"investBillNo": bill_no})
+                if bill_doc and bill_doc.get("doctor"):
+                    doc_candidate = bill_doc.get("doctor")
+
+            ref_doctor_name = ref_doctor_raw or "SELF"
+            ref_doctor_id = str(doc_candidate) if doc_candidate and doc_candidate != "SELF" else ""
+
+            if doc_candidate and doc_candidate != "SELF":
+                # Compare doctor with backend_diagnostics_profile - employeeId
+                matched_profile = profile_col.find_one({
+                    "$or": [
+                        {"employeeId": str(doc_candidate).strip()},
+                        {"employeeId": doc_candidate}
+                    ]
+                })
+                if not matched_profile:
+                    try:
+                        matched_profile = profile_col.find_one({"employeeId": int(doc_candidate)})
+                    except (ValueError, TypeError):
+                        pass
+
+                # If doc_candidate was already doctor name, match by employeeName
+                if not matched_profile:
+                    matched_profile = profile_col.find_one({"employeeName": str(doc_candidate).strip()})
+
+                if matched_profile:
+                    ref_doctor_name = matched_profile.get("employeeName") or ref_doctor_raw
+                    ref_doctor_id = str(matched_profile.get("employeeId", doc_candidate))
 
             # Convert string to date object
             if date:
@@ -397,7 +469,8 @@ def save_sh_hms_barcodes(request):
                 gender=gender,
                 barcode=barcode,
                 IPOPType=IPOPType,
-                ref_doctor=ref_doctor,
+                ref_doctor=ref_doctor_name,
+                ref_doctor_id=ref_doctor_id,
                 date=date_obj,
                 testdetails=testdetails,
                 created_by=employee_id,
