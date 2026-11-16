@@ -282,6 +282,7 @@ class HmspatientBilling(AuditModel):
     IPOPType=models.CharField(max_length=15, blank=True)
     date=models.DateTimeField()
     ref_doctor= models.CharField(max_length=500, blank=True)
+    ref_doctor_id = models.CharField(max_length=100, blank=True, null=True)
     testdetails = models.JSONField(blank=True, null=True)
 
 
@@ -298,6 +299,7 @@ class Hmsbarcode(AuditModel):
     barcode= models.CharField(max_length=50,  blank=True)
     IPOPType=models.CharField(max_length=15, blank=True)
     ref_doctor= models.CharField(max_length=500, blank=True)
+    ref_doctor_id = models.CharField(max_length=100, blank=True, null=True)
     date=models.DateField()
     testdetails = models.JSONField(blank=True, null=True)
     location_id=models.CharField(max_length=15, blank=True,default="hms")
