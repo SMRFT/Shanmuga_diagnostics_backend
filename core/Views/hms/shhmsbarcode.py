@@ -16,15 +16,17 @@ def get_sh_hms_barcode_by_date(request):
     from_date = request.GET.get("from_date")
     to_date = request.GET.get("to_date")
     single_date = request.GET.get("date")
+    bill_no_param = request.GET.get("bill_no")
+    patient_id_param = request.GET.get("patient_id")
 
     # Single date support
     if single_date and not (from_date and to_date):
         from_date = single_date
         to_date = single_date
 
-    if not from_date or not to_date:
+    if not from_date and not to_date and not bill_no_param and not patient_id_param:
         return JsonResponse(
-            {"error": "from_date and to_date parameters are required"},
+            {"error": "from_date and to_date or bill_no parameters are required"},
             status=400
         )
 
@@ -33,11 +35,30 @@ def get_sh_hms_barcode_by_date(request):
         ist = pytz.timezone("Asia/Kolkata")
         utc = pytz.UTC
 
-        start_ist = ist.localize(datetime.strptime(from_date, "%Y-%m-%d"))
-        end_ist = ist.localize(datetime.combine(datetime.strptime(to_date, "%Y-%m-%d"), time(23, 59, 59)))
+        start_utc = None
+        end_utc = None
+        if from_date and to_date:
+            try:
+                def parse_input_date(d_str):
+                    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"):
+                        try:
+                            return datetime.strptime(d_str, fmt)
+                        except ValueError:
+                            pass
+                    return datetime.fromisoformat(d_str.replace("Z", "+00:00"))
 
-        start_utc = start_ist.astimezone(utc)
-        end_utc = end_ist.astimezone(utc)
+                start_d = parse_input_date(from_date)
+                end_d = parse_input_date(to_date)
+                start_dt = start_d.date() if hasattr(start_d, "date") else start_d
+                end_dt = end_d.date() if hasattr(end_d, "date") else end_d
+                start_ist = ist.localize(datetime.combine(start_dt, time(0, 0, 0)))
+                end_ist = ist.localize(datetime.combine(end_dt, time(23, 59, 59)))
+                start_utc = start_ist.astimezone(utc)
+                end_utc = end_ist.astimezone(utc)
+                if start_utc > end_utc:
+                    start_utc, end_utc = end_utc, start_utc
+            except Exception:
+                pass
 
         # MongoDB Connection
         client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
@@ -51,12 +72,17 @@ def get_sh_hms_barcode_by_date(request):
 
         # Query bills in the given range with lab items
         query = {
-            "investBillDate": {
-                "$gte": start_utc,
-                "$lte": end_utc
-            },
             "item.billTypeNo": {"$in": ["LAB01", "LAB","LAB02","LAB03"]}
         }
+
+        if bill_no_param:
+            query["investBillNo"] = bill_no_param
+        elif patient_id_param:
+            query["uhid"] = patient_id_param
+            if start_utc and end_utc:
+                query["investBillDate"] = {"$gte": start_utc, "$lte": end_utc}
+        elif start_utc and end_utc:
+            query["investBillDate"] = {"$gte": start_utc, "$lte": end_utc}
 
         bills = list(invest_col.find(query).sort("investBillDate", -1))
 
@@ -74,7 +100,13 @@ def get_sh_hms_barcode_by_date(request):
                 bill_numbers.append(bill_no)
             for item in b.get("item", []):
                 if item.get("billTypeNo") in ["LAB01", "LAB","LAB02","LAB03"] and item.get("test_id") is not None:
-                    test_ids.add(item.get("test_id"))
+                    tid_val = item.get("test_id")
+                    test_ids.add(tid_val)
+                    try:
+                        test_ids.add(int(tid_val))
+                    except (ValueError, TypeError):
+                        pass
+                    test_ids.add(str(tid_val))
 
         # Batch lookup patients
         patients = list(patient_col.find({"uhid": {"$in": list(uhids)}}))
@@ -82,7 +114,16 @@ def get_sh_hms_barcode_by_date(request):
 
         # Batch lookup test details
         tests_data = list(test_col.find({"test_id": {"$in": list(test_ids)}}))
-        test_map = {t["test_id"]: t for t in tests_data if t.get("test_id") is not None}
+        test_map = {}
+        for t in tests_data:
+            tid_k = t.get("test_id")
+            if tid_k is not None:
+                test_map[tid_k] = t
+                test_map[str(tid_k)] = t
+                try:
+                    test_map[int(tid_k)] = t
+                except (ValueError, TypeError):
+                    pass
 
         # Check existing barcodes in Diagnostics database
         existing_barcodes = set(
@@ -161,6 +202,19 @@ def get_sh_hms_barcode_by_date(request):
                         "suffix": t_master.get("suffix", ""),
                     })
 
+            # Format bill date in IST so the frontend date picker and test details match correctly
+            invest_date = b.get("investBillDate")
+            date_ist_str = ""
+            if invest_date:
+                if isinstance(invest_date, datetime):
+                    if invest_date.tzinfo is None:
+                        invest_date_utc = pytz.UTC.localize(invest_date)
+                    else:
+                        invest_date_utc = invest_date.astimezone(pytz.UTC)
+                    date_ist_str = invest_date_utc.astimezone(ist).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    date_ist_str = str(invest_date)
+
             patient_data.append({
                 "patient_id": uhid,
                 "patientname": patient_name,
@@ -172,7 +226,7 @@ def get_sh_hms_barcode_by_date(request):
                 "bill_no": bill_no,
                 "BillType": b.get("bill_type"),
                 "ipnumber": ip_number,
-                "date": b.get("investBillDate"),
+                "date": date_ist_str,
                 "ref_doctor": b.get("doctor", "SELF"),
                 "testdetails": bill_testdetails,
                 "barcode_status": status,
