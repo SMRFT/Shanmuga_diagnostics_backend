@@ -78,7 +78,10 @@ def get_sh_hms_barcode_by_date(request):
         if bill_no_param:
             query["investBillNo"] = bill_no_param
         elif patient_id_param:
-            query["uhid"] = patient_id_param
+            query["$or"] = [
+                {"uhid": patient_id_param},
+                {"investBillNo": patient_id_param}
+            ]
             if start_utc and end_utc:
                 query["investBillDate"] = {"$gte": start_utc, "$lte": end_utc}
         elif start_utc and end_utc:
@@ -92,9 +95,9 @@ def get_sh_hms_barcode_by_date(request):
         bill_numbers = []
 
         for b in bills:
-            uhid = b.get("uhid")
-            if uhid:
-                uhids.add(uhid)
+            raw_uhid = b.get("uhid")
+            if raw_uhid and str(raw_uhid).strip():
+                uhids.add(str(raw_uhid).strip())
             bill_no = b.get("investBillNo")
             if bill_no:
                 bill_numbers.append(bill_no)
@@ -162,10 +165,14 @@ def get_sh_hms_barcode_by_date(request):
 
         patient_data = []
         for b in bills:
-            uhid = b.get("uhid")
+            raw_uhid = b.get("uhid")
+            uhid = str(raw_uhid).strip() if raw_uhid else ""
             bill_no = b.get("investBillNo")
             if not bill_no:
                 continue
+
+            # If uhid is empty, use investBillNo as patient_id
+            patient_id = uhid if uhid else bill_no
 
             # Check if barcode is already generated or not saved
             is_barcode_field = b.get("is_barcode")
@@ -183,23 +190,41 @@ def get_sh_hms_barcode_by_date(request):
 
             status = "Generated" if is_generated else "Pending"
 
-            # Get patient demographics
-            patient_name = "Unknown"
-            gender = "Male"
-            phone = ""
+            # Patient demographics: extract fallback from bill document b
+            b_salutation = str(b.get("salutation", "") or "").strip()
+            b_first_name = str(b.get("firstName", "") or "").strip()
+            b_last_name = str(b.get("lastName", "") or "").strip()
+            b_name_parts = [pt for pt in [b_salutation, b_first_name, b_last_name] if pt]
+            bill_patient_name = " ".join(b_name_parts).strip()
 
-            p = patient_map.get(uhid)
-            if p:
-                patient_name = f"{p.get('firstName', '')} {p.get('lastName', '')}".strip()
-                gender = p.get('gender', 'Male')
-                phone = p.get('mobilePhone', '')
-            else:
-                # Fallback to core_patient in Diagnostics
-                p_diag = diag_patient_col.find_one({"patient_id": uhid})
-                if p_diag:
-                    patient_name = p_diag.get("patientname", "")
-                    gender = p_diag.get("gender", "Male")
-                    phone = p_diag.get("phone", "")
+            patient_name = ""
+            gender = b.get("gender") or "Male"
+            phone = b.get("mobilePhone") or b.get("phone") or ""
+
+            if uhid:
+                p = patient_map.get(uhid)
+                if p:
+                    p_parts = [
+                        str(p.get("salutation", "") or "").strip(),
+                        str(p.get("firstName", "") or "").strip(),
+                        str(p.get("lastName", "") or "").strip()
+                    ]
+                    p_name = " ".join([pt for pt in p_parts if pt]).strip()
+                    if p_name:
+                        patient_name = p_name
+                    gender = p.get("gender") or gender
+                    phone = p.get("mobilePhone") or p.get("phone") or phone
+                else:
+                    # Fallback to core_patient in Diagnostics
+                    p_diag = diag_patient_col.find_one({"patient_id": uhid})
+                    if p_diag:
+                        patient_name = p_diag.get("patientname", "") or patient_name
+                        gender = p_diag.get("gender") or gender
+                        phone = p_diag.get("phone") or phone
+
+            # If patient_name is still empty or uhid wasn't present, use bill document details
+            if not patient_name:
+                patient_name = bill_patient_name if bill_patient_name else "Unknown"
 
             # If ipNumber is present and not empty, save IPOPType as "IP", otherwise "OP"
             ip_number = b.get("ipNumber", "")
@@ -246,7 +271,7 @@ def get_sh_hms_barcode_by_date(request):
             ref_doctor_id = str(matched_dp.get("employeeId")) if matched_dp else (str(raw_doc) if raw_doc != "SELF" else "")
 
             patient_data.append({
-                "patient_id": uhid,
+                "patient_id": patient_id,
                 "patientname": patient_name,
                 "age": age_val,
                 "age_type": b.get("age_type", "Y") or "Y",
@@ -386,6 +411,8 @@ def save_sh_hms_barcodes(request):
             employee_id = data.get('auth-user-id')
 
             patient_id = data.get('patient_id')
+            if not patient_id:
+                patient_id = bill_no
             patientname = data.get('patientname')
             age = data.get('age')
             age_type = data.get('age_type', 'Y')
@@ -404,6 +431,23 @@ def save_sh_hms_barcodes(request):
             db_hms = client.HMS
             db_global = client.Global
             profile_col = db_global.backend_diagnostics_profile
+
+            # Fallback for patientname if missing or "Unknown"
+            if not patientname or patientname == "Unknown":
+                bill_doc_for_patient = db_hms.hospital_investbilling.find_one({"investBillNo": bill_no})
+                if bill_doc_for_patient:
+                    b_parts = [
+                        str(bill_doc_for_patient.get("salutation", "") or "").strip(),
+                        str(bill_doc_for_patient.get("firstName", "") or "").strip(),
+                        str(bill_doc_for_patient.get("lastName", "") or "").strip()
+                    ]
+                    b_full = " ".join([pt for pt in b_parts if pt]).strip()
+                    if b_full:
+                        patientname = b_full
+                    if not gender:
+                        gender = bill_doc_for_patient.get("gender") or "Male"
+                    if not phone:
+                        phone = bill_doc_for_patient.get("mobilePhone") or bill_doc_for_patient.get("phone") or ""
 
             # Determine doctor identifier candidate
             doc_candidate = ref_doctor_id_raw or ref_doctor_raw
