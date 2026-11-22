@@ -41,6 +41,134 @@ MONGO_DB = MONGO_CLIENT.Diagnostics
 FS = gridfs.GridFS(MONGO_DB)
 
 
+# MongoDB Connection Setup
+def get_mongodb_connection():
+    # MongoDB connection with TLS certificate
+    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
+    db = client["Diagnostics"]
+    return db, GridFS(db)
+
+
+def get_highest_patient_number():
+    """
+    Finds the highest numerical value among all patient IDs matching the SD pattern.
+    Avoids string/lexicographical sorting bugs where 'SD9999' > 'SD10000'.
+    """
+    max_num = 0
+
+    # 1. Primary method: PyMongo aggregation with numeric conversion
+    try:
+        db, _ = get_mongodb_connection()
+        pipeline = [
+            {"$match": {"patient_id": {"$regex": r"^SD\d+$", "$options": "i"}}},
+            {
+                "$project": {
+                    "num": {
+                        "$convert": {
+                            "input": {
+                                "$substrCP": [
+                                    "$patient_id",
+                                    2,
+                                    {"$subtract": [{"$strLenCP": "$patient_id"}, 2]}
+                                ]
+                            },
+                            "to": "int",
+                            "onError": 0,
+                            "onNull": 0
+                        }
+                    }
+                }
+            },
+            {"$sort": {"num": -1}},
+            {"$limit": 1}
+        ]
+        result = list(db.core_patient.aggregate(pipeline))
+        if result and "num" in result[0] and result[0]["num"]:
+            max_num = int(result[0]["num"])
+            return max_num
+    except Exception:
+        pass
+
+    # 2. Secondary method: PyMongo sort by string length then string value
+    # (e.g. length 7 'SD10000' is sorted before length 6 'SD9999')
+    try:
+        db, _ = get_mongodb_connection()
+        pipeline = [
+            {"$match": {"patient_id": {"$regex": r"^SD\d+$", "$options": "i"}}},
+            {"$project": {"patient_id": 1, "id_len": {"$strLenCP": "$patient_id"}}},
+            {"$sort": {"id_len": -1, "patient_id": -1}},
+            {"$limit": 1}
+        ]
+        result = list(db.core_patient.aggregate(pipeline))
+        if result and "patient_id" in result[0]:
+            m = re.match(r'^SD0*(\d+)$', str(result[0]["patient_id"]), re.IGNORECASE)
+            if m:
+                max_num = int(m.group(1))
+                return max_num
+    except Exception:
+        pass
+
+    # 3. Tertiary method: Django ORM fallback
+    try:
+        # Check recently created patients first
+        recent_pids = list(
+            Patient.objects.filter(patient_id__istartswith='SD')
+            .order_by('-created_date')[:500]
+            .values_list('patient_id', flat=True)
+        )
+        for pid in recent_pids:
+            m = re.match(r'^SD0*(\d+)$', str(pid), re.IGNORECASE)
+            if m:
+                val = int(m.group(1))
+                if val > max_num:
+                    max_num = val
+
+        if max_num == 0:
+            all_pids = Patient.objects.filter(patient_id__istartswith='SD').values_list('patient_id', flat=True)
+            for pid in all_pids:
+                m = re.match(r'^SD0*(\d+)$', str(pid), re.IGNORECASE)
+                if m:
+                    val = int(m.group(1))
+                    if val > max_num:
+                        max_num = val
+    except Exception:
+        pass
+
+    return max_num
+
+
+def generate_next_patient_id():
+    """
+    Generates the next available patient ID (e.g. SD10001 after SD10000).
+    Verifies against both ORM and MongoDB to prevent collisions and automatically
+    increments until an unused ID is found.
+    """
+    max_num = get_highest_patient_number()
+    candidate_num = max_num + 1
+    candidate_id = f"SD{candidate_num:04d}"
+
+    try:
+        db, _ = get_mongodb_connection()
+        while True:
+            exists_in_orm = Patient.objects.filter(patient_id=candidate_id).exists()
+            exists_in_mongo = False
+            try:
+                exists_in_mongo = db.core_patient.count_documents({"patient_id": candidate_id}, limit=1) > 0
+            except Exception:
+                pass
+
+            if not exists_in_orm and not exists_in_mongo:
+                break
+            candidate_num += 1
+            candidate_id = f"SD{candidate_num:04d}"
+    except Exception:
+        while Patient.objects.filter(patient_id=candidate_id).exists():
+            candidate_num += 1
+            candidate_id = f"SD{candidate_num:04d}"
+
+    return candidate_id
+
+
 @api_view(["GET", "POST"])
 @permission_classes([HasRolePermission])
 def appointment_booking(request):
@@ -155,23 +283,21 @@ def get_appointments_by_date(request):
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([HasRolePermission])
-def create_patient(request):
+def create_patient(request, patient_id=None):
     try:
         data = request.data.copy()
         
-        # Concurrency fix: Calculate the next patient_id right before insertion
+        # Concurrency-safe ID generation
         with transaction.atomic():
-            max_patient = Patient.objects.aggregate(max_pid=Max('patient_id'))['max_pid']
-            max_num = 0
-            if max_patient:
-                match = re.match(r'^SD0*(\d+)$', max_patient, re.IGNORECASE)
-                if match:
-                    max_num = int(match.group(1))
-            
-            patient_id = f"SD{max_num + 1:04d}"
-
-            if Patient.objects.filter(patient_id=patient_id).exists():
-                return Response({"error": "Patient ID generation collision, please retry"}, status=400)
+            requested_id = (patient_id or data.get("patient_id") or "").strip()
+            # If a custom non-SD patient ID was requested and doesn't exist, use it
+            if requested_id and not re.match(r'^SD\d+$', requested_id, re.IGNORECASE):
+                if not Patient.objects.filter(patient_id=requested_id).exists():
+                    patient_id = requested_id
+                else:
+                    patient_id = generate_next_patient_id()
+            else:
+                patient_id = generate_next_patient_id()
 
         # Extract employee ID
         employee_id = (
@@ -273,12 +399,6 @@ def update_patient(request, patient_id):
         }, status=500)
     
 
-# MongoDB Connection Setup
-def get_mongodb_connection():
-    # MongoDB connection with TLS certificate
-    client = MongoClient(os.getenv('GLOBAL_DB_HOST'))
-    db = client["Diagnostics"]
-    return db, GridFS(db)
 
 @csrf_exempt
 @api_view(['POST'])
@@ -449,13 +569,7 @@ def create_bill(request):
 @permission_classes([HasRolePermission])
 def get_latest_patient_id(request):
     try:
-        max_patient = Patient.objects.aggregate(max_pid=Max('patient_id'))['max_pid']
-        max_num = 0
-        if max_patient:
-            match = re.match(r'^SD0*(\d+)$', max_patient, re.IGNORECASE)
-            if match:
-                max_num = int(match.group(1))
-        new_patient_id = f"SD{max_num + 1:04d}"
+        new_patient_id = generate_next_patient_id()
         return Response({"patient_id": new_patient_id}, status=200)
     except Exception as e:
         return Response({"success": False, "error": "Failed to generate patient ID", "details": str(e)}, status=500)
