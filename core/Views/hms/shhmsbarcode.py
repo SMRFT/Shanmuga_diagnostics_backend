@@ -70,22 +70,43 @@ def get_sh_hms_barcode_by_date(request):
         test_col = db_diag.core_testdetails
         diag_patient_col = db_diag.core_patient
 
-        # Query bills in the given range with lab items
-        query = {
-            "item.billTypeNo": {"$in": ["LAB01", "LAB","LAB02","LAB03"]}
+        # Payment method criteria:
+        # If paymentMethod == "Cash" -> paymentStatus must be "Paid" (or "Completed")
+        # If paymentMethod == "Credit" -> get without paymentStatus check
+        payment_condition = {
+            "$or": [
+                {"paymentMethod": {"$in": ["Credit", "CREDIT", "credit"]}},
+                {
+                    "paymentMethod": {"$in": ["Cash", "CASH", "cash"]},
+                    "paymentStatus": {"$in": ["Paid", "PAID", "paid", "Completed", "COMPLETED", "completed"]}
+                },
+                {"paymentMethod": {"$exists": False}},
+                {"paymentMethod": None},
+                {"paymentMethod": ""}
+            ]
         }
 
+        # Query bills with lab items and payment condition
+        and_conditions = [
+            {"item.billTypeNo": {"$in": ["LAB01", "LAB","LAB02","LAB03"]}},
+            payment_condition
+        ]
+
         if bill_no_param:
-            query["investBillNo"] = bill_no_param
+            and_conditions.append({"investBillNo": bill_no_param})
         elif patient_id_param:
-            query["$or"] = [
-                {"uhid": patient_id_param},
-                {"investBillNo": patient_id_param}
-            ]
+            and_conditions.append({
+                "$or": [
+                    {"uhid": patient_id_param},
+                    {"investBillNo": patient_id_param}
+                ]
+            })
             if start_utc and end_utc:
-                query["investBillDate"] = {"$gte": start_utc, "$lte": end_utc}
+                and_conditions.append({"investBillDate": {"$gte": start_utc, "$lte": end_utc}})
         elif start_utc and end_utc:
-            query["investBillDate"] = {"$gte": start_utc, "$lte": end_utc}
+            and_conditions.append({"investBillDate": {"$gte": start_utc, "$lte": end_utc}})
+
+        query = {"$and": and_conditions}
 
         bills = list(invest_col.find(query).sort("investBillDate", -1))
 
@@ -97,6 +118,7 @@ def get_sh_hms_barcode_by_date(request):
         for b in bills:
             raw_uhid = b.get("uhid")
             if raw_uhid and str(raw_uhid).strip():
+                uhids.add(raw_uhid)
                 uhids.add(str(raw_uhid).strip())
             bill_no = b.get("investBillNo")
             if bill_no:
@@ -113,7 +135,12 @@ def get_sh_hms_barcode_by_date(request):
 
         # Batch lookup patients
         patients = list(patient_col.find({"uhid": {"$in": list(uhids)}}))
-        patient_map = {p["uhid"]: p for p in patients if p.get("uhid")}
+        patient_map = {}
+        for p in patients:
+            p_u = p.get("uhid")
+            if p_u:
+                patient_map[p_u] = p
+                patient_map[str(p_u).strip()] = p
 
         # Batch lookup test details
         tests_data = list(test_col.find({"test_id": {"$in": list(test_ids)}}))
@@ -190,19 +217,30 @@ def get_sh_hms_barcode_by_date(request):
 
             status = "Generated" if is_generated else "Pending"
 
-            # Patient demographics: extract fallback from bill document b
-            b_salutation = str(b.get("salutation", "") or "").strip()
-            b_first_name = str(b.get("firstName", "") or "").strip()
-            b_last_name = str(b.get("lastName", "") or "").strip()
-            b_name_parts = [pt for pt in [b_salutation, b_first_name, b_last_name] if pt]
-            bill_patient_name = " ".join(b_name_parts).strip()
+            # Parse age and age_type fallback from bill
+            age_raw = b.get("age", 0)
+            age_type = b.get("age_type", "Y") or "Y"
 
-            patient_name = ""
-            gender = b.get("gender") or "Male"
-            phone = b.get("mobilePhone") or b.get("phone") or ""
+            # Patient details: ONLY if uhid is not present in hospital_investbilling,
+            # use investBillNo as patient_id and get details from hospital_investbilling.
+            # Otherwise, compare with patient_col (hospital_patient) by uhid.
+            if not uhid:
+                patient_id = bill_no
+                b_parts = [
+                    str(b.get("salutation", "") or "").strip(),
+                    str(b.get("firstName", "") or "").strip(),
+                    str(b.get("lastName", "") or "").strip()
+                ]
+                patient_name = " ".join([pt for pt in b_parts if pt]).strip() or "Unknown"
+                gender = b.get("gender") or "Male"
+                phone = b.get("mobilePhone") or b.get("phone") or ""
+            else:
+                patient_id = uhid
+                patient_name = "Unknown"
+                gender = "Male"
+                phone = ""
 
-            if uhid:
-                p = patient_map.get(uhid)
+                p = patient_map.get(uhid) or patient_map.get(str(uhid).strip())
                 if p:
                     p_parts = [
                         str(p.get("salutation", "") or "").strip(),
@@ -212,26 +250,25 @@ def get_sh_hms_barcode_by_date(request):
                     p_name = " ".join([pt for pt in p_parts if pt]).strip()
                     if p_name:
                         patient_name = p_name
-                    gender = p.get("gender") or gender
-                    phone = p.get("mobilePhone") or p.get("phone") or phone
+                    gender = p.get("gender") or "Male"
+                    phone = p.get("mobilePhone") or p.get("phone") or ""
+                    if p.get("age") is not None:
+                        age_raw = p.get("age")
                 else:
                     # Fallback to core_patient in Diagnostics
                     p_diag = diag_patient_col.find_one({"patient_id": uhid})
                     if p_diag:
-                        patient_name = p_diag.get("patientname", "") or patient_name
-                        gender = p_diag.get("gender") or gender
-                        phone = p_diag.get("phone") or phone
-
-            # If patient_name is still empty or uhid wasn't present, use bill document details
-            if not patient_name:
-                patient_name = bill_patient_name if bill_patient_name else "Unknown"
+                        patient_name = p_diag.get("patientname", "") or "Unknown"
+                        gender = p_diag.get("gender") or "Male"
+                        phone = p_diag.get("phone") or ""
+                        if p_diag.get("age") is not None:
+                            age_raw = p_diag.get("age")
 
             # If ipNumber is present and not empty, save IPOPType as "IP", otherwise "OP"
             ip_number = b.get("ipNumber", "")
             ip_op_type = "IP" if ip_number else "OP"
 
             # Parse age
-            age_raw = b.get("age", 0)
             try:
                 age_val = int(float(age_raw))
             except (ValueError, TypeError):
@@ -410,14 +447,6 @@ def save_sh_hms_barcodes(request):
 
             employee_id = data.get('auth-user-id')
 
-            patient_id = data.get('patient_id')
-            if not patient_id:
-                patient_id = bill_no
-            patientname = data.get('patientname')
-            age = data.get('age')
-            age_type = data.get('age_type', 'Y')
-            gender = data.get('gender')
-            phone = data.get('phone', '')
             barcode = data.get('barcode')
             date = data.get('date')
             testdetails = data.get('testdetails')
@@ -426,33 +455,99 @@ def save_sh_hms_barcodes(request):
             ipnumber = data.get('ipnumber', '')
             IPOPType = data.get('IPOPType', '')
 
-            # Resolve doctor against Global.backend_diagnostics_profile
             client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
             db_hms = client.HMS
+            db_diag = client.Diagnostics
             db_global = client.Global
+            patient_col = db_hms.hospital_patient
+            diag_patient_col = db_diag.core_patient
             profile_col = db_global.backend_diagnostics_profile
 
-            # Fallback for patientname if missing or "Unknown"
-            if not patientname or patientname == "Unknown":
-                bill_doc_for_patient = db_hms.hospital_investbilling.find_one({"investBillNo": bill_no})
-                if bill_doc_for_patient:
+            # Fetch the bill document from hospital_investbilling
+            bill_doc = db_hms.hospital_investbilling.find_one({"investBillNo": bill_no})
+
+            # Payment validation: if Cash, paymentStatus must be Paid or Completed
+            if bill_doc:
+                pay_method = str(bill_doc.get("paymentMethod") or "").strip().lower()
+                pay_status = str(bill_doc.get("paymentStatus") or "").strip().lower()
+                if pay_method == "cash" and pay_status not in ["paid", "completed"]:
+                    return JsonResponse({'error': 'Cannot generate barcode: Cash bill payment status is not Paid!'}, status=400)
+
+            raw_uhid = bill_doc.get("uhid") if bill_doc else None
+            uhid = str(raw_uhid).strip() if raw_uhid else ""
+
+            # Check ipnumber and IPOPType from bill_doc if missing
+            if not ipnumber and bill_doc:
+                ipnumber = bill_doc.get("ipNumber", "")
+            if not IPOPType:
+                IPOPType = "IP" if ipnumber else "OP"
+
+            age_val = data.get('age')
+            age_type = data.get('age_type', 'Y') or 'Y'
+            gender = data.get('gender')
+            phone = data.get('phone', '')
+            patientname = data.get('patientname')
+            patient_id = data.get('patient_id')
+
+            # Patient details: ONLY if uhid is not present in hospital_investbilling,
+            # use investBillNo as patient_id and get details from hospital_investbilling.
+            # Otherwise, compare with patient_col (hospital_patient) by uhid.
+            if not uhid:
+                patient_id = bill_no
+                if bill_doc:
                     b_parts = [
-                        str(bill_doc_for_patient.get("salutation", "") or "").strip(),
-                        str(bill_doc_for_patient.get("firstName", "") or "").strip(),
-                        str(bill_doc_for_patient.get("lastName", "") or "").strip()
+                        str(bill_doc.get("salutation", "") or "").strip(),
+                        str(bill_doc.get("firstName", "") or "").strip(),
+                        str(bill_doc.get("lastName", "") or "").strip()
                     ]
                     b_full = " ".join([pt for pt in b_parts if pt]).strip()
-                    if b_full:
-                        patientname = b_full
-                    if not gender:
-                        gender = bill_doc_for_patient.get("gender") or "Male"
-                    if not phone:
-                        phone = bill_doc_for_patient.get("mobilePhone") or bill_doc_for_patient.get("phone") or ""
+                    patientname = b_full if b_full else (patientname or "Unknown")
+                    gender = bill_doc.get("gender") or gender or "Male"
+                    phone = bill_doc.get("mobilePhone") or bill_doc.get("phone") or phone or ""
+                    if age_val is None or age_val == 0 or age_val == "0":
+                        age_val = bill_doc.get("age", 0)
+                    age_type = bill_doc.get("age_type") or age_type
+                else:
+                    patientname = patientname or "Unknown"
+                    gender = gender or "Male"
+            else:
+                patient_id = uhid
+                patientname = "Unknown"
+                gender = "Male"
+                phone = ""
+                age_val = bill_doc.get("age", 0) if bill_doc else (data.get('age', 0))
+                age_type = (bill_doc.get("age_type") if bill_doc else None) or data.get('age_type', 'Y') or 'Y'
+
+                p = patient_col.find_one({"uhid": uhid})
+                if p:
+                    p_parts = [
+                        str(p.get("salutation", "") or "").strip(),
+                        str(p.get("firstName", "") or "").strip(),
+                        str(p.get("lastName", "") or "").strip()
+                    ]
+                    p_name = " ".join([pt for pt in p_parts if pt]).strip()
+                    patientname = p_name if p_name else (data.get('patientname') or "Unknown")
+                    gender = p.get("gender") or data.get('gender') or "Male"
+                    phone = p.get("mobilePhone") or p.get("phone") or data.get('phone') or ""
+                    if p.get("age") is not None:
+                        age_val = p.get("age")
+                else:
+                    # Fallback to core_patient in Diagnostics if not in hospital_patient
+                    p_diag = diag_patient_col.find_one({"patient_id": uhid})
+                    if p_diag:
+                        patientname = p_diag.get("patientname") or data.get('patientname') or "Unknown"
+                        gender = p_diag.get("gender") or data.get('gender') or "Male"
+                        phone = p_diag.get("phone") or data.get('phone') or ""
+                        if p_diag.get("age") is not None:
+                            age_val = p_diag.get("age")
+                    else:
+                        patientname = data.get('patientname') or "Unknown"
+                        gender = data.get('gender') or "Male"
+                        phone = data.get('phone', '')
 
             # Determine doctor identifier candidate
             doc_candidate = ref_doctor_id_raw or ref_doctor_raw
             if not doc_candidate or doc_candidate == "SELF":
-                bill_doc = db_hms.hospital_investbilling.find_one({"investBillNo": bill_no})
                 if bill_doc and bill_doc.get("doctor"):
                     doc_candidate = bill_doc.get("doctor")
 
