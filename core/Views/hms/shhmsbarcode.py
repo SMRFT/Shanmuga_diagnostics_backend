@@ -456,7 +456,7 @@ def save_sh_hms_barcodes(request):
             IPOPType = data.get('IPOPType', '')
 
             client = MongoClient(os.getenv("GLOBAL_DB_HOST"))
-            db_hms = client.HMS
+            db_hms = client.HMS 
             db_diag = client.Diagnostics
             db_global = client.Global
             patient_col = db_hms.hospital_patient
@@ -592,7 +592,7 @@ def save_sh_hms_barcodes(request):
                 date_obj = datetime.now().date()
 
             try:
-                age_val = int(float(age))
+                age_val = int(float(age_val))
             except (ValueError, TypeError):
                 age_val = 0
 
